@@ -2,7 +2,7 @@
 
 Tire pressure you change while driving, as in Expeditions: A MudRunner Game.
 
-The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased. Let air out and the tires flatten, grip harder on dirt, sand, rock and in mud, and lose grip on asphalt. The truck also uses more fuel and steers slower. Increased is the road mode: more grip on asphalt, less everywhere else, less fuel. Soft tires driven too fast take damage until they go flat. You pick the mode on Expeditions' panel, drawn in SnowRunner's font, with the pad or a key.
+The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased. Let air out and the tires flatten, grip harder on dirt, sand, rock and in mud, and lose grip on asphalt. The truck also uses more fuel and steers slower. Increased is the road mode: more grip on asphalt, less everywhere else, less fuel. Soft tires driven too fast take damage until they go flat. You pick the mode on Expeditions' panel, drawn in SnowRunner's font, with the pad or a key. You hear the air go out and in, and every few fillings the compressor.
 
 ![The panel in Low, Reduced, Normal and Increased, and as the keyboard shows it](docs/panel.png)
 
@@ -34,9 +34,17 @@ With a pad (any pad Windows sees as an Xbox pad):
 
 With the keyboard, F3 opens the panel and steps the pressure down, from Low round to the highest mode.
 
-A choice left alone confirms itself after 15 seconds. The tires then take 3 seconds to deflate or inflate, and the mod beeps: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
+A choice left alone confirms itself after 15 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step. As the change begins the mod beeps: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
 
 The mode belongs to the truck you drive: another truck takes the current mode when you get in. Every game start begins at Normal.
+
+## Sounds
+
+- Deflating plays the air being let out. It gets weaker as the tires empty and stops with a puff.
+- Filling plays the air going in.
+- The compressor does not run at every filling. The air comes out of a tank, and the compressor fills the tank again once it has fallen far enough: at every second filling from Low to Normal, at every fourth of a single step. It then runs for about 17 seconds, also after the filling is done, and lets its own air go as it stops.
+
+The two air sounds are recordings of a real tire, made for this mod. The compressor and the air it lets go are sounds of SnowRunner itself, which the mod reads out of the game's sound file while the game runs. You hear all of them while you drive a truck and the game's window is in front.
 
 ## The modes
 
@@ -80,9 +88,11 @@ With ReShade, the overlay has a Tire Inflation System tab. It shows the truck's 
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down to the best vanilla tire of their kind. Vanilla tires stay as they are. Off by default.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
-- The key, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, and the beep.
+- The key, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
 Changes count at once and are saved to `TirePressure.ini` in the same folder. Without ReShade, edit that file: the game writes it with the defaults and a short guide on its first start.
+
+Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` each put another sound in place of the mod's own: the name of a WAV file in `Sources\Bin`, or of a sample in the game's `shared_sound.pak` such as `[sound]\actors\actor_lamp_generator_loop.pcm`. `none` leaves that sound out. The first three play round and round while they last. A WAV file with a loop marked in it plays up to the loop once, then goes round in the loop, and plays what follows the loop as the sound stops.
 
 ## Remove
 
@@ -94,6 +104,7 @@ Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll`
 - Trailers keep their tires as they are.
 - The pad's panel buttons are taken from the game only while you drive a truck. In menus they are the game's.
 - Co-op has not been tested.
+- Without a sound device the sounds stay off and everything else works.
 - After a game update the mod keeps working when the game's code around its places is unchanged. When it is not, the mod does nothing and says so in its log, until a version for the new game is out.
 - If something does not work, `TirePressure.log` in `Sources\Bin` says what the mod found and did.
 
@@ -106,7 +117,7 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\version.dll` and `out\TirePressure.asi`. `test.bat` runs the offline tests: the loader on a test `.asi`, the loader with a copy of itself as its chain file, the loader behind another ASI loader that had the `.asi` first, and the mod's own checks (every setting through the ini and back, the flattening and gear numbers). `test\build_preview.bat` builds a program that draws the panel, the warning and the settings tab into PNG files without the game and checks the pad binding window. It needs the Dear ImGui sources, see the file.
+`build.bat` makes `out\version.dll` and `out\TirePressure.asi`. `test.bat` runs the offline tests: the loader on a test `.asi`, the loader with a copy of itself as its chain file, the loader behind another ASI loader that had the `.asi` first, and the mod's own checks (every setting through the ini and back, the flattening and gear numbers, the readers of the sound files, the compressor's tank). `out\test\probe_test.exe sound` plays the sounds through the default sound device as the mod does in the game. `test\build_preview.bat` builds a program that draws the panel, the warning and the settings tab into PNG files without the game and checks the pad binding window. It needs the Dear ImGui sources, see the file.
 
 A few places the mod needs lie elsewhere in every build of the game's exe. It finds them itself (`src\build_find.h`). `out\test\probe_test.exe find <exe>` runs the same search on an exe in a file and prints what it found and what it did not. Steam's exe on disk will not do for that, as its code is only readable in the running game. With `SR_IMAGE` set to a copy of the exe's image from a running game, `test.bat` checks the search against the numbers of the Steam build.
 
@@ -123,11 +134,12 @@ At its start the mod looks through the exe for the places it needs: two of the g
 - Damage: the game's damage data for each wheel. The game's truck update asks Windows once a frame which window is in front. That import table entry leads through the mod, which deals the damage at that moment, on the game's own thread, and then runs the game's damage update. The update makes a worn out tire flat, mends a repaired one and sums the truck's damage.
 - Pad: the game keeps two pointers to `XInputGetState`. The mod points both at a filter that hides the panel's buttons from the game while the panel uses them.
 - Panel: drawn through ReShade's add-on overlay. The text is baked from the game's own font files at run time.
+- Sound: a thread of its own plays through XAudio2, the library the game brings and uses itself, and only holds a sound device while a sound plays. The two recordings are in the `.asi` (`assets`, `src\sounds.rc`): each has its start, a steady part that goes round for as long as the change lasts, and its stop. The compressor and its stop come out of the game's `shared_sound.pak`, a zip in which the samples lie as WAV files. A tank decides when the compressor runs: a filling takes air out of it, and below a mark the compressor runs until it is full.
 
 ## Licence and credits
 
 GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
-The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour.
+The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour. The sounds of air let out of a tire and of air going into one (`assets`) were recorded for this mod and are under its licence.
 
 SnowRunner and Expeditions are games by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

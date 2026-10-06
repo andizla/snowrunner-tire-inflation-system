@@ -27,6 +27,7 @@
 #include "vanilla_balance.h"
 #include "marker.h"
 #include "build_find.h"
+#include "sound.h"
 
 // Where the few places lie that are elsewhere in every build of the game's exe (build_find.h has what each is). Run
 // looks for them in the running exe at the start and stands down when it does not find every one.
@@ -69,7 +70,8 @@ static TpSettings g_set;
 static TpLive g_live = {};
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0;
 
-static float g_seconds = 3.0f; // a mode change deflates or inflates over this time, as in Expeditions
+static float g_seconds = kSecondsDefault; // a mode change deflates or inflates over this time
+static float g_soundVolume = 0.5f;        // ini SoundVolume as 0..1: the air and compressor sounds of a change (sound.h)
 static int g_probeFriction = 0, g_probeWriters = 0; // diagnostics, see ProbeHandler
 static int g_probeFuel = 0;                         // diagnostics, see FuelSnapshot
 static int g_probeDamage = -1, g_probeDamageBack = 0; // diagnostics: ini ProbeDamage=N sets every wheel's damage to N once, ProbeDamageBack=s to none s seconds later
@@ -161,6 +163,8 @@ static void WriteIni(const TpSettings &s)
     put(T, L"Key", L"%.0f", s.key);
     put(T, L"Beep", L"%.0f", s.beep ? 1 : 0);
     put(T, L"Seconds", L"%g", s.seconds);
+    put(T, L"SoundVolume", L"%g", s.soundVolume);
+    put(T, L"IniVersion", L"%.0f", kIniVersion);
     put(T, L"UI", L"%.0f", s.ui ? 1 : 0);
     put(T, L"UIScale", L"%g", s.uiScale);
     put(T, L"ConfirmSeconds", L"%g", s.confirmSeconds);
@@ -190,6 +194,12 @@ static void ReadIni(TpSettings &s)
                         L"; The Tire Inflation System tab in ReShade's overlay edits everything here in the game.\n"
                         L"; Key is a virtual key code (114 = F3). Beep=1 beeps once for Normal, twice for Reduced, three times for Low,\n"
                         L"; and high for Increased. Seconds is how long the tires take to deflate or inflate to the new mode.\n"
+                        L"; SoundVolume (0 to 100, 0 = none): air let out while the tires deflate, air going in while they fill,\n"
+                        L"; and the compressor, which fills its tank again after every few fillings and lets its air go as it stops.\n"
+                        L"; AirOutSound, AirInSound, CompressorSound and CompressorStopSound pick those four sounds: nothing = the\n"
+                        L"; mod's own, none = without it, or the name of a WAV file in this folder, or of a sample in the game's\n"
+                        L"; shared_sound.pak ([sound]\\actors\\actor_lamp_generator_loop.pcm). The first three play round and\n"
+                        L"; round while they last; a WAV file with a loop marked in it plays up to the loop once.\n"
                         L"; UI=1 shows the Tire Inflation System panel (needs ReShade with add-on support): the key opens it and\n"
                         L"; steps the pressure down, the choice confirms itself after ConfirmSeconds. Pad buttons (XInput): DPadUp,\n"
                         L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None.\n"
@@ -209,6 +219,7 @@ static void ReadIni(TpSettings &s)
                         L"; 50 before the tire is flat. MaxDamage=0 or TireDamage=0: none.\n");
             fclose(f);
             WriteIni(s);
+            for (const SoundVoiceKind &v : kSoundVoices) WritePrivateProfileStringW(L"TirePressure", v.key, L"", ini.c_str());
         }
         return;
     }
@@ -216,6 +227,22 @@ static void ReadIni(TpSettings &s)
     s.key = GetPrivateProfileIntW(T, L"Key", s.key, ini.c_str());
     s.beep = GetPrivateProfileIntW(T, L"Beep", 1, ini.c_str()) != 0;
     s.seconds = min(60.0f, max(0.0f, IniFloat(T, L"Seconds", s.seconds, ini)));
+    // An ini from before 1.1.0 holds the 3 seconds every ini was written with then. The change now takes longer, with
+    // sounds made for that, so those 3 seconds become the new time, once: the file then says so and carries the version.
+    if ((int)GetPrivateProfileIntW(T, L"IniVersion", 1, ini.c_str()) < kIniVersion)
+    {
+        if (s.seconds == kSecondsBefore)
+        {
+            s.seconds = kSecondsDefault;
+            Log(L"settings: an ini from before 1.1.0 with a pressure change of %g s: it takes %g s now", kSecondsBefore, kSecondsDefault);
+        }
+        wchar_t b[32];
+        swprintf_s(b, L"%g", s.seconds);
+        WritePrivateProfileStringW(T, L"Seconds", b, ini.c_str());
+        swprintf_s(b, L"%d", kIniVersion);
+        WritePrivateProfileStringW(T, L"IniVersion", b, ini.c_str());
+    }
+    s.soundVolume = min(100.0f, max(0.0f, IniFloat(T, L"SoundVolume", s.soundVolume, ini)));
     s.ui = GetPrivateProfileIntW(T, L"UI", 1, ini.c_str()) != 0;
     s.uiScale = min(3.0f, max(0.3f, IniFloat(T, L"UIScale", s.uiScale, ini)));
     s.confirmSeconds = min(30.0f, max(0.0f, IniFloat(T, L"ConfirmSeconds", s.confirmSeconds, ini)));
@@ -248,6 +275,7 @@ static void ApplySettings(const TpSettings &s, bool log)
     g_key = s.key;
     g_beep = s.beep;
     g_seconds = s.seconds;
+    g_soundVolume = s.soundVolume / 100.0f;
     g_uiWanted = s.ui;
     g_ui = g_uiWanted && g_reshadeOk;
     g_panelScale = s.uiScale;
@@ -340,6 +368,21 @@ void LiveGet(TpLive &out)
     ReleaseSRWLockShared(&g_setLock);
 }
 
+// Which sounds the system has (sound.h): the ini's AirOutSound, AirInSound, CompressorSound and CompressorStopSound,
+// by hand only.
+static void LoadSoundNames()
+{
+    const std::wstring ini = g_dir + L"TirePressure.ini";
+    std::wstring names[kVoiceCount];
+    for (int k = 0; k < kVoiceCount; k++)
+    {
+        wchar_t name[MAX_PATH] = {};
+        GetPrivateProfileStringW(L"TirePressure", kSoundVoices[k].key, L"", name, MAX_PATH, ini.c_str());
+        names[k] = name;
+    }
+    SoundNames(names);
+}
+
 static void LoadIni()
 {
     TpSettings s;
@@ -348,6 +391,7 @@ static void LoadIni()
     g_set = s;
     ReleaseSRWLockExclusive(&g_setLock);
     ApplySettings(s, true);
+    LoadSoundNames();
     // diagnostics, by hand only (not on the settings page)
     const std::wstring ini = g_dir + L"TirePressure.ini";
     g_probeFriction = GetPrivateProfileIntW(L"TirePressure", L"ProbeFriction", 0, ini.c_str());
@@ -662,10 +706,9 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     }
 }
 
-// Moves the factors in force one step of dt seconds towards the chosen mode; true once they are there.
-static bool StepTowardsMode(float dt)
+// Moves factors one step of dt seconds towards a mode's; true once they are there.
+static bool StepTowards(Mode &now, const Mode &to, float dt)
 {
-    const Mode &to = g_modes[g_mode];
     bool there = true;
     auto step = [&](float &v, float target, float span) {
         const float d = g_seconds > 0.0f ? span * dt / g_seconds : span;
@@ -675,17 +718,56 @@ static bool StepTowardsMode(float dt)
     // span: Normal <-> Low (or Increased, if that is further) takes Seconds, a smaller change takes its share of that
     const Mode &n = g_modes[kNormal], &l = g_modes[kLow], &h = g_modes[kIncreased];
     auto span = [](float normal, float low, float high, float least) { return max(least, max(fabsf(low - normal), fabsf(high - normal))); };
-    step(g_now.body, to.body, span(n.body, l.body, h.body, 0.01f));
-    step(g_now.asphalt, to.asphalt, span(n.asphalt, l.asphalt, h.asphalt, 0.01f));
-    step(g_now.substance, to.substance, span(n.substance, l.substance, h.substance, 0.01f));
-    step(g_now.radiusOffset, to.radiusOffset, span(n.radiusOffset, l.radiusOffset, h.radiusOffset, 0.001f));
-    step(g_now.fuel, to.fuel, span(n.fuel, l.fuel, h.fuel, 0.01f));
-    step(g_now.steering, to.steering, span(n.steering, l.steering, h.steering, 0.01f));
-    step(g_now.gravel, to.gravel, span(n.gravel, l.gravel, h.gravel, 0.01f));
-    step(g_now.sand, to.sand, span(n.sand, l.sand, h.sand, 0.01f));
-    step(g_now.rock, to.rock, span(n.rock, l.rock, h.rock, 0.01f));
-    if (there) g_now = to;
+    step(now.body, to.body, span(n.body, l.body, h.body, 0.01f));
+    step(now.asphalt, to.asphalt, span(n.asphalt, l.asphalt, h.asphalt, 0.01f));
+    step(now.substance, to.substance, span(n.substance, l.substance, h.substance, 0.01f));
+    step(now.radiusOffset, to.radiusOffset, span(n.radiusOffset, l.radiusOffset, h.radiusOffset, 0.001f));
+    step(now.fuel, to.fuel, span(n.fuel, l.fuel, h.fuel, 0.01f));
+    step(now.steering, to.steering, span(n.steering, l.steering, h.steering, 0.01f));
+    step(now.gravel, to.gravel, span(n.gravel, l.gravel, h.gravel, 0.01f));
+    step(now.sand, to.sand, span(n.sand, l.sand, h.sand, 0.01f));
+    step(now.rock, to.rock, span(n.rock, l.rock, h.rock, 0.01f));
+    if (there) now = to;
     return there;
+}
+
+static const float kPass = 0.05f; // the main loop's step in seconds
+
+// The air for a filling comes out of a tank, and a compressor fills the tank again once it has fallen far enough. So
+// the compressor does not run at every filling: at every second where the pressure goes up by two modes or more
+// (Low to Normal), at every fourth where it goes up by one. Then it runs on until the tank is full, a quarter of a
+// minute or so, and lets its own air go as it stops. level: 1 = a full tank.
+static const float kTankUse = 0.17f;    // of the tank per mode the pressure is raised by
+static const float kTankCutIn = 0.45f;  // below this the compressor starts
+static const float kTankRefill = 0.04f; // of the tank per second while it runs
+struct AirTank { float level = 1.0f; bool compressor = false; };
+
+// One pass: the pressure went up by `raised` modes, dt seconds went by. True: the compressor has just stopped.
+static bool TankStep(AirTank &t, float raised, float dt)
+{
+    t.level = max(0.0f, t.level - raised * kTankUse);
+    if (!t.compressor)
+    {
+        t.compressor = t.level < kTankCutIn;
+        return false;
+    }
+    t.level += kTankRefill * dt;
+    if (t.level < 1.0f) return false;
+    t.level = 1.0f;
+    t.compressor = false;
+    return true;
+}
+
+// Moves the factors in force one pass towards the chosen mode; true once they are there.
+static bool StepTowardsMode() { return StepTowards(g_now, g_modes[g_mode], kPass); }
+
+// How long the factors in force take to the chosen mode, in seconds of passes; 0: they are there, or get there in one.
+static float SecondsToMode()
+{
+    Mode now = g_now;
+    int passes = 1;
+    while (passes < 100000 && !StepTowards(now, g_modes[g_mode], kPass)) passes++;
+    return passes > 1 ? (float)passes * kPass : 0.0f;
 }
 
 static bool SameFactors(const Mode &a, const Mode &b)
@@ -1230,6 +1312,7 @@ static DWORD WINAPI Run(void *)
     Log(L"game code found at look %d: control %llx, wheel class %llx, cylinder class %llx, damage update %llx, foreground slot %llx, truck update return %llx, first argument +%llx",
         looks, g_build->control, g_build->wheelVtable, g_build->cylinderVtable, g_build->damageUpdate, g_build->foregroundSlot, g_build->truckUpdateReturn, g_build->firstArgument);
     LoadIni();
+    if (!SoundStart(g_dir)) Log(L"sound: none, as its thread did not start");
     g_now = g_modes[g_mode]; // with a base grip, Normal is not the stock values: the first wheels get it straight away
     Log(L"panel: %s", g_ui ? L"drawn through ReShade's overlay" : g_uiWanted ? L"ReShade not found: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
     if (g_reshadeOk) Log(L"settings: the Tire Inflation System tab in ReShade's overlay");
@@ -1269,6 +1352,7 @@ static DWORD WINAPI Run(void *)
             ReleaseSRWLockExclusive(&g_setLock);
             InterlockedExchange(&g_setDirty, 0);
             ApplySettings(s, true);
+            LoadSoundNames();
             Log(L"settings: TirePressure.ini read again");
             saveAt = 0;
             edited = true;
@@ -1456,7 +1540,45 @@ static DWORD WINAPI Run(void *)
             moving = true;
         }
         g_view.current = g_mode;
-        const bool arrived = moving && StepTowardsMode(0.05f);
+        // The sounds of a change (sound.h): air let out on the way down, air going in on the way up. Where the pressure
+        // stands is counted in modes (kLow = 0, a half = between two of them) and moves with the factors, so a choice
+        // changed half way still knows which way it goes.
+        static int soundMode = kNormal, changing = 0; // changing: -1 the pressure falls, 1 it rises, 0 neither
+        static float pressure = (float)kNormal, pressureFrom = (float)kNormal, changeFor = 0.0f, changeTakes = 0.0f;
+        if (g_mode != soundMode)
+        {
+            soundMode = g_mode;
+            pressureFrom = pressure;
+            changeFor = 0.0f;
+            changeTakes = SecondsToMode();
+            changing = changeTakes <= 0.0f ? 0 : (float)g_mode > pressure + 0.01f ? 1 : (float)g_mode < pressure - 0.01f ? -1 : 0;
+        }
+        const bool arrived = moving && StepTowardsMode();
+        float soundProgress = 1.0f;
+        if (moving && !arrived && changing)
+        {
+            changeFor += kPass;
+            soundProgress = min(1.0f, changeFor / changeTakes);
+        }
+        else changing = 0;
+        const float pressureWas = pressure;
+        pressure = pressureFrom + ((float)g_mode - pressureFrom) * soundProgress;
+        // The air that went into the tires came out of the tank; the compressor runs when the tank says so, and as
+        // it stops it lets its air go. All of it is heard while a truck is driven and the game is in front.
+        static AirTank tank;
+        static LONG purges = 0;
+        const bool heard = front && !wheels.empty();
+        if (TankStep(tank, max(0.0f, pressure - pressureWas), kPass) && heard) purges++;
+        SoundWant want = {};
+        want.volume = g_soundVolume;
+        want.on[kVoiceHiss] = heard && changing < 0;
+        want.on[kVoiceAir] = heard && changing > 0;
+        want.on[kVoiceCompressor] = heard && tank.compressor;
+        want.progress[kVoiceHiss] = min(1.0f, max(-0.5f, ((float)kNormal - pressure) / 2.0f)); // how empty the tires are
+        want.progress[kVoiceAir] = soundProgress;
+        want.progress[kVoiceCompressor] = min(1.0f, max(0.0f, (tank.level - 0.3f) / 0.7f));
+        want.shots[kVoicePurge] = purges;
+        SoundSet(want);
         // vanilla balance: a factor per wheel from its tire's own grip, once all three are known (the ground grip list
         // only fills when the truck works); the modes and the base grip then act on the balanced tire
         std::vector<float> balance(wheels.size(), 1.0f);
@@ -1746,7 +1868,7 @@ static DWORD WINAPI TestWriter(void *stop)
 }
 static bool SameSettings(const TpSettings &a, const TpSettings &b)
 {
-    bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.ui == b.ui && a.uiScale == b.uiScale &&
+    bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
                 a.confirmSeconds == b.confirmSeconds && a.vanillaBalance == b.vanillaBalance && a.balanceStrength == b.balanceStrength;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
@@ -1776,6 +1898,7 @@ static bool IniTest(const wchar_t *userIni)
     c.key = 'K';
     c.beep = false;
     c.seconds = 4.5f;
+    c.soundVolume = 35.0f;
     c.ui = false;
     c.uiScale = 1.25f;
     c.confirmSeconds = 0.0f;
@@ -1798,7 +1921,7 @@ static bool IniTest(const wchar_t *userIni)
             unchanged += c.mode[m][k] == d.mode[m][k];
         }
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
-    unchanged += c.key == d.key || c.seconds == d.seconds || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
+    unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
                  c.rollingRadius == d.rollingRadius;
@@ -1820,6 +1943,21 @@ static bool IniTest(const wchar_t *userIni)
     const bool finite = b.mode[1][kModeGround] == d.mode[1][kModeGround] && b.base[2] == d.base[2];
     printf("%s ini: \"nan\" and \"inf\" in the file give the defaults (%g, %g)\n", finite ? "ok  " : "FAIL", b.mode[1][kModeGround], b.base[2]);
     ok = ok && finite;
+    // an ini from before 1.1.0 has no IniVersion: its 3 seconds become the new time, once (the file then carries the
+    // version, and 3 set after that stays); another time in such an ini stays as it is
+    TpSettings before, after, other;
+    WritePrivateProfileStringW(L"TirePressure", L"IniVersion", nullptr, ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"Seconds", L"3", ini.c_str());
+    ReadIni(before);
+    WritePrivateProfileStringW(L"TirePressure", L"Seconds", L"3", ini.c_str());
+    ReadIni(after);
+    WritePrivateProfileStringW(L"TirePressure", L"IniVersion", nullptr, ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"Seconds", L"4.5", ini.c_str());
+    ReadIni(other);
+    const bool taken = before.seconds == kSecondsDefault && after.seconds == kSecondsBefore && other.seconds == 4.5f;
+    printf("%s ini: the %g s of an ini from before 1.1.0 become %g s, once (read %g, then %g for a 3 set after that, %g for an old ini's 4.5)\n", taken ? "ok  " : "FAIL",
+           kSecondsBefore, kSecondsDefault, before.seconds, after.seconds, other.seconds);
+    ok = ok && taken;
     if (userIni && !CopyFileW(userIni, ini.c_str(), FALSE))
     {
         printf("FAIL ini: %ls could not be copied (error %lu)\n", userIni, GetLastError());
@@ -1923,6 +2061,334 @@ static bool BuildTest(const wchar_t *file)
     return ok;
 }
 
+// A WAV file in memory: the header for a format, then the samples.
+static std::vector<uint8_t> TestWav(int tag, int channels, int rate, int bits, int align, const std::vector<uint8_t> &samples)
+{
+    std::vector<uint8_t> w;
+    auto put = [&](uint32_t v, int bytes) { for (int i = 0; i < bytes; i++) w.push_back((uint8_t)(v >> (8 * i))); };
+    auto text = [&](const char *s) { w.insert(w.end(), s, s + 4); };
+    text("RIFF"); put((uint32_t)(36 + samples.size()), 4); text("WAVE");
+    text("fmt "); put(16, 4); put(tag, 2); put(channels, 2); put(rate, 4); put(rate * align, 4); put(align, 2); put(bits, 2);
+    text("data"); put((uint32_t)samples.size(), 4);
+    w.insert(w.end(), samples.begin(), samples.end());
+    return w;
+}
+
+// A pak (zip) in memory with two files that lie in it as they are: "[sound]\other.pcm" and, second, name with data.
+// wide: the second in the 64-bit form (sizes and place in an extra field, the 64-bit end record and its locator).
+// method: 0 = stored, 8 = compressed (which the mod does not read).
+static std::vector<uint8_t> TestPak(const char *name, const std::vector<uint8_t> &data, bool wide, int method)
+{
+    std::vector<uint8_t> z, dir;
+    auto put = [](std::vector<uint8_t> &to, uint64_t v, int bytes) { for (int i = 0; i < bytes; i++) to.push_back((uint8_t)(v >> (8 * i))); };
+    const std::vector<uint8_t> otherData = { 1, 2, 3, 4, 5 };
+    const struct { const char *name; const std::vector<uint8_t> *data; bool wide; int method; } files[2] = { { "[sound]\\other.pcm", &otherData, false, 0 }, { name, &data, wide, method } };
+    for (const auto &f : files)
+    {
+        const size_t at = z.size(), nameLen = strlen(f.name);
+        const uint32_t inDir = f.wide ? 0xFFFFFFFFu : (uint32_t)f.data->size();
+        put(z, 0x04034b50, 4); put(z, 20, 2); put(z, 0, 2); put(z, f.method, 2); put(z, 0, 4); put(z, 0, 4); put(z, (uint32_t)f.data->size(), 4);
+        put(z, (uint32_t)f.data->size(), 4); put(z, nameLen, 2); put(z, 0, 2);
+        z.insert(z.end(), f.name, f.name + nameLen);
+        z.insert(z.end(), f.data->begin(), f.data->end());
+        put(dir, 0x02014b50, 4); put(dir, 20, 2); put(dir, 20, 2); put(dir, 0, 2); put(dir, f.method, 2); put(dir, 0, 4); put(dir, 0, 4);
+        put(dir, inDir, 4); put(dir, inDir, 4); put(dir, nameLen, 2); put(dir, f.wide ? 28 : 0, 2); put(dir, 0, 2); put(dir, 0, 2); put(dir, 0, 2);
+        put(dir, 0, 4); put(dir, f.wide ? 0xFFFFFFFFu : (uint32_t)at, 4);
+        dir.insert(dir.end(), f.name, f.name + nameLen);
+        if (f.wide) { put(dir, 1, 2); put(dir, 24, 2); put(dir, f.data->size(), 8); put(dir, f.data->size(), 8); put(dir, at, 8); }
+    }
+    const size_t dirAt = z.size();
+    z.insert(z.end(), dir.begin(), dir.end());
+    if (wide)
+    {
+        const size_t recordAt = z.size();
+        put(z, 0x06064b50, 4); put(z, 44, 8); put(z, 45, 2); put(z, 45, 2); put(z, 0, 4); put(z, 0, 4); put(z, 2, 8); put(z, 2, 8); put(z, dir.size(), 8); put(z, dirAt, 8);
+        put(z, 0x07064b50, 4); put(z, 0, 4); put(z, recordAt, 8); put(z, 1, 4);
+    }
+    put(z, 0x06054b50, 4); put(z, 0, 2); put(z, 0, 2); put(z, wide ? 0xFFFF : 2, 2); put(z, wide ? 0xFFFF : 2, 2);
+    put(z, wide ? 0xFFFFFFFFu : (uint32_t)dir.size(), 4); put(z, wide ? 0xFFFFFFFFu : (uint32_t)dirAt, 4); put(z, 0, 2);
+    return z;
+}
+
+static bool TestSave(const std::wstring &path, const std::vector<uint8_t> &bytes)
+{
+    FILE *f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f) return false;
+    const bool ok = fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    fclose(f);
+    return ok;
+}
+
+// A loop as a 16-bit WAV file, to listen to or to measure.
+static bool TestSaveLoop(const std::wstring &path, const SoundClip &c)
+{
+    std::vector<uint8_t> samples;
+    for (const float v : c.x)
+    {
+        const int s = (int)floorf(max(-1.0f, min(1.0f, v)) * 32767.0f + 0.5f);
+        samples.push_back((uint8_t)s);
+        samples.push_back((uint8_t)(s >> 8));
+    }
+    return TestSave(path, TestWav(1, 1, (int)c.rate, 16, 2, samples));
+}
+
+// The sound module without an audio device (sound.h): a WAV file in memory reads back as its samples; hand-made ADPCM
+// blocks give the values worked out by hand; a file comes out of a hand-made pak in both zip forms, by a name in
+// other case and with other slashes, and a compressed or missing one does not; the loops made by code join, hold no
+// bad number and have the loudness asked for; the shapes stay within what a voice takes; and the time a change is
+// said to take is the time it takes.
+static bool SoundTest()
+{
+    // 16-bit PCM, two channels, 1000 frames of (1000, 3000): one channel of 2000
+    std::vector<uint8_t> pcm;
+    for (int i = 0; i < 1000; i++) { pcm.push_back(0xE8); pcm.push_back(0x03); pcm.push_back(0xB8); pcm.push_back(0x0B); }
+    const std::vector<uint8_t> wav = TestWav(1, 2, 8000, 16, 4, pcm);
+    SoundClip clip;
+    std::wstring why;
+    bool plain = SoundDecode(wav, clip, why) && clip.rate == 8000 && clip.x.size() == 1000;
+    for (size_t i = 0; plain && i < clip.x.size(); i++) plain = fabsf(clip.x[i] - 2000.0f / 32768.0f) < 1e-6f;
+    printf("%s sound: a 16-bit WAV file of two channels reads as one channel of their mean%s%ls\n", plain ? "ok  " : "FAIL", plain ? "" : ": ", plain ? L"" : why.c_str());
+    // ADPCM, one channel, blocks of 22 bytes (32 samples). By hand, from the format's rules:
+    //   predictor 0 (256, 0), step 16, samples 100 and 50, then +1, -1 and nothing: 50, 100, 116, 100, 100, ...
+    //   predictor 1 (512, -256), samples 100 and 50, nothing: every sample 50 more than the last, up to 1600
+    //   predictor 4 (240, 0), samples -3 and 0, nothing: 0, -3, -3, -3, ... (-720 / 256 rounded down, as the codec does)
+    std::vector<uint8_t> blocks;
+    static const struct { uint8_t pred; int16_t s1, s2; uint8_t first; } kinds[3] = { { 0, 100, 50, 0x1F }, { 1, 100, 50, 0x00 }, { 4, -3, 0, 0x00 } };
+    for (int b = 0; b < 15; b++)
+    {
+        const auto &k = kinds[b % 3];
+        const uint8_t head[7] = { k.pred, 16, 0, (uint8_t)k.s1, (uint8_t)(k.s1 >> 8), (uint8_t)k.s2, (uint8_t)(k.s2 >> 8) };
+        blocks.insert(blocks.end(), head, head + 7);
+        blocks.push_back(k.first);
+        blocks.insert(blocks.end(), 14, (uint8_t)0);
+    }
+    SoundClip packed;
+    bool adpcm = SoundDecode(TestWav(2, 1, 4000, 4, 22, blocks), packed, why) && packed.rate == 4000 && packed.x.size() == 15 * 32;
+    static const int first[3][5] = { { 50, 100, 116, 100, 100 }, { 50, 100, 150, 200, 250 }, { 0, -3, -3, -3, -3 } };
+    int wrongAt = -1;
+    for (int b = 0; adpcm && b < 15 && wrongAt < 0; b++)
+        for (int i = 0; i < 32 && wrongAt < 0; i++)
+        {
+            const float want = i < 5 ? (float)first[b % 3][i] : b % 3 == 0 ? 100.0f : b % 3 == 1 ? 50.0f * (float)(i + 1) : -3.0f;
+            if (fabsf(packed.x[b * 32 + i] * 32768.0f - want) >= 0.01f) wrongAt = b * 32 + i;
+        }
+    adpcm = adpcm && wrongAt < 0;
+    printf("%s sound: ADPCM blocks give the samples worked out by hand", adpcm ? "ok  " : "FAIL");
+    if (wrongAt >= 0) printf(": sample %d is %g", wrongAt, packed.x[wrongAt] * 32768.0f);
+    else if (!adpcm) printf(": %zu samples at %u Hz, %ls", packed.x.size(), packed.rate, why.c_str());
+    printf("\n");
+    // the WAV file out of a pak, in the plain and in the 64-bit form
+    const std::wstring pak = g_dir + L"sound_test.pak";
+    bool paks = true, refused = true;
+    for (int wide = 0; wide < 2; wide++)
+    {
+        std::vector<uint8_t> out;
+        SoundClip back;
+        paks = paks && TestSave(pak, TestPak("[sound]\\Test\\Loop.pcm", wav, wide != 0, 0)) && PakRead(pak, L"[sound]/test/loop.PCM", out, why) && out == wav &&
+               SoundDecode(out, back, why) && back.x.size() == 1000;
+        refused = refused && !PakRead(pak, L"[sound]\\test\\none.pcm", out, why);
+        refused = refused && TestSave(pak, TestPak("[sound]\\Test\\Loop.pcm", wav, wide != 0, 8)) && !PakRead(pak, L"[sound]\\test\\loop.pcm", out, why);
+    }
+    DeleteFileW(pak.c_str());
+    printf("%s sound: a file comes out of a pak by its name, in the plain and the 64-bit zip form%s%ls\n", paks ? "ok  " : "FAIL", paks ? "" : ": ", paks ? L"" : why.c_str());
+    printf("%s sound: a name the pak does not have and a compressed file are refused\n", refused ? "ok  " : "FAIL");
+    // a WAV file that marks a loop: what lies before the loop stays in front of it, what follows it is dropped
+    std::vector<uint8_t> loopWav = wav, smpl(68, 0);
+    memcpy(smpl.data(), "smpl", 4);
+    smpl[4] = 60;             // the chunk's size
+    smpl[8 + 28] = 1;         // one loop
+    smpl[8 + 36 + 8] = 100;   // from sample 100
+    smpl[8 + 36 + 12] = 0x83; // to sample 899
+    smpl[8 + 36 + 13] = 0x03;
+    loopWav.insert(loopWav.begin() + 36, smpl.begin(), smpl.end());
+    const uint32_t riff = (uint32_t)loopWav.size() - 8;
+    memcpy(loopWav.data() + 4, &riff, 4);
+    // the same marks in a file twice as long: 900 samples follow the loop (0.11 s), and those are its ending
+    std::vector<uint8_t> longPcm = pcm, endWav;
+    longPcm.insert(longPcm.end(), pcm.begin(), pcm.end());
+    endWav = TestWav(1, 2, 8000, 16, 4, longPcm);
+    smpl[8 + 36 + 12] = 0x4B; // to sample 1099
+    smpl[8 + 36 + 13] = 0x04;
+    endWav.insert(endWav.begin() + 36, smpl.begin(), smpl.end());
+    const uint32_t riffLong = (uint32_t)endWav.size() - 8;
+    memcpy(endWav.data() + 4, &riffLong, 4);
+    SoundClip looped, ended, air;
+    std::vector<uint8_t> carried;
+    const bool mark = SoundDecode(loopWav, looped, why) && looped.marked && looped.loopFrom == 100 && looped.x.size() == 900 && !looped.loopTo && !clip.marked && !clip.loopFrom &&
+                      SoundDecode(endWav, ended, why) && ended.loopFrom == 100 && ended.loopTo == 1100 && ended.x.size() == 2000 && SoundLoopEnd(ended) == 1100 && SoundLoopEnd(looped) == 900;
+    printf("%s sound: a loop marked in a WAV file is read (from sample %zu, %zu samples in all), and what follows it is kept as the ending when it is long enough (%zu samples)\n",
+           mark ? "ok  " : "FAIL", looped.loopFrom, looped.x.size(), ended.x.size() - SoundLoopEnd(ended));
+    // the two recordings this program carries, as the mod does: each a start, a loop of a second or more, an ending
+    bool own = true;
+    for (const int k : { kVoiceHiss, kVoiceAir })
+    {
+        const bool read = SoundCarried(kSoundOwn[k].carried, carried) && SoundDecode(carried, air, why) && air.marked && air.loopFrom > air.rate / 4 &&
+                          SoundLoopEnd(air) - air.loopFrom > air.rate && air.x.size() - SoundLoopEnd(air) > air.rate / 4;
+        printf("%s sound: the recording of the %ls that the mod carries reads at %u Hz as a start of %.2f s, %.2f s that go round and an ending of %.2f s\n",
+               read ? "ok  " : "FAIL", kSoundVoices[k].what, air.rate, air.rate ? (double)air.loopFrom / air.rate : 0.0,
+               air.rate ? (double)(SoundLoopEnd(air) - air.loopFrom) / air.rate : 0.0, air.rate ? (double)(air.x.size() - SoundLoopEnd(air)) / air.rate : 0.0);
+        own = own && read;
+        air = SoundClip{};
+    }
+    // the sounds made by code: the two that go round join, the one played once dies away
+    bool loops = true;
+    float seams[2] = {}, rms[2] = {};
+    for (int k = 0; k < 2; k++)
+    {
+        SoundClip c;
+        if (k == 0) SoundMakeHiss(c);
+        else SoundMakeCompressor(c);
+        SoundLevel(c, false);
+        float steepest = 0.0f, peak = 0.0f;
+        bool finite = true;
+        for (size_t i = 0; i < c.x.size(); i++)
+        {
+            finite = finite && isfinite(c.x[i]);
+            peak = max(peak, fabsf(c.x[i]));
+            if (i) steepest = max(steepest, fabsf(c.x[i] - c.x[i - 1]));
+        }
+        seams[k] = fabsf(c.x.front() - c.x.back()) / max(1e-9f, steepest);
+        rms[k] = SoundRms(c.x);
+        loops = loops && finite && c.rate == 44100 && c.x.size() >= 44100 && seams[k] <= 1.0f && rms[k] <= kSoundRms * 1.001f && rms[k] >= kSoundRms * 0.5f && peak <= kSoundPeak * 1.001f;
+    }
+    SoundClip puff;
+    SoundMakePuff(puff);
+    SoundLevel(puff, true);
+    float puffPeak = 0.0f;
+    for (const float v : puff.x) puffPeak = max(puffPeak, fabsf(v));
+    loops = loops && puff.x.size() == 44100 && puffPeak > 0.05f && puffPeak <= kSoundPeak * 1.001f && fabsf(puff.x.back()) < 0.01f;
+    printf("%s sound: the loops made by code join (the step from end to start is %.2f and %.2f of the steepest inside) at loudness %.3f and %.3f; the one played once dies away\n",
+           loops ? "ok  " : "FAIL", seams[0], seams[1], rms[0], rms[1]);
+    // the shapes: silent at nothing, a pitch a voice can play, and never past full scale at the highest volume with
+    // every peak at once: the air let out alone, and the three that can fall together at a filling
+    bool shapes = true;
+    for (float env = 0.0f; env <= 1.0f; env += 0.05f)
+        for (float p = -0.5f; p <= 1.0f; p += 0.1f) // from -0.5: air let out of tires above Normal
+        {
+            float together = 0.0f;
+            for (int k = 0; k < kVoiceCount; k++)
+            {
+                float gain = -1.0f, pitch = -1.0f;
+                SoundShapeAt(k, env, k == kVoiceHiss ? p : max(0.0f, p), gain, pitch);
+                shapes = shapes && isfinite(gain) && isfinite(pitch) && gain >= 0.0f && (kSoundVoices[k].once || env > 0.0f || gain == 0.0f) && pitch >= 0.4f && pitch <= 1.3f;
+                shapes = shapes && gain * kSoundVoices[k].level * kSoundPeak <= 1.0f;
+                if (k != kVoiceHiss) together += gain * kSoundVoices[k].level * kSoundPeak;
+            }
+            shapes = shapes && together <= 1.0f;
+        }
+    float atNormal = 0.0f, atLow = 0.0f, same = 0.0f;
+    SoundShapeAt(kVoiceHiss, 1.0f, 0.0f, atNormal, same);
+    SoundShapeAt(kVoiceHiss, 1.0f, 1.0f, atLow, same);
+    shapes = shapes && atNormal == 1.0f && fabsf(20.0f * log10f(atLow) + 9.0f) < 0.1f;
+    printf("%s sound: loudness and pitch stay within what a voice takes, at any moment; the air let out is %.1f dB weaker at Low than at Normal\n", shapes ? "ok  " : "FAIL",
+           -20.0f * log10f(atLow));
+    // the tank: fillings of two modes (Low to Normal, 6 s) start the compressor in the second, fillings of one mode
+    // (3 s) in the fourth; it then runs on for a quarter of a minute or so and says once that it has stopped
+    auto startsIn = [](float modes, float &ranFor) {
+        AirTank t;
+        int started = 0, stops = 0;
+        ranFor = 0.0f;
+        for (int filling = 1; filling <= 8 && !stops; filling++)
+            for (float at = 0.0f, seconds = 3.0f * modes; at < seconds + 40.0f; at += kPass) // the filling, then nothing for a while
+            {
+                const bool was = t.compressor;
+                stops += TankStep(t, at < seconds ? modes * kPass / seconds : 0.0f, kPass);
+                if (t.compressor && !was && !started) started = filling;
+                if (t.compressor) ranFor += kPass;
+            }
+        return stops == 1 ? started : -1;
+    };
+    float ranTwo = 0.0f, ranOne = 0.0f;
+    const int two = startsIn(2.0f, ranTwo), one = startsIn(1.0f, ranOne);
+    const bool tank = two == 2 && one == 4 && ranTwo > 8.0f && ranTwo < 30.0f && ranOne > 8.0f && ranOne < 30.0f;
+    printf("%s sound: the compressor starts in filling %d of two modes each and runs %.0f s, in filling %d of one mode each and runs %.0f s\n", tank ? "ok  " : "FAIL",
+           two, ranTwo, one, ranOne);
+    // the time a change is said to take against the passes it takes (the defaults: Normal to Low all of Seconds,
+    // Normal to Reduced four fifths of it, as the dirt grip has that far to go)
+    TpSettings d;
+    SettingsDefaults(d);
+    ApplySettings(d, false);
+    bool times = true;
+    float said[2] = {};
+    static const int to[2] = { kLow, kReduced };
+    for (int i = 0; i < 2; i++)
+    {
+        g_mode = kNormal;
+        g_now = g_modes[kNormal];
+        g_mode = to[i];
+        said[i] = SecondsToMode();
+        int passes = 1;
+        while (passes < 100000 && !StepTowardsMode()) passes++;
+        times = times && fabsf(said[i] - (float)passes * kPass) < 0.001f && fabsf(said[i] - d.seconds * (i ? 0.8f : 1.0f)) < 0.11f && SecondsToMode() == 0.0f;
+    }
+    g_mode = kNormal;
+    g_now = g_modes[kNormal];
+    printf("%s sound: a change is said to take as long as it does (Normal to Low %.2f s, to Reduced %.2f s, at Seconds=%g)\n", times ? "ok  " : "FAIL", said[0], said[1], d.seconds);
+    return plain && adpcm && paks && refused && mark && own && loops && shapes && tank && times;
+}
+
+// "probe_test sound [volume 0..100] [seconds] [pak] [the four names]": plays what the mod plays in the game, through
+// the default audio device: the air let out for `seconds`; then a filling of `seconds` in whose middle the compressor
+// starts, to run on for two seconds and stop with its air let go. Not part of test.bat: it needs a device and ears.
+static int SoundPlay(int argc, wchar_t **argv)
+{
+    const float volume = argc > 2 ? min(1.0f, max(0.0f, (float)_wtof(argv[2]) / 100.0f)) : 0.5f, seconds = argc > 3 ? max(0.5f, (float)_wtof(argv[3])) : 6.0f;
+    std::wstring names[kVoiceCount];
+    for (int k = 0; k < kVoiceCount && argc > 5 + k; k++) names[k] = argv[5 + k];
+    SoundNames(names);
+    if (!SoundStart(g_dir, argc > 4 ? argv[4] : L"")) { printf("FAIL sound: no thread\n"); return 1; }
+    SoundWant want = {};
+    want.volume = volume;
+    auto pass = [&]() { SoundSet(want); Sleep(50); };
+    want.on[kVoiceHiss] = true;
+    for (float t = 0.0f; t < seconds; t += kPass) { want.progress[kVoiceHiss] = t / seconds; pass(); }
+    want.on[kVoiceHiss] = false;
+    for (float t = 0.0f; t < 1.0f; t += kPass) pass();
+    want.on[kVoiceAir] = true;
+    for (float t = 0.0f; t < seconds + 2.0f; t += kPass)
+    {
+        want.on[kVoiceAir] = t < seconds;
+        want.on[kVoiceCompressor] = t >= seconds / 2.0f;
+        want.progress[kVoiceAir] = min(1.0f, t / seconds);
+        want.progress[kVoiceCompressor] = max(0.0f, (t - seconds / 2.0f) / (seconds / 2.0f + 2.0f));
+        pass();
+    }
+    want.on[kVoiceCompressor] = false;
+    want.shots[kVoicePurge] = 1;
+    for (float t = 0.0f; t < 2.5f; t += kPass) pass();
+    const bool ok = g_soundOpens >= 1 && (float)g_soundPlayedMs[kVoiceHiss] > seconds * 800.0f && g_soundEndings[kVoiceHiss] == 1 &&
+                    (float)g_soundPlayedMs[kVoiceAir] > seconds * 800.0f &&
+                    (float)g_soundPlayedMs[kVoiceCompressor] > (seconds / 2.0f + 2.0f) * 800.0f && g_soundStarts[kVoiceAir] == 1 && g_soundEndings[kVoiceAir] == 1 &&
+                    g_soundStarts[kVoicePurge] == 1;
+    printf("%s sound: %ld engine starts; the air let out played %ld ms, the air going in %ld ms with its ending %ld time(s), the compressor %ld ms, its stop %ld time(s) (%.1f s each way, volume %.0f%%); see TirePressure.log next to this program\n",
+           ok ? "ok  " : "FAIL", (long)g_soundOpens, (long)g_soundPlayedMs[kVoiceHiss], (long)g_soundPlayedMs[kVoiceAir], (long)g_soundEndings[kVoiceAir],
+           (long)g_soundPlayedMs[kVoiceCompressor], (long)g_soundStarts[kVoicePurge], seconds, volume * 100.0f);
+    return ok ? 0 : 1;
+}
+
+// "probe_test loops <folder> [pak] [sample name]": the two loops made by code, and a sample out of a pak, as WAV files.
+static int SoundLoops(int argc, wchar_t **argv)
+{
+    const std::wstring dir = std::wstring(argv[2]) + L"\\";
+    SoundClip hiss, compressor, sample;
+    SoundMakeHiss(hiss);
+    SoundMakeCompressor(compressor);
+    SoundLevel(hiss, false);
+    SoundLevel(compressor, false);
+    bool ok = TestSaveLoop(dir + L"code_hiss.wav", hiss) && TestSaveLoop(dir + L"code_compressor.wav", compressor);
+    if (argc > 4)
+    {
+        std::vector<uint8_t> file;
+        std::wstring why;
+        const bool got = PakRead(argv[3], argv[4], file, why) && SoundDecode(file, sample, why);
+        if (got) printf("     %ls: %.2f s at %u Hz, loudness %.4f\n", argv[4], (double)sample.x.size() / sample.rate, sample.rate, SoundRms(sample.x));
+        else printf("FAIL %ls: %ls\n", argv[4], why.c_str());
+        ok = ok && got && TestSaveLoop(dir + L"pak_sample.wav", sample);
+    }
+    printf("%s loops written to %ls\n", ok ? "ok  " : "FAIL", argv[2]);
+    return ok ? 0 : 1;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     // "probe_test find <exe or image>": only the look through that exe
@@ -1931,8 +2397,11 @@ int wmain(int argc, wchar_t **argv)
     GetModuleFileNameW(nullptr, path, MAX_PATH);
     g_dir.assign(path, wcsrchr(path, L'\\') + 1 - path);
     g_base = (uint64_t)GetModuleHandleW(nullptr);
+    if (argc > 1 && !wcscmp(argv[1], L"sound")) return SoundPlay(argc, argv);
+    if (argc > 2 && !wcscmp(argv[1], L"loops")) return SoundLoops(argc, argv);
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
     if (!FlattenTest()) return 1;
+    if (!SoundTest()) return 1;
     wchar_t imageFile[1024] = {};
     GetEnvironmentVariableW(L"SR_IMAGE", imageFile, 1024);
     if (!BuildTest(imageFile)) return 1;

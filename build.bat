@@ -31,11 +31,13 @@ rem the mod itself, and the read-only tools for the running game
 rem panel.cpp: the pressure panel through ReShade's add-on overlay (headers only, deps\reshade and deps\imgui), its
 rem text in the game's font through stb_truetype (deps\stb)
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\reshade\include /I deps\stb /Fo:out\obj\panel.obj src\panel.cpp || goto fail
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\tire_pressure.obj /Fe:out\TirePressure.asi src\tire_pressure.cpp out\obj\panel.obj /link user32.lib || goto fail
+rem the sounds the mod's file carries (src\sounds.rc: assets\air_in.wav)
+rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\tire_pressure.obj /Fe:out\TirePressure.asi src\tire_pressure.cpp out\obj\panel.obj out\obj\sounds.res /link user32.lib ole32.lib || goto fail
 cl /nologo /O2 /W4 /EHsc /MT /Fo:out\obj\ /Fe:out\wheelscan.exe tools\wheelscan.cpp || goto fail
 cl /nologo /O2 /W4 /EHsc /MT /Fo:out\obj\ /Fe:out\ptrscan.exe tools\ptrscan.cpp || goto fail
 rem the mod's write breakpoint probe as a program of its own (TP_PROBE_TEST adds a main to the same source)
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D TP_PROBE_TEST /Fo:out\obj\probe_test.obj /Fe:out\test\probe_test.exe src\tire_pressure.cpp out\obj\panel.obj /link user32.lib || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D TP_PROBE_TEST /Fo:out\obj\probe_test.obj /Fe:out\test\probe_test.exe src\tire_pressure.cpp out\obj\panel.obj out\obj\sounds.res /link user32.lib ole32.lib || goto fail
 echo BUILD OK: out\version.dll, out\TirePressure.asi, out\test\loader_test.exe
 exit /b 0
 :fail

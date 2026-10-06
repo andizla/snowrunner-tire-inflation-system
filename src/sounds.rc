@@ -1,0 +1,6 @@
+// The sounds the mod's file carries (sound.h, SoundCarried). Paths are from the project's folder, where build.bat runs.
+// Both are the author's own recordings, cut so that each has its start, a steady part marked as a loop, and its stop
+// after the loop as the ending.
+// AIRIN: air going into a tire. AIROUT: air let out of one.
+AIRIN RCDATA "assets\\air_in.wav"
+AIROUT RCDATA "assets\\air_out.wav"

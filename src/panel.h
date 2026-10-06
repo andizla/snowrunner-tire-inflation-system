@@ -4,7 +4,7 @@
 #pragma once
 #include <windows.h>
 #include <xinput.h>
-#define TP_VERSION "1.0.1"
+#define TP_VERSION "1.1.0"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +46,8 @@ struct TpSettings
     int key;                 // Key: virtual key code of the panel key
     bool beep;               // Beep
     float seconds;           // Seconds: how long a pressure change takes
-    bool ui;                 // UI: the panel (off = the key cycles the modes directly)
+    float soundVolume;       // SoundVolume: air and compressor while the pressure changes, 0..100 (0 = no sound)
+    bool ui;                // UI: the panel (off = the key cycles the modes directly)
     float uiScale;           // UIScale
     float confirmSeconds;    // ConfirmSeconds: the panel's choice confirms itself after this (0 = never)
     char pad[5][32];         // PadOpen, PadLower, PadRaise, PadConfirm, PadCancel ("LB+DPadDown", "None")
@@ -75,12 +76,18 @@ static const struct { float lo, hi; } kModeRange[kModeKeyCount] = { { 0.1f, 10.0
                                                                     { 0.1f, 10.0f }, { 0.1f, 10.0f }, { 0.1f, 10.0f }, { 0.1f, 10.0f }, { 0.0f, 100.0f },
                                                                     { 0.0f, 100.0f }, { 0.0f, 100.0f }, { 0.0f, 100.0f }, { 1.0f, 100.0f } };
 
+// Seconds: Expeditions' own change takes 3. With the sounds of 1.1.0 it takes 6 here, and an ini from before that
+// which still says 3 is taken along (kIniVersion, ReadIni).
+static const float kSecondsDefault = 6.0f, kSecondsBefore = 3.0f;
+static const int kIniVersion = 2; // ini IniVersion: 2 since 1.1.0; an ini without the key is from 1.0
+
 inline void SettingsDefaults(TpSettings &s)
 {
     s = TpSettings{};
     s.key = VK_F3;
     s.beep = true;
-    s.seconds = 3.0f;
+    s.seconds = kSecondsDefault;
+    s.soundVolume = 50.0f;
     s.ui = true;
     s.uiScale = 1.0f;
     s.confirmSeconds = 15.0f;

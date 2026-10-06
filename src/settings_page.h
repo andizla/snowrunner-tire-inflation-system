@@ -254,8 +254,12 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::EndDisabled();
     PageLabel("Change takes", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##seconds", &s.seconds, 0.0f, 10.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp));
+    changed(ImGui::SliderFloat("##seconds", &s.seconds, 0.0f, 30.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp));
     PageTip("How long the tires take to deflate or inflate to the new pressure.");
+    PageLabel("Sound volume", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##sound", &s.soundVolume, 0.0f, 100.0f, s.soundVolume > 0.0f ? "%.0f %%" : "off", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("The air going out and in, and the compressor filling its tank.");
     changed(ImGui::Checkbox("Beep on a change", &s.beep));
 
     ImGui::SeparatorText("Pad");

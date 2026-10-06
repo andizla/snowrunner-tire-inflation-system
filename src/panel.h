@@ -31,7 +31,10 @@ struct PanelView
 extern PanelView g_view;
 extern PanelMode g_panelModes[kModeCount];
 extern float g_panelScale;        // ini UIScale
-extern char g_panelKeyName[16];   // the keyboard key that opens and steps the panel, as text ("F3")
+// The keyboard's keys as the panel shows them: the one that opens it ("F3"), and those that lower, raise and confirm
+// while it is open ("" = none).
+struct PanelKeys { char open[16], lower[16], raise[16], confirm[16]; };
+extern PanelKeys g_panelKeys;
 extern int g_panelConfirmMs;      // ini ConfirmSeconds in ms: the time the choice takes to confirm itself
 extern volatile LONG g_pageCapturing; // 1 while the settings page waits for pad buttons: the mod ignores the pad then
 extern volatile LONG g_modOff;        // 1 = the mod stood down (a game version it cannot work on): the page says so
@@ -44,6 +47,7 @@ void PanelLog(const wchar_t *fmt, ...); // a line in TirePressure.log (tire_pres
 struct TpSettings
 {
     int key;                 // Key: virtual key code of the panel key
+    int panelKeys[4];        // KeyLower, KeyRaise, KeyConfirm, KeyCancel: the keyboard's keys while the panel is open (0 = none)
     bool beep;               // Beep
     float seconds;           // Seconds: how long a pressure change takes
     float soundVolume;       // SoundVolume: air and compressor while the pressure changes, 0..100 (0 = no sound)
@@ -62,6 +66,7 @@ struct TpSettings
 };
 static const int kSettingsModes[3] = { kReduced, kLow, kIncreased }; // PressureMode of TpSettings::mode[i]
 static const char *const kPadKeys[5] = { "PadOpen", "PadLower", "PadRaise", "PadConfirm", "PadCancel" };
+static const char *const kPanelKeyNames[4] = { "KeyLower", "KeyRaise", "KeyConfirm", "KeyCancel" }; // TpSettings::panelKeys[i]
 // Per mode: grip multipliers on plain ground (dirt, and whatever is none of the others), on paved ground and in mud,
 // metres off the tire's radius, multipliers for fuel use and steering speed; then the ground grip again where the
 // ground is gravel, sand or rock, and Expeditions' TickDamageParams: above MinVel (m/s) every wheel on the ground takes
@@ -85,6 +90,9 @@ inline void SettingsDefaults(TpSettings &s)
 {
     s = TpSettings{};
     s.key = VK_F3;
+    // the arrow keys step the open panel, Enter confirms, Backspace closes it unchanged
+    static const int keys[4] = { VK_LEFT, VK_RIGHT, VK_RETURN, VK_BACK };
+    memcpy(s.panelKeys, keys, sizeof keys);
     s.beep = true;
     s.seconds = kSecondsDefault;
     s.soundVolume = 50.0f;

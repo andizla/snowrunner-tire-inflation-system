@@ -54,6 +54,7 @@ static Tick g_ticks[kModeCount] = {};
 static bool g_tireDamage = true; // ini TireDamage
 static float g_asphaltFloor = 0.0f; // ini AsphaltFloor: paved grip every tire gets at least, 0 = off
 static int g_key = VK_F3;
+static int g_stepKeys[4] = { VK_LEFT, VK_RIGHT, VK_RETURN, VK_BACK }; // ini KeyLower, KeyRaise, KeyConfirm, KeyCancel: the keyboard while the panel is open
 // the panel (panel.cpp): UI=0 turns it off (F3 then cycles the modes directly, as without ReShade)
 static bool g_uiWanted = true, g_ui = false, g_padOk = false, g_reshadeOk = false;
 static int g_confirmMs = 15000; // the panel's selection confirms itself after this long without input, 0 = never
@@ -161,6 +162,7 @@ static void WriteIni(const TpSettings &s)
     };
     const wchar_t *T = L"TirePressure";
     put(T, L"Key", L"%.0f", s.key);
+    for (int i = 0; i < 4; i++) put(T, Wide(kPanelKeyNames[i]), L"%.0f", s.panelKeys[i]);
     put(T, L"Beep", L"%.0f", s.beep ? 1 : 0);
     put(T, L"Seconds", L"%g", s.seconds);
     put(T, L"SoundVolume", L"%g", s.soundVolume);
@@ -192,6 +194,8 @@ static void ReadIni(TpSettings &s)
         {
             fwprintf(f, L"; TirePressure: tire pressure for the truck being driven: Low, Reduced, Normal and (Increased=1) Increased.\n"
                         L"; The Tire Inflation System tab in ReShade's overlay edits everything here in the game.\n"
+                        L"; KeyLower, KeyRaise, KeyConfirm and KeyCancel work the panel while it is open (37 and 39 = the left and\n"
+                        L"; right arrow, 13 = Enter, 8 = Backspace, 0 = none).\n"
                         L"; Key is a virtual key code (114 = F3). Beep=1 beeps once for Normal, twice for Reduced, three times for Low,\n"
                         L"; and high for Increased. Seconds is how long the tires take to deflate or inflate to the new mode.\n"
                         L"; SoundVolume (0 to 100, 0 = none): air let out while the tires deflate, air going in while they fill,\n"
@@ -225,6 +229,7 @@ static void ReadIni(TpSettings &s)
     }
     const wchar_t *T = L"TirePressure";
     s.key = GetPrivateProfileIntW(T, L"Key", s.key, ini.c_str());
+    for (int i = 0; i < 4; i++) s.panelKeys[i] = min(255, max(0, (int)GetPrivateProfileIntW(T, Wide(kPanelKeyNames[i]).c_str(), s.panelKeys[i], ini.c_str())));
     s.beep = GetPrivateProfileIntW(T, L"Beep", 1, ini.c_str()) != 0;
     s.seconds = min(60.0f, max(0.0f, IniFloat(T, L"Seconds", s.seconds, ini)));
     // An ini from before 1.1.0 holds the 3 seconds every ini was written with then. The change now takes longer, with
@@ -285,7 +290,15 @@ static void ApplySettings(const TpSettings &s, bool log)
     for (int i = 0; i < 5; i++) *pads[i] = PadParse(s.pad[i]);
     if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
     else PadMasks(0, 0, 0, 0, 0);
-    KeyName(g_key, g_panelKeyName, sizeof g_panelKeyName);
+    KeyName(g_key, g_panelKeys.open, sizeof g_panelKeys.open);
+    // the keyboard's keys for the open panel, and their names on it (none: no name, the panel then shows none)
+    char *const names[3] = { g_panelKeys.lower, g_panelKeys.raise, g_panelKeys.confirm };
+    for (int i = 0; i < 4; i++)
+    {
+        g_stepKeys[i] = s.panelKeys[i];
+        if (i < 3 && s.panelKeys[i]) KeyName(s.panelKeys[i], names[i], sizeof g_panelKeys.lower);
+        else if (i < 3) names[i][0] = 0;
+    }
     g_balanceOn = s.vanillaBalance;
     g_balanceStrength = s.balanceStrength;
     g_tireDamage = s.tireDamage;
@@ -1384,6 +1397,16 @@ static DWORD WINAPI Run(void *)
         const bool now = front && (GetAsyncKeyState(g_key) & 0x8000);
         const bool pressed = now && !down;
         down = now;
+        // the keyboard's keys for the open panel (lower, raise, confirm, close): a press counts when the panel is open;
+        // they are looked at on every pass, so a key already held as the panel opens does not count
+        static bool keyHeld[4] = {};
+        bool keyHit[4] = {};
+        for (int i = 0; i < 4; i++)
+        {
+            const bool held = front && g_stepKeys[i] && (GetAsyncKeyState(g_stepKeys[i]) & 0x8000);
+            keyHit[i] = held && !keyHeld[i] && panelOpen;
+            keyHeld[i] = held;
+        }
         // The driven truck's wheels, with the vehicle they belong to. Until the first truck is found they are looked
         // up twice a second (and at a key press); from then on every pass, as the ground under each wheel and the
         // truck's speed count.
@@ -1520,11 +1543,11 @@ static DWORD WINAPI Run(void *)
             {
                 sel = min(sel, g_modeCount - 1); // Increased switched off while the panel pointed at it
                 if (pressed) { sel = stepDown(sel); lastInput = t; g_view.viaPad = 0; }
-                if (pLower) { sel = max((int)kLow, sel - 1); lastInput = t; g_view.viaPad = 1; }
-                if (pRaise) { sel = min(g_modeCount - 1, sel + 1); lastInput = t; g_view.viaPad = 1; }
+                if (pLower || keyHit[0]) { sel = max((int)kLow, sel - 1); lastInput = t; g_view.viaPad = pLower ? 1 : 0; }
+                if (pRaise || keyHit[1]) { sel = min(g_modeCount - 1, sel + 1); lastInput = t; g_view.viaPad = pRaise ? 1 : 0; }
                 const bool timeUp = g_confirmMs > 0 && t - lastInput >= (ULONGLONG)g_confirmMs;
-                if (pCancel || wheels.empty()) { panelOpen = false; Log(L"panel: closed without a change"); }
-                else if (pConfirm || pOpen || timeUp) { panelOpen = false; if (sel != g_mode) chosen = sel; }
+                if (pCancel || keyHit[3] || wheels.empty()) { panelOpen = false; Log(L"panel: closed without a change"); }
+                else if (pConfirm || pOpen || keyHit[2] || timeUp) { panelOpen = false; if (sel != g_mode) chosen = sel; }
             }
             g_view.selected = sel;
             g_view.confirmMs = panelOpen && g_confirmMs > 0 ? (LONG)max(0LL, (long long)g_confirmMs - (long long)(t - lastInput)) : -1;
@@ -1868,7 +1891,7 @@ static DWORD WINAPI TestWriter(void *stop)
 }
 static bool SameSettings(const TpSettings &a, const TpSettings &b)
 {
-    bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
+    bool same = a.key == b.key && !memcmp(a.panelKeys, b.panelKeys, sizeof a.panelKeys) && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
                 a.confirmSeconds == b.confirmSeconds && a.vanillaBalance == b.vanillaBalance && a.balanceStrength == b.balanceStrength;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
@@ -1896,6 +1919,8 @@ static bool IniTest(const wchar_t *userIni)
     WritePrivateProfileStringW(L"TirePressure", L"ProbeFriction", L"0", ini.c_str());
     c = d;
     c.key = 'K';
+    static const int stepKeys[4] = { 'J', 'L', VK_SPACE, 0 };
+    memcpy(c.panelKeys, stepKeys, sizeof stepKeys);
     c.beep = false;
     c.seconds = 4.5f;
     c.soundVolume = 35.0f;
@@ -1921,6 +1946,7 @@ static bool IniTest(const wchar_t *userIni)
             unchanged += c.mode[m][k] == d.mode[m][k];
         }
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
+    for (int i = 0; i < 4; i++) unchanged += c.panelKeys[i] == d.panelKeys[i];
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||

@@ -44,4 +44,4 @@ The tire inflation system, its panel and its default numbers come from Expeditio
 
 `src/vanilla_tires.h` lists the grip values of 16 of SnowRunner's own tires. `tools/vanilla_tires.ps1` reads them from the tire definitions of an installed game. The vanilla balance setting compares a tire against that list.
 
-The compressor and the air it lets go as it stops are two of SnowRunner's own sound samples. The mod reads them out of `shared_sound.pak` in the player's own game folder while the game runs, and plays them through the XAudio2 library the game brings. This project holds neither the samples nor that library.
+The air the compressor lets go as it stops is one of SnowRunner's own sound samples. The mod reads it out of `shared_sound.pak` in the player's own game folder while the game runs, and plays its sounds through the XAudio2 library the game brings. This project holds neither the sample nor that library.

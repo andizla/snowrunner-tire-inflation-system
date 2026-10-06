@@ -10,9 +10,9 @@
 // tire_pressure.cpp says on every pass what should be heard (SoundSet); a thread here plays it.
 //
 // Where the four sounds come from, by ini AirOutSound, AirInSound, CompressorSound and CompressorStopSound:
-//   (nothing) the mod's own choice (kSoundOwn): the recording in the mod's file, or a sample among the game's own,
-//             read out of the player's shared_sound.pak as the panel's font is read out of the game folder (a sound
-//             made by code where that sample cannot be read)
+//   (nothing) the mod's own choice (kSoundOwn): the recording in the mod's file (the air), a sound made by code (the
+//             compressor), or a sample among the game's own (its stop), read out of the player's shared_sound.pak as
+//             the panel's font is read out of the game folder, and made by code too where it cannot be read
 //   none      this one is not played
 //   a name    a WAV file of that name in the game's Bin folder (or with its full path), else the sample of that name
 //             in shared_sound.pak
@@ -76,7 +76,7 @@ static const SoundVoiceKind kSoundVoices[kVoiceCount] = {
 static const struct { const wchar_t *carried, *sample; float highPass, pitch; } kSoundOwn[kVoiceCount] = {
     { L"AIROUT", nullptr, 0.0f, 1.0f },                                         // air let out: the recording
     { L"AIRIN", nullptr, 0.0f, 1.0f },                                          // air going in: the recording
-    { nullptr, L"[sound]\\actors\\actor_lamp_generator_loop.pcm", 0.0f, 1.0f }, // the light tower's generator
+    { nullptr, nullptr, 0.0f, 1.0f },                                           // the compressor: made by code
     { nullptr, L"[sound]\\trucks\\common\\truck_brake_release_rnd_set\\truck_brake_release_rnd__2.pcm", 0.0f, 1.0f } }; // a truck letting air go
 
 // A WAV file (PCM of 8 to 32 bits, 32-bit float, or Microsoft ADPCM as the game's samples are) as one channel of

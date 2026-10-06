@@ -44,7 +44,7 @@ The mode belongs to the truck you drive: another truck takes the current mode wh
 - Filling plays the air going in.
 - The compressor does not run at every filling. The air comes out of a tank, and the compressor fills the tank again once it has fallen far enough: at every second filling from Low to Normal, at every fourth of a single step. It then runs for about 17 seconds, also after the filling is done, and lets its own air go as it stops.
 
-The two air sounds are recordings of a real tire, made for this mod. The compressor and the air it lets go are sounds of SnowRunner itself, which the mod reads out of the game's sound file while the game runs. You hear all of them while you drive a truck and the game's window is in front.
+The two air sounds are recordings of a real tire, made for this mod. The compressor is made by the mod's own code. The air it lets go as it stops is a sound of SnowRunner itself, which the mod reads out of the game's sound file while the game runs. You hear all of them while you drive a truck and the game's window is in front.
 
 ## The modes
 
@@ -134,7 +134,7 @@ At its start the mod looks through the exe for the places it needs: two of the g
 - Damage: the game's damage data for each wheel. The game's truck update asks Windows once a frame which window is in front. That import table entry leads through the mod, which deals the damage at that moment, on the game's own thread, and then runs the game's damage update. The update makes a worn out tire flat, mends a repaired one and sums the truck's damage.
 - Pad: the game keeps two pointers to `XInputGetState`. The mod points both at a filter that hides the panel's buttons from the game while the panel uses them.
 - Panel: drawn through ReShade's add-on overlay. The text is baked from the game's own font files at run time.
-- Sound: a thread of its own plays through XAudio2, the library the game brings and uses itself, and only holds a sound device while a sound plays. The two recordings are in the `.asi` (`assets`, `src\sounds.rc`): each has its start, a steady part that goes round for as long as the change lasts, and its stop. The compressor and its stop come out of the game's `shared_sound.pak`, a zip in which the samples lie as WAV files. A tank decides when the compressor runs: a filling takes air out of it, and below a mark the compressor runs until it is full.
+- Sound: a thread of its own plays through XAudio2, the library the game brings and uses itself, and only holds a sound device while a sound plays. The two recordings are in the `.asi` (`assets`, `src\sounds.rc`): each has its start, a steady part that goes round for as long as the change lasts, and its stop. The compressor is made by code: 47 knocks a second that ring in a housing, with the air it draws and the motor's hum. The air it lets go as it stops comes out of the game's `shared_sound.pak`, a zip in which the samples lie as WAV files. A tank decides when the compressor runs: a filling takes air out of it, and below a mark the compressor runs until it is full.
 
 ## Licence and credits
 

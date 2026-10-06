@@ -17,7 +17,7 @@ struct PageState
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2 };
 
-// The Dear ImGui key as a virtual key, for the keys the panel can be given; 0 for others.
+// The Dear ImGui key as a virtual key, for the keys the panel key can be; 0 for others.
 static int PageVirtualKey(int k)
 {
     if (k >= ImGuiKey_F1 && k <= ImGuiKey_F24) return VK_F1 + (k - ImGuiKey_F1);
@@ -34,15 +34,6 @@ static int PageVirtualKey(int k)
     case ImGuiKey_PageDown: return VK_NEXT;
     case ImGuiKey_Pause: return VK_PAUSE;
     case ImGuiKey_ScrollLock: return VK_SCROLL;
-    case ImGuiKey_LeftArrow: return VK_LEFT;
-    case ImGuiKey_RightArrow: return VK_RIGHT;
-    case ImGuiKey_UpArrow: return VK_UP;
-    case ImGuiKey_DownArrow: return VK_DOWN;
-    case ImGuiKey_Enter: return VK_RETURN;
-    case ImGuiKey_KeypadEnter: return VK_RETURN;
-    case ImGuiKey_Backspace: return VK_BACK;
-    case ImGuiKey_Tab: return VK_TAB;
-    case ImGuiKey_Space: return VK_SPACE;
     default: return 0;
     }
 }
@@ -235,44 +226,20 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::EndDisabled();
 
     ImGui::SeparatorText("Controls");
-    // the keyboard: the panel key, and the four keys that work the panel while it is open
-    static const char *keyLabels[5] = { "Panel key", "Lower the pressure", "Raise the pressure", "Confirm", "Close unchanged" };
-    for (int i = 0; i < 5; i++)
+    PageLabel("Panel key", labelX);
+    KeyName(s.key, buf, sizeof buf);
+    if (ImGui::Button(st.capture == 0 ? "Press a key (Esc: keep)###key" : (strcat_s(buf, "###key"), buf), ImVec2(w, 0)))
+        st.capture = st.capture == 0 ? -1 : 0;
+    PageTip("Opens the panel and steps the pressure down.");
+    if (st.capture == 0)
     {
-        const int id = i ? -1 - i : 0; // st.capture while this key is being set
-        int &key = i ? s.panelKeys[i - 1] : s.key;
-        ImGui::PushID(100 + i);
-        PageLabel(keyLabels[i], labelX);
-        // the key is read before the button: Enter or Space would press the button again and end the capture unread
-        bool took = false;
-        if (st.capture == id)
-        {
-            took = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-            for (int k = ImGuiKey_NamedKey_BEGIN; !took && k < ImGuiKey_NamedKey_END; k++)
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) st.capture = -1;
+        else
+            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; k++)
             {
                 const int vk = PageVirtualKey(k);
-                if (!vk || !ImGui::IsKeyPressed((ImGuiKey)k, false)) continue;
-                key = vk;
-                act |= kPageChanged;
-                took = true;
+                if (vk && ImGui::IsKeyPressed((ImGuiKey)k, false)) { s.key = vk; st.capture = -1; act |= kPageChanged; break; }
             }
-            if (took) st.capture = -1;
-        }
-        if (key) KeyName(key, buf, sizeof buf);
-        else strcpy_s(buf, "None");
-        if (ImGui::Button(st.capture == id ? "Press a key (Esc: keep)###key" : (strcat_s(buf, "###key"), buf), ImVec2(w, 0)) && !took)
-            st.capture = st.capture == id ? -1 : id;
-        PageTip(i ? "A key for the keyboard while the panel is open." : "Opens the panel. Pressed again it steps the pressure down.");
-        if (i)
-        {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("None###clear"))
-            {
-                key = 0;
-                act |= kPageChanged;
-            }
-        }
-        ImGui::PopID();
     }
     changed(ImGui::Checkbox("Show the panel", &s.ui));
     PageTip("Off: the key changes the pressure at once, without the panel.");

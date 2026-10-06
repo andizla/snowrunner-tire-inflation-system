@@ -204,7 +204,6 @@ int wmain(int argc, wchar_t **argv)
         return v;
     };
     wchar_t path[MAX_PATH];
-    static const PanelKeys keys = { "F3", "Left", "Right", "Enter" };
 
     // the reference next to ours, both panels at the same place in their halves (the reference's panel starts at 43, 24)
     std::vector<uint8_t> ref;
@@ -219,7 +218,7 @@ int wmain(int argc, wchar_t **argv)
         RenderPng(path, (int)rw * 2 + 20, (int)rh, [&](ImDrawList *fg, ImDrawList *bg) {
             bg->AddImage((ImTextureID)(intptr_t)refSrv, ImVec2(0, 0), ImVec2((float)rw, (float)rh));
             bg->AddRectFilled(ImVec2((float)rw + 20.0f, 0), ImVec2((float)rw * 2 + 20.0f, (float)rh), IM_COL32(6, 6, 6, 255));
-            PanelDraw(fg, fonts, ImVec2((float)rw + 20.0f + 43.0f, 24.0f), 1.0f, 1.0f, (float)kNormal, v, modes, keys, 2000);
+            PanelDraw(fg, fonts, ImVec2((float)rw + 20.0f + 43.0f, 24.0f), 1.0f, 1.0f, (float)kNormal, v, modes, "F3", 2000);
         });
     }
 
@@ -232,7 +231,7 @@ int wmain(int argc, wchar_t **argv)
     swprintf_s(path, L"%s\\states.png", out);
     RenderPng(path, (int)(5 * pw + 6 * gap), (int)(ph + 2 * gap), [&](ImDrawList *fg, ImDrawList *) {
         for (int i = 0; i < 5; i++)
-            PanelDraw(fg, fonts, ImVec2(gap + i * (pw + gap), gap), u, 1.0f, (float)states[i].selected, states[i], modes, keys, 2000);
+            PanelDraw(fg, fonts, ImVec2(gap + i * (pw + gap), gap), u, 1.0f, (float)states[i].selected, states[i], modes, "F3", 2000);
     });
 
     // at its place on a 1080p screen (Expeditions' place), with the old centred place outlined
@@ -241,7 +240,7 @@ int wmain(int argc, wchar_t **argv)
         bg->AddRectFilled(ImVec2(0, 0), ImVec2(1920, 1080), IM_COL32(74, 80, 70, 255));
         const float uo = 420.0f / kPanelRefW, ow = kPanelRefW * uo, oh = kPanelRefH * uo;
         bg->AddRect(ImVec2((1920 - ow) * 0.5f, (1080 - oh) * 0.5f), ImVec2((1920 + ow) * 0.5f, (1080 + oh) * 0.5f), IM_COL32(255, 255, 255, 110), 0.0f, 0, 2.0f);
-        PanelDraw(fg, fonts, PanelOrigin(1920.0f, 1080.0f), u, 1.0f, (float)kReduced, states[1], modes, keys, 2000);
+        PanelDraw(fg, fonts, PanelOrigin(1920.0f, 1080.0f), u, 1.0f, (float)kReduced, states[1], modes, "F3", 2000);
     });
 
     // the tire damage warning
@@ -256,7 +255,7 @@ int wmain(int argc, wchar_t **argv)
     fonts.tex = 0;
     swprintf_s(path, L"%s\\fallback.png", out);
     RenderPng(path, (int)(pw + 2 * gap), (int)(ph + 2 * gap), [&](ImDrawList *fg, ImDrawList *) {
-        PanelDraw(fg, fonts, ImVec2(gap, gap), u, 1.0f, (float)kReduced, states[1], modes, keys, 2000);
+        PanelDraw(fg, fonts, ImVec2(gap, gap), u, 1.0f, (float)kReduced, states[1], modes, "F3", 2000);
     });
     fonts.tex = keep;
 
@@ -276,7 +275,7 @@ int wmain(int argc, wchar_t **argv)
         swprintf_s(path, L"%s\\%s.png", out, argv[i + 5]);
         RenderPng(path, 1920, 1080, [&](ImDrawList *fg, ImDrawList *bg) {
             bg->AddImage((ImTextureID)(intptr_t)srv, ImVec2(0, 0), ImVec2(1920, 1080), ImVec2(0.5f - cw, 0.5f - ch), ImVec2(0.5f + cw, 0.5f + ch));
-            PanelDraw(fg, fonts, ImVec2(x, y), us, 1.0f, (float)mode, v, modes, keys, 2000);
+            PanelDraw(fg, fonts, ImVec2(x, y), us, 1.0f, (float)mode, v, modes, "F3", 2000);
         });
         Release(srv);
     }

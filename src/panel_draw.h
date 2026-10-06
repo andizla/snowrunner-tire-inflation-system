@@ -319,10 +319,10 @@ static ImVec2 PanelWarnOrigin(float w, float h)
 }
 
 // The panel with its top left corner at `at`. u: screen pixels per reference pixel. a: opacity. needle: gauge
-// position, a PressureMode (the caller eases it towards the selection). keys: the keyboard's keys, shown when the
+// position, a PressureMode (the caller eases it towards the selection). keyName: the keyboard key, shown when the
 // keyboard opened the panel. confirmMs: the time the choice takes to confirm itself (v.confirmMs counts it down).
 static void PanelDraw(ImDrawList *dl, const PanelFonts &f, ImVec2 at, float u, float a, float needle, const PanelView &v,
-                      const PanelMode modes[kModeCount], const PanelKeys &keys, int confirmMs)
+                      const PanelMode modes[kModeCount], const char *keyName, int confirmMs)
 {
     const int count = v.count >= 4 ? 4 : 3;
     const int sel = v.selected < 0 ? 0 : v.selected >= count ? count - 1 : (int)v.selected;
@@ -368,19 +368,13 @@ static void PanelDraw(ImDrawList *dl, const PanelFonts &f, ImVec2 at, float u, f
         dl->AddCircleFilled(c, 13.0f * u, PanelCol(217, 217, 217, a), 24);
     }
 
-    // the mode between the d-pad glyphs (the pad lowers left, raises right), or between the keyboard's keys for that,
-    // each dim where there is no further to go; without those keys, the panel key, which steps the pressure down
+    // the mode between the d-pad glyphs (the pad lowers left, raises right); the keyboard's key steps it
     if (pad)
     {
         PanelDPad(dl, P(77.5f, 549.5f), u, -1, sel > kLow, a);
         PanelDPad(dl, P(722.5f, 549.5f), u, 1, sel < count - 1, a);
     }
-    else if (keys.lower[0] || keys.raise[0])
-    {
-        if (keys.lower[0]) PanelKeyCap(dl, f, P(77.5f, 549.5f), u, keys.lower, sel > kLow ? a : a * 0.21f);
-        if (keys.raise[0]) PanelKeyCap(dl, f, P(722.5f, 549.5f), u, keys.raise, sel < count - 1 ? a : a * 0.21f);
-    }
-    else PanelKeyCap(dl, f, P(77.5f, 549.5f), u, keys.open, a);
+    else PanelKeyCap(dl, f, P(77.5f, 549.5f), u, keyName, a);
     PanelText(dl, f, kMode, P(cx, 546.5f), PanelCol(255, 255, 255, a), m.title, 0, u);
 
     // fuel efficiency: 10 slanted segments (Normal = 7, the last two of those yellow) and the grade
@@ -416,26 +410,17 @@ static void PanelDraw(ImDrawList *dl, const PanelFonts &f, ImVec2 at, float u, f
         }
     }
 
-    // confirm: the pad's A or the keyboard's key for it, with a bar that empties as the choice confirms itself; without
-    // such a key, a clock face that empties
+    // confirm: the pad's A, or for the keyboard a clock face that empties as the choice confirms itself
     dl->AddRectFilled(P(0, 1016.5f), P(kPanelRefW, 1019.5f), PanelCol(33, 33, 33, a));
     {
-        const bool key = !pad && keys.confirm[0];
         const float textW = PanelTextWidth(f, kButton, "Confirm", u) / u;
-        // the icon's room: 63 for the round ones, a key cap's own width
-        const float icon = key ? fmaxf(63.0f, fmaxf(50.0f, PanelTextWidth(f, kKey, keys.confirm, u) / u + 22.0f)) : 63.0f;
-        const float bw = 19.0f + icon + 23.0f + textW + 27.0f, bl = floorf(cx - bw * 0.5f);
+        const float bw = 19.0f + 63.0f + 23.0f + textW + 27.0f, bl = floorf(cx - bw * 0.5f);
         dl->AddRectFilled(P(bl, 1050), P(bl + bw, 1145), PanelCol(20, 20, 20, a), 3.0f * u);
-        const ImVec2 ic = P(bl + 19.0f + icon * 0.5f, 1097.5f);
+        const ImVec2 ic = P(bl + 19.0f + 31.5f, 1097.5f);
         if (pad)
         {
             dl->AddCircleFilled(ic, 31.5f * u, PanelCol(216, 216, 216, a), 40);
             PanelText(dl, f, kButton, ic, PanelCol(40, 40, 40, a), "A", 0, u);
-            if (remain > 0.0f) dl->AddRectFilled(P(bl, 1145.0f), P(bl + bw * remain, 1150.0f), PanelCol(225, 58, 70, a));
-        }
-        else if (key)
-        {
-            PanelKeyCap(dl, f, ic, u, keys.confirm, a);
             if (remain > 0.0f) dl->AddRectFilled(P(bl, 1145.0f), P(bl + bw * remain, 1150.0f), PanelCol(225, 58, 70, a));
         }
         else
@@ -457,7 +442,7 @@ static void PanelDraw(ImDrawList *dl, const PanelFonts &f, ImVec2 at, float u, f
                 else dl->AddConvexPolyFilled(pts, 34, PanelCol(216, 216, 216, a));
             }
         }
-        PanelText(dl, f, kButton, P(bl + 19.0f + icon + 23.0f, 1096.5f), PanelCol(241, 241, 241, a), "Confirm", -1, u);
+        PanelText(dl, f, kButton, P(bl + 19.0f + 63.0f + 23.0f, 1096.5f), PanelCol(241, 241, 241, a), "Confirm", -1, u);
     }
 }
 

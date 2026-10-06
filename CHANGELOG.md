@@ -6,7 +6,7 @@
 - A compressor with an air tank. The fillings draw from the tank, and the compressor fills it again at every second to fourth filling. It runs for about 17 seconds and lets its own air go as it stops. The compressor is made by the mod's code. The air it lets go is one of SnowRunner's own sounds, read out of the game's sound file while the game runs.
 - Sound volume in the settings tab and as `SoundVolume` in the ini. 0 turns the sounds off.
 - `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` in the ini put a WAV file, or another of the game's samples, in place of one of the four sounds.
-- Keyboard: while the panel is open, the left and right arrow keys lower and raise the pressure, Enter confirms and Backspace closes the panel unchanged. The panel shows the keys. All four can be changed or switched off in the settings tab (`KeyLower`, `KeyRaise`, `KeyConfirm`, `KeyCancel` in the ini).
+- A choice on the panel confirms itself after 5 seconds (1.0: 15). That wait is how the keyboard confirms: F3 opens the panel and steps the pressure down, then leave it alone. A `TirePressure.ini` from 1.0 that still says `ConfirmSeconds=15` is set to 5 once. Any other number in it stays.
 - The beeps are off unless you switch them on (`Beep=1`, or the box in the settings tab). A `TirePressure.ini` from 1.0 has them switched off once.
 - A pressure change takes up to 6 seconds (1.0: 3). A `TirePressure.ini` from 1.0 that still says `Seconds=3` is set to 6 once. Any other number in it stays.
 

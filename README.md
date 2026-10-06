@@ -32,9 +32,9 @@ With a pad (any pad Windows sees as an Xbox pad):
 - LB + d-pad left or right lowers or raises the pressure. With the panel closed, it opens the panel one step lower or higher.
 - While the panel is open the d-pad works without LB, A confirms and B closes the panel unchanged.
 
-With the keyboard, F3 opens the panel. While it is open, the left and right arrow keys lower and raise the pressure, Enter confirms and Backspace closes the panel unchanged. F3 again steps the pressure down, from Low round to the highest mode.
+With the keyboard, F3 opens the panel and steps the pressure down, from Low round to the highest mode. There is no key to confirm with: leave the choice alone.
 
-A choice left alone confirms itself after 15 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step. With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
+A choice left alone confirms itself after 5 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step. With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
 
 The mode belongs to the truck you drive: another truck takes the current mode when you get in. Every game start begins at Normal.
 
@@ -88,7 +88,7 @@ With ReShade, the overlay has a Tire Inflation System tab. It shows the truck's 
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down to the best vanilla tire of their kind. Vanilla tires stay as they are. Off by default.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
-- The panel key, the four keys that work the open panel, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
+- The key, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
 Changes count at once and are saved to `TirePressure.ini` in the same folder. Without ReShade, edit that file: the game writes it with the defaults and a short guide on its first start.
 

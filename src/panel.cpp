@@ -29,7 +29,7 @@ PanelView g_view = { 0, kNormal, kNormal, -1, 0, kModeCount };
 PanelMode g_panelModes[kModeCount] = { { "LOW PRESSURE", 1, 1, 1, 1 }, { "REDUCED PRESSURE", 1, 1, 1, 1 }, { "NORMAL PRESSURE", 1, 1, 1, 1 },
                                        { "INCREASED PRESSURE", 1, 1, 1, 1 } };
 float g_panelScale = 1.0f;
-PanelKeys g_panelKeys = { "F3", "Left", "Right", "Enter" };
+char g_panelKeyName[16] = "F3";
 int g_panelConfirmMs = 2000;
 volatile LONG g_pageCapturing = 0; // GetTickCount() of the last page frame that waited for pad buttons, 0 = none
 volatile LONG g_modOff = 0;
@@ -122,7 +122,7 @@ static void OnOverlay(reshade::api::effect_runtime *runtime)
     const int sel = (int)g_view.selected, cur = (int)g_view.current;
     if (alpha <= 0.0f) { needle = (float)cur; return; }
     needle += ((float)sel - needle) * fminf(dt * 12.0f, 1.0f);
-    PanelDraw(ImGui::GetForegroundDrawList(), g_fonts, at, u, alpha, needle, g_view, g_panelModes, g_panelKeys, g_panelConfirmMs);
+    PanelDraw(ImGui::GetForegroundDrawList(), g_fonts, at, u, alpha, needle, g_view, g_panelModes, g_panelKeyName, g_panelConfirmMs);
 }
 
 // The Tire Inflation System tab: the page edits a copy of the settings in force and hands it back when something changed.

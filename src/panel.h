@@ -93,7 +93,7 @@ inline void SettingsDefaults(TpSettings &s)
     // the arrow keys step the open panel, Enter confirms, Backspace closes it unchanged
     static const int keys[4] = { VK_LEFT, VK_RIGHT, VK_RETURN, VK_BACK };
     memcpy(s.panelKeys, keys, sizeof keys);
-    s.beep = true;
+    s.beep = false; // off since 1.1.0, which has sounds for a change
     s.seconds = kSecondsDefault;
     s.soundVolume = 50.0f;
     s.ui = true;

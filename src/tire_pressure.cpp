@@ -230,7 +230,7 @@ static void ReadIni(TpSettings &s)
     const wchar_t *T = L"TirePressure";
     s.key = GetPrivateProfileIntW(T, L"Key", s.key, ini.c_str());
     for (int i = 0; i < 4; i++) s.panelKeys[i] = min(255, max(0, (int)GetPrivateProfileIntW(T, Wide(kPanelKeyNames[i]).c_str(), s.panelKeys[i], ini.c_str())));
-    s.beep = GetPrivateProfileIntW(T, L"Beep", 1, ini.c_str()) != 0;
+    s.beep = GetPrivateProfileIntW(T, L"Beep", s.beep ? 1 : 0, ini.c_str()) != 0;
     s.seconds = min(60.0f, max(0.0f, IniFloat(T, L"Seconds", s.seconds, ini)));
     // An ini from before 1.1.0 holds the 3 seconds every ini was written with then. The change now takes longer, with
     // sounds made for that, so those 3 seconds become the new time, once: the file then says so and carries the version.
@@ -241,6 +241,9 @@ static void ReadIni(TpSettings &s)
             s.seconds = kSecondsDefault;
             Log(L"settings: an ini from before 1.1.0 with a pressure change of %g s: it takes %g s now", kSecondsBefore, kSecondsDefault);
         }
+        // and the beeps, on in every ini of 1.0, are off as they now are by default
+        s.beep = false;
+        WritePrivateProfileStringW(T, L"Beep", L"0", ini.c_str());
         wchar_t b[32];
         swprintf_s(b, L"%g", s.seconds);
         WritePrivateProfileStringW(T, L"Seconds", b, ini.c_str());
@@ -280,7 +283,7 @@ static void ApplySettings(const TpSettings &s, bool log)
     g_key = s.key;
     g_beep = s.beep;
     g_seconds = s.seconds;
-    g_soundVolume = s.soundVolume / 100.0f;
+    g_soundVolume = s.soundVolume / 100.0f * kSoundFull;
     g_uiWanted = s.ui;
     g_ui = g_uiWanted && g_reshadeOk;
     g_panelScale = s.uiScale;
@@ -1921,7 +1924,7 @@ static bool IniTest(const wchar_t *userIni)
     c.key = 'K';
     static const int stepKeys[4] = { 'J', 'L', VK_SPACE, 0 };
     memcpy(c.panelKeys, stepKeys, sizeof stepKeys);
-    c.beep = false;
+    c.beep = true;
     c.seconds = 4.5f;
     c.soundVolume = 35.0f;
     c.ui = false;

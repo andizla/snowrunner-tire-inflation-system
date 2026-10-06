@@ -7,6 +7,7 @@
 - Sound volume in the settings tab and as `SoundVolume` in the ini. 0 turns the sounds off.
 - `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` in the ini put a WAV file, or another of the game's samples, in place of one of the four sounds.
 - Keyboard: while the panel is open, the left and right arrow keys lower and raise the pressure, Enter confirms and Backspace closes the panel unchanged. The panel shows the keys. All four can be changed or switched off in the settings tab (`KeyLower`, `KeyRaise`, `KeyConfirm`, `KeyCancel` in the ini).
+- The beeps are off unless you switch them on (`Beep=1`, or the box in the settings tab). A `TirePressure.ini` from 1.0 has them switched off once.
 - A pressure change takes up to 6 seconds (1.0: 3). A `TirePressure.ini` from 1.0 that still says `Seconds=3` is set to 6 once. Any other number in it stays.
 
 ## [1.0.1] 2026-10-05

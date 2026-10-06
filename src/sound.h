@@ -55,6 +55,7 @@ inline size_t SoundLoopEnd(const SoundClip &c) { return c.loopTo && c.loopTo < c
 
 static const float kSoundRms = 0.1f;       // every sound is brought to this loudness (RMS)...
 static const float kSoundPeak = 0.6f;      // ...and down again where its peaks would pass this
+static const float kSoundFull = 0.22f;     // of that loudness at SoundVolume=100: the slider at 50 is what was set by ear in the game
 static const float kSoundMostPitch = 4.0f; // the fastest a voice can be asked to play
 static const float kSoundHandOver = 0.04f; // seconds a loop takes to go when its recorded ending takes over (the ending's first 40 ms come in over it)
 static const uint64_t kSoundMostBytes = 64ull << 20;

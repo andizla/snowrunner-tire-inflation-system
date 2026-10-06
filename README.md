@@ -9,7 +9,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 ## What you need
 
 - SnowRunner for Windows. The mod was made on the Steam version (the game build of 22 July 2026). At every start it looks for the places it needs in the game's code. Where it does not find every one of them, on another build of the game, it writes that into its log and does nothing. The Epic Games Store version has not been tested.
-- For the panel and the settings tab: ReShade 6.8.0 or newer, the build "with full add-on support". The zip brings it along. Without ReShade the key still changes the pressure, with beeps in place of the panel.
+- For the panel and the settings tab: ReShade 6.8.0 or newer, the build "with full add-on support". The zip brings it along. Without ReShade the key still changes the pressure. Switch `Beep` on in the ini to hear which mode you are in.
 
 ## Install
 
@@ -34,7 +34,7 @@ With a pad (any pad Windows sees as an Xbox pad):
 
 With the keyboard, F3 opens the panel. While it is open, the left and right arrow keys lower and raise the pressure, Enter confirms and Backspace closes the panel unchanged. F3 again steps the pressure down, from Low round to the highest mode.
 
-A choice left alone confirms itself after 15 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step. As the change begins the mod beeps: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
+A choice left alone confirms itself after 15 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step. With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
 
 The mode belongs to the truck you drive: another truck takes the current mode when you get in. Every game start begins at Normal.
 
@@ -77,7 +77,7 @@ Soft tires wear when the truck is too fast for them:
 | Damage per wheel | 4 to 8 | 2 to 6 |
 | Every | 7 seconds | 10 seconds |
 
-A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning shows at the top left with the most worn tire's damage in percent, and a low beep marks each hit. A worn out tire goes flat. This is the game's own wheel damage: the game's wheel icon turns red for a flat tire, the damage stays in the save, and it is repaired like any other damage. The numbers start from those of Expeditions' off-road tires, with twice the damage at lower speeds, as SnowRunner's trucks are slower off the road.
+A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning shows at the top left with the most worn tire's damage in percent, and with the beep switched on a low beep marks each hit. A worn out tire goes flat. This is the game's own wheel damage: the game's wheel icon turns red for a flat tire, the damage stays in the save, and it is repaired like any other damage. The numbers start from those of Expeditions' off-road tires, with twice the damage at lower speeds, as SnowRunner's trucks are slower off the road.
 
 ## Settings
 

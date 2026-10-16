@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.0]
+
+- The vanilla balance's strength goes up to 2 (1.2: up to 1). Above 1 a tire that out-grips every vanilla tire ends below the vanilla tire: at 2 its ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it. Vanilla tires stay as they are at any strength. Asked for by a player with modded trucks that should be harder to drive than vanilla ones.
+
 ## [1.2.1]
 
 - The global that leads to the driven truck, which the mod cannot do without, is looked for three ways: by the code that uses it as before, by the same code with the stack frame left open, and by the small function that hands out the object it sits in. On the Game Pass build of the game (a player's log of 2026-10-15) the first way found nothing and the mod stood down; the other two are for that build. Every way has to find one place.

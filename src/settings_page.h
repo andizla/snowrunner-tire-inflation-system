@@ -140,8 +140,10 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::BeginDisabled(!e.vanillaBalance);
     PageLabel("Balance strength", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##strength", &e.balanceStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("1 = all the way to the vanilla tire, 0.5 = half way.");
+    changed(ImGui::SliderFloat("##strength", &e.balanceStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("1 = all the way to the vanilla tire, 0.5 = half way. Above 1 a tire that out-grips every vanilla tire ends below "
+            "them: at 2 its ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it. "
+            "Vanilla tires stay as they are at any strength.");
     ImGui::EndDisabled();
     static const char *baseNames[3] = { "Ground grip", "Asphalt grip", "Mud grip" };
     for (int i = 0; i < 3; i++)

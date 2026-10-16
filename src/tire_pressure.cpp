@@ -221,7 +221,8 @@ static void ReadIni(TpSettings &s)
                         L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None.\n"
                         L"; BaseGround, BaseAsphalt and BaseMud scale the grip of every mode, Normal too.\n"
                         L"; VanillaBalance=1 brings tires that grip better than every vanilla tire on ground, asphalt and mud at once\n"
-                        L"; down to the best vanilla tire of their kind; vanilla tires stay as they are. VanillaBalanceStrength 0..1.\n"
+                        L"; down to the best vanilla tire of their kind; vanilla tires stay as they are. VanillaBalanceStrength 0..2:\n"
+                        L"; 1 = to the vanilla tire, above 1 below it (2: the ratio to the vanilla tire counts twice).\n"
                         L"; AsphaltFloor: paved grip every tire gets at least, before the modes (0 = off).\n"
                         L"; Per mode: multipliers for grip on dirt (OnModelFriction), gravel (GravelFriction), sand (SandFriction),\n"
                         L"; rock (RockFriction), paved ground (BodyFrictionAsphalt) and in mud (SubstanceFriction),\n"
@@ -289,7 +290,7 @@ static void ReadIni(TpSettings &s)
     }
     for (int i = 0; i < 3; i++) s.base[i] = min(5.0f, max(0.1f, IniFloat(T, kBaseKeys[i], s.base[i], ini)));
     s.vanillaBalance = GetPrivateProfileIntW(T, L"VanillaBalance", 0, ini.c_str()) != 0;
-    s.balanceStrength = min(1.0f, max(0.0f, IniFloat(T, L"VanillaBalanceStrength", s.balanceStrength, ini)));
+    s.balanceStrength = min(2.0f, max(0.0f, IniFloat(T, L"VanillaBalanceStrength", s.balanceStrength, ini)));
     s.asphaltFloor = min(10.0f, max(0.0f, IniFloat(T, L"AsphaltFloor", s.asphaltFloor, ini)));
     s.increased = GetPrivateProfileIntW(T, L"Increased", s.increased ? 1 : 0, ini.c_str()) != 0;
     s.tireDamage = GetPrivateProfileIntW(T, L"TireDamage", s.tireDamage ? 1 : 0, ini.c_str()) != 0;
@@ -2250,6 +2251,13 @@ static bool RealismTest()
                        cold.hard < cold.soft && cold.soft < 1.0f && cold.speed > 1.0f && hot.hard > 1.0f && hot.soft == 1.0f && hot.speed < 1.0f;
     printf("%s realism: a pressure counted in modes (Low 0, Normal 2, half way 1.5); at 15 C nothing changes; at 20 below Normal holds %.0f%% of its pressure, hard ground grips x%.2f, soft x%.2f, wear from x%.2f the speed; at 35 above %.0f%%, asphalt x%.2f, wear from x%.2f\n",
            modes && temps ? "ok  " : "FAIL", coldNormal * 100.0f, cold.hard, cold.soft, cold.speed, hotNormal * 100.0f, hot.hard, hot.speed);
+    // the vanilla balance past the envelope: at 2 a tire's ratio to the vanilla tire counts twice, at 1.5 half again,
+    // a vanilla tire stays at 1 whatever the strength
+    const float f = VanillaBalanceFactor(9.0f, 9.0f, 9.0f);
+    const bool past = f > 0.0f && f < 1.0f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.0f) == f && fabsf(VanillaBalance(9.0f, 9.0f, 9.0f, 2.0f) - f * f) < 1e-6f &&
+                      VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) < f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) > f * f && VanillaBalance(0.5f, 0.8f, 0.6f, 2.0f) == 1.0f;
+    printf("%s realism: the vanilla balance past the envelope: a tire at 9 everywhere comes to x%.3f at strength 1, x%.3f at 2 (the square), a vanilla tire stays at 1\n",
+           past ? "ok  " : "FAIL", f, f * f);
     TpSettings h = d;
     h.key = 'K';
     h.soundVolume = 12.0f;
@@ -2264,7 +2272,7 @@ static bool RealismTest()
     g_mode = kNormal;
     g_pressure = kModePressure[kNormal];
     g_now = FactorsAt(g_pressure);
-    return at && between && below && above && modes && temps && hard;
+    return at && between && below && above && modes && temps && past && hard;
 }
 
 // The state published for other mods (tire_state.h): the block is made, written, opened by its name as another mod

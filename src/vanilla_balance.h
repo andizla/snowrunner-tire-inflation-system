@@ -21,8 +21,12 @@ inline float VanillaBalanceFactor(float ground, float asphalt, float mud)
     return best < 1.0f ? best : 1.0f;
 }
 
-// With the ini's VanillaBalanceStrength (0 = off, 1 = all the way to the vanilla envelope).
+// With the ini's VanillaBalanceStrength: 0 = off, 1 = all the way to the vanilla envelope, and above 1 past it: the
+// tire's ratio to the envelope is applied again, (strength - 1) times more, so at 2 a tire with three times the
+// vanilla grip ends at a third of it. A vanilla tire (factor 1) stays as it is at every strength.
 inline float VanillaBalance(float ground, float asphalt, float mud, float strength)
 {
-    return 1.0f - strength * (1.0f - VanillaBalanceFactor(ground, asphalt, mud));
+    const float f = VanillaBalanceFactor(ground, asphalt, mud);
+    if (strength <= 1.0f) return 1.0f - strength * (1.0f - f);
+    return f * (1.0f - (strength - 1.0f) * (1.0f - f));
 }

@@ -54,7 +54,7 @@ struct TpSettings
     char pad[5][32];         // PadOpen, PadLower, PadRaise, PadConfirm, PadCancel ("LB+DPadDown", "None")
     float base[3];           // BaseGround, BaseAsphalt, BaseMud: grip of every mode, Normal too
     bool vanillaBalance;     // VanillaBalance: tires that out-grip every vanilla tire come down to the vanilla envelope
-    float balanceStrength;   // VanillaBalanceStrength 0..1
+    float balanceStrength;   // VanillaBalanceStrength 0..2 (above 1: below the vanilla envelope)
     float asphaltFloor;      // AsphaltFloor: every tire grips at least this on paved ground, before the modes (0 = off)
     bool increased;          // Increased: the Increased pressure mode above Normal
     bool tireDamage;         // TireDamage: driving too fast for the pressure wears the tires (the modes' MinVel .. DamageTick)

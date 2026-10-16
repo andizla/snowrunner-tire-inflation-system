@@ -3,6 +3,7 @@
 ## [1.2.1]
 
 - The global that leads to the driven truck, which the mod cannot do without, is looked for three ways: by the code that uses it as before, by the same code with the stack frame left open, and by the small function that hands out the object it sits in. On the Game Pass build of the game (a player's log of 2026-10-15) the first way found nothing and the mod stood down; the other two are for that build. Every way has to find one place.
+- `DumpImage=1` in the ini writes the game's code as the mod sees it into `TirePressure_image_<stamp>.bin` next to the exe at the next start, for a report when the mod stands down on a build it does not know. The ini's guide says so.
 
 ## [1.2.0] 2026-10-15
 

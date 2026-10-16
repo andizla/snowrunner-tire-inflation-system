@@ -236,7 +236,9 @@ static void ReadIni(TpSettings &s)
                         L"; StandStill=1: a pressure change only goes on while the truck stands still. Temperature=1: the tires feel\n"
                         L"; the outside temperature (AmbientC, or a gauge mod's by map and hour while it runs): cold air is less\n"
                         L"; pressure in them, cold rubber less grip. HardMode=1: the realistic numbers and options in place of the\n"
-                        L"; grip, mode and damage keys and Seconds; the keys here keep your own.\n");
+                        L"; grip, mode and damage keys and Seconds; the keys here keep your own.\n"
+                        L"; DumpImage=1 writes the game's code as the mod sees it into TirePressure_image_<stamp>.bin next to the\n"
+                        L"; exe at the next start, for a report when the mod stands down on your build. Take it out again after.\n");
             fclose(f);
             WriteIni(s);
             for (const SoundVoiceKind &v : kSoundVoices) WritePrivateProfileStringW(L"TirePressure", v.key, L"", ini.c_str());
@@ -1420,6 +1422,22 @@ static DWORD WINAPI Run(void *)
         stood = missing == lastMissing ? stood + 1 : 1;
         lastMissing = missing;
         if (stood >= 10) break;
+    }
+    // DumpImage=1 (by hand in the ini): the game's code as the mod sees it, into a file next to the exe, for a report
+    // from a build the mod does not know (a Game Pass install cannot be copied from its folder; this can)
+    if (GetPrivateProfileIntW(L"TirePressure", L"DumpImage", 0, (g_dir + L"TirePressure.ini").c_str()))
+    {
+        std::vector<uint8_t> copy;
+        wchar_t name[64];
+        swprintf_s(name, L"TirePressure_image_%08lx.bin", stamp);
+        FILE *f = nullptr;
+        if (CopyOwnImage(copy) && _wfopen_s(&f, (g_dir + name).c_str(), L"wb") == 0 && f)
+        {
+            const size_t written = fwrite(copy.data(), 1, copy.size(), f);
+            fclose(f);
+            Log(L"DumpImage: the game's code as the mod sees it, %zu bytes, written to %s next to the exe (for a report; take DumpImage out of the ini after)", written, name);
+        }
+        else Log(L"DumpImage: the image could not be written");
     }
     if (!found)
     {

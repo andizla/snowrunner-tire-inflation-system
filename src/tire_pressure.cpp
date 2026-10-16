@@ -2336,13 +2336,24 @@ static bool BuildTest(const wchar_t *file)
     const bool same = b.image == kSteam.image && b.control == kSteam.control && b.wheelVtable == kSteam.wheelVtable && b.cylinderVtable == kSteam.cylinderVtable &&
                       b.damageUpdate == kSteam.damageUpdate && b.foregroundSlot == kSteam.foregroundSlot && b.truckUpdateReturn == kSteam.truckUpdateReturn &&
                       b.firstArgument == kSteam.firstArgument;
-    const bool ok = found && (!known || (same && missing.empty()));
+    bool ok = found && (!known || (same && missing.empty()));
     printf("%s game code in %ls (build stamp %08x, image %x): control %llx, wheel class %llx, cylinder class %llx, damage update %llx, foreground slot %llx, "
            "truck update return %llx, first argument +%llx%s\n", ok ? "ok  " : "FAIL", file, b.stamp, b.image, b.control, b.wheelVtable, b.cylinderVtable, b.damageUpdate,
            b.foregroundSlot, b.truckUpdateReturn, b.firstArgument,
            !found ? "" : !known ? ": a build the test has no numbers for" : same ? ": as the mod was made with" : ": NOT the numbers the mod was made with");
     if (!found) printf("     not as the mod needs it: %ls\n", missing.c_str());
     else if (!missing.empty()) printf("     without the game-thread path (tire damage would be dealt from the mod's own thread): %ls\n", missing.c_str());
+    if (known)
+    {
+        // each of the three ways to the control global on its own, over the whole code: all have to give the place
+        std::wstring none;
+        const BuildImage img = { image.data(), image.size(), base };
+        uint64_t ways[3];
+        for (int w = 0; w < 3; w++) ways[w] = BuildControl(img, 0, 0xFFFFFFFFu, none, w + 1);
+        const bool agree = ways[0] == kSteam.control && ways[1] == kSteam.control && ways[2] == kSteam.control;
+        printf("%s game code: the control global by each of its three ways alone, over the whole code: %llx, %llx, %llx\n", agree ? "ok  " : "FAIL", ways[0], ways[1], ways[2]);
+        ok = ok && agree;
+    }
     return ok;
 }
 

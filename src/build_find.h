@@ -168,6 +168,50 @@ static bool BuildFunction(const BuildImage &im, uint32_t rva, uint32_t &begin, u
     return false;
 }
 
+// The global a small accessor hands out, once the code at `function` is "lea rax, [rip + x]; ret"; else 0.
+static uint64_t BuildAccessorTarget(const BuildImage &im, uint64_t function)
+{
+    if (function + 8 > im.n || im.p[function] != 0x48 || im.p[function + 1] != 0x8d || im.p[function + 2] != 0x05 || im.p[function + 7] != 0xc3) return 0;
+    return function + 7 + im.i32((size_t)function + 3);
+}
+
+// The control global, three ways, the first that stands once (only > 0: that way alone, for the offline test):
+// (1) the second of three small "return the address of a global" calls in a row, inside the truck update where that
+// is known (from, to), else anywhere in the code; (2) the same with the stack frame offsets left open, as another
+// build of the same source keeps the registers but not always the frame (the Game Pass build of 2026-10, stamp
+// 6a607d39, had neither the truck update's call nor this pattern); (3) the small function that hands out the static
+// object control is a field of, 0x18 into it, by the code around that function: the tail of the one before it, the
+// function itself and the start of the one after, as the gauge mod's harvest of the Steam build has it.
+static uint64_t BuildControl(const BuildImage &im, uint32_t from, uint32_t to, std::wstring &report, int only = 0)
+{
+    static const char *const kThreeCalls[2] = {
+        "e8 ?? ?? ?? ?? 4c 8b 20 4c 89 65 c8 e8 ?? ?? ?? ?? 48 8b 30 48 89 75 a0 e8 ?? ?? ?? ?? 48 89 45 18 4c 8b 00 80 be d8 00 00 00 00",
+        "e8 ?? ?? ?? ?? 4c 8b 20 4c 89 65 ?? e8 ?? ?? ?? ?? 48 8b 30 48 89 75 ?? e8 ?? ?? ?? ?? 48 89 45 ?? 4c 8b 00 80 be d8 00 00 00 00" };
+    size_t most = 0;
+    for (int way = 1; way <= 2; way++)
+    {
+        if (only && only != way) continue;
+        const std::vector<uint32_t> hits = BuildFind(im, kThreeCalls[way - 1], from, to);
+        most = hits.size() > most ? hits.size() : most;
+        if (hits.size() != 1) continue;
+        const uint64_t control = BuildAccessorTarget(im, (uint64_t)hits[0] + 17 + im.i32(hits[0] + 13));
+        if (control) return control;
+    }
+    if (!only || only == 3)
+    {
+        // the accessor is 9 bytes into the window, after the ret and the padding of the function before it
+        const std::vector<uint32_t> hits = BuildFind(im, "c3 cc cc cc cc cc cc cc cc 48 8d 05 ?? ?? ?? ?? c3 cc cc cc cc cc cc cc cc 40 53 48 83 ec 60 48");
+        most = hits.size() > most ? hits.size() : most;
+        if (hits.size() == 1)
+        {
+            const uint64_t object = BuildAccessorTarget(im, (uint64_t)hits[0] + 9);
+            if (object) return object + 0x18;
+        }
+    }
+    BuildMiss(report, L"the control global", most > 1 ? most : 0);
+    return 0;
+}
+
 // Fills b from the image. report: what was not found, or found more than once (empty when all is well). True when
 // the places the mod cannot do without are there: the two classes, the control global and the six checks of the
 // game's objects. The game-thread path (the damage update, the truck update's call through the import slot and the
@@ -236,17 +280,8 @@ static bool BuildFindAll(const BuildImage &im, Build &b, std::wstring &report)
     // the game-thread path is all or nothing: without any part of it the mod deals the damage on its own thread
     if (!b.damageUpdate || !b.foregroundSlot || !b.truckUpdateReturn) b.damageUpdate = b.foregroundSlot = b.truckUpdateReturn = b.firstArgument = 0;
 
-    // the control global: the second of three small "return the address of a global" calls in a row, inside the
-    // truck update where that is known, else anywhere in the code
-    const uint32_t three = one(L"the control global", BuildFind(im,
-        "e8 ?? ?? ?? ?? 4c 8b 20 4c 89 65 c8 e8 ?? ?? ?? ?? 48 8b 30 48 89 75 a0 e8 ?? ?? ?? ?? 48 89 45 18 4c 8b 00 80 be d8 00 00 00 00", begin, end ? end : 0xFFFFFFFFu));
-    if (three)
-    {
-        const uint64_t target = (uint64_t)three + 17 + im.i32(three + 13);
-        if (target + 8 <= im.n && im.p[target] == 0x48 && im.p[target + 1] == 0x8d && im.p[target + 2] == 0x05 && im.p[target + 7] == 0xc3)
-            b.control = target + 7 + im.i32((size_t)target + 3);
-        else BuildMiss(report, L"the control global's accessor", 0);
-    }
+    // the control global, three ways (BuildControl), inside the truck update where that is known
+    b.control = BuildControl(im, begin, end ? end : 0xFFFFFFFFu, report);
 
     return layout && b.control && b.wheelVtable && b.cylinderVtable;
 }

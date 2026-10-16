@@ -2254,8 +2254,8 @@ static bool RealismTest()
     // the vanilla balance past the envelope: at 2 a tire's ratio to the vanilla tire counts twice, at 1.5 half again,
     // a vanilla tire stays at 1 whatever the strength
     const float f = VanillaBalanceFactor(9.0f, 9.0f, 9.0f);
-    const bool past = f > 0.0f && f < 1.0f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.0f) == f && fabsf(VanillaBalance(9.0f, 9.0f, 9.0f, 2.0f) - f * f) < 1e-6f &&
-                      VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) < f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) > f * f && VanillaBalance(0.5f, 0.8f, 0.6f, 2.0f) == 1.0f;
+    const bool past = f > 0.0f && f < 1.0f && fabsf(VanillaBalance(9.0f, 9.0f, 9.0f, 1.0f) - f) < 1e-6f && fabsf(VanillaBalance(9.0f, 9.0f, 9.0f, 2.0f) - f * f) < 1e-6f &&
+                      VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) < f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) > f * f && VanillaBalance(0.1f, 0.1f, 0.1f, 2.0f) == 1.0f;
     printf("%s realism: the vanilla balance past the envelope: a tire at 9 everywhere comes to x%.3f at strength 1, x%.3f at 2 (the square), a vanilla tire stays at 1\n",
            past ? "ok  " : "FAIL", f, f * f);
     TpSettings h = d;

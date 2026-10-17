@@ -2134,7 +2134,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
 // key the page writes reads back the same (every setting is given a value that is not its default, so a key that is
 // never written shows), the help text and keys the page does not know survive a write, a value that is no number
 // gives the default, and a copy of an ini in use (argument) reads back unchanged after a write.
-static bool IniTest(const wchar_t *userIni)
+static bool IniTest(const wchar_t *givenIni)
 {
     const std::wstring ini = g_dir + L"TirePressure.ini";
     DeleteFileW(ini.c_str());
@@ -2224,20 +2224,20 @@ static bool IniTest(const wchar_t *userIni)
     printf("%s ini: the %g s an ini from before 1.1.0 waits to confirm become %g s, once (read %g, then %g for a 15 set after that, %g for an old ini's 8)\n",
            waited ? "ok  " : "FAIL", kConfirmBefore, kConfirmDefault, before.confirmSeconds, after.confirmSeconds, other.confirmSeconds);
     ok = ok && waited;
-    if (userIni && !CopyFileW(userIni, ini.c_str(), FALSE))
+    if (givenIni && !CopyFileW(givenIni, ini.c_str(), FALSE))
     {
-        printf("FAIL ini: %ls could not be copied (error %lu)\n", userIni, GetLastError());
+        printf("FAIL ini: %ls could not be copied (error %lu)\n", givenIni, GetLastError());
         return false;
     }
-    if (userIni)
+    if (givenIni)
     {
         ReadIni(a);
         WriteIni(a);
         ReadIni(b);
-        const bool user = SameSettings(a, b);
-        printf("%s ini: a copy of %ls reads back the same after a write (key %d, UI %d, vanilla balance %d, base %g/%g/%g)\n", user ? "ok  " : "FAIL",
-               userIni, a.key, a.ui, a.vanillaBalance, a.base[0], a.base[1], a.base[2]);
-        ok = ok && user;
+        const bool same = SameSettings(a, b);
+        printf("%s ini: a copy of %ls reads back the same after a write (key %d, UI %d, vanilla balance %d, base %g/%g/%g)\n", same ? "ok  " : "FAIL",
+               givenIni, a.key, a.ui, a.vanillaBalance, a.base[0], a.base[1], a.base[2]);
+        ok = ok && same;
     }
     return ok;
 }

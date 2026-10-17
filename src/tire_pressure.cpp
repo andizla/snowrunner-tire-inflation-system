@@ -10,8 +10,9 @@
 //   wheel object (vtable RVA 0x2258918): +0x18 Havok body, +0x94 radius, +0xA0 SubstanceFriction, +0xA4 BodyFrictionAsphalt
 //   body+0xCC BodyFriction (the Havok material; the game rewrites it per surface while driving, so it is not touched)
 //   body+0x20 -> cylinder shape (vtable RVA 0x23c2c08), shape+0x28 radius
-// A respawn or a tire change rebuilds the wheel objects with stock values, so the wheels are looked up again twice a
-// second and the mode is applied again to any wheel that does not carry it.
+// A respawn or a tire change rebuilds the wheel objects with stock values, so the wheels are looked up again every
+// pass once a truck has been found (twice a second before) and the mode is applied again to any wheel that does not
+// carry it.
 //
 // Ini TirePressure.ini next to the exe (written with the defaults on the first start), log TirePressure.log.
 #include <windows.h>
@@ -83,8 +84,9 @@ static long long g_watchA = -1, g_watchB = -1, g_watchC = -1;
 
 // cylinder: the collision cylinder's stock radius; writtenCylinder: the radius written last; room: how many metres the
 // game can draw this tire flatter than it comes (FlattenLimit less the tire's own offset); radius: the tire's radius.
-// worn: its grip was taken away as worn out (ApplyWornWheel), until a repair.
-struct Stock { float body, asphalt, substance, cylinder; Mode written; float writtenCylinder, room, radius; bool worn = false; };
+// worn: its grip was taken away as worn out (ApplyWornWheel), until a repair. sink: how far the contact sits inside
+// the cylinder, smoothed (SinkStep); sinkUsed: the same in 5 mm steps, what Cylinder takes off the room.
+struct Stock { float body, asphalt, substance, cylinder; Mode written; float writtenCylinder, room, radius; bool worn = false; float sink = 0.0f, sinkUsed = 0.0f; };
 static std::unordered_map<uint64_t, Stock> g_wheels; // wheel object -> its stock values and the factors written to it
 static float g_deepest = 0.0f; // the largest AdditionalRadiusOffset among the modes
 static bool g_rollingRadius = true; // ini RollingRadius (RollFactor)
@@ -586,11 +588,42 @@ static float FlattenLimit(float R)
 // Expeditions (its set-pressure-mode function, RVA 0xcd40c0 there) takes the mode's AdditionalRadiusOffset off the
 // collision radius as it is, in metres, not scaled by the wheel. SnowRunner only draws a tire so flat (FlattenLimit):
 // on a tire with less room than the deepest mode asks for, every mode's offset shrinks by the same share, so the
-// deepest one takes all the room there is. The cylinder keeps at least 40% of the wheel radius whatever the ini says.
+// deepest one takes all the room there is. No offset goes past the room either: in the cold Low's offset is carried
+// past the deepest mode's (FactorsAt goes on half a step below Low), and shared out for the deepest alone it went up
+// to 1.2 times the room (2026-10-18). A tire whose contact sinks into the ground is drawn flatter by that much again,
+// so the sink measured under it (SinkStep) comes off the room first. The cylinder keeps at least 40% of the wheel
+// radius whatever the ini says.
 static float Cylinder(const Stock &s, const Mode &m, float radius)
 {
-    const float share = g_deepest > s.room ? s.room / g_deepest : 1.0f;
-    return max(radius * 0.4f, s.cylinder - m.radiusOffset * share);
+    const float room = max(0.0f, s.room - s.sinkUsed);
+    const float share = g_deepest > room ? room / g_deepest : 1.0f;
+    return max(radius * 0.4f, s.cylinder - min(m.radiusOffset * share, room));
+}
+
+// How far a wheel's contact sits inside its collision cylinder. The game draws the tire by the distance from the hub
+// to the contact (the wheel model's update, RVA 0xc235f0, from model+0x21C and +0x220), not by the cylinder, and a
+// soft tire's contact can sit inside the cylinder: each wheel carries a Havok soft contact built with its
+// SoftForceScale (wheel+0x120). The hub is then lower than the cylinder says and the tread is drawn that much deeper,
+// so a tire that comes soft went far too flat at Low (a tester's modded tire, 2026-10-18). A vanilla tire sinks
+// next to nothing: the scout of 2026-10-04 sank exactly as deep at 10 cm as FlattenLimit's formula says with no sink.
+// d: the distance read this pass. A reading outside 85% to 102% of the cylinder is not taken (a wheel in the air, a
+// field moved by a game update); the sink is smoothed over about two seconds and used in 5 mm steps, so the cylinder
+// is not written again for every bump.
+static const float kSinkBlend = 0.025f; // a pass's share of the new reading: about two seconds to settle at 20 passes a second
+static const float kSinkStep = 0.005f;
+static void SinkUpdate(Stock &s, float d)
+{
+    if (!(d >= s.writtenCylinder * 0.85f && d <= s.writtenCylinder * 1.02f)) return;
+    s.sink += (max(0.0f, s.writtenCylinder - d) - s.sink) * kSinkBlend;
+    // the nearest step, once the sink is three quarters of a step away from the one in use (no flip-flop between two)
+    if (fabsf(s.sink - s.sinkUsed) > kSinkStep * 0.75f) s.sinkUsed = floorf(s.sink / kSinkStep + 0.5f) * kSinkStep;
+}
+static void SinkStep(const WheelRef &w, Stock &s)
+{
+    BYTE contact = 0;
+    float x, y;
+    if (!Read(w.wheel + 0x1A4, contact) || !contact || !Read(w.model + 0x21C, x) || !Read(w.model + 0x220, y)) return;
+    SinkUpdate(s, sqrtf(x * x + y * y));
 }
 
 // What a wheel's gear speeds are due, for the cylinder written to it. A real tire's belt keeps its length: flattened,
@@ -708,6 +741,7 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
     }
     Stock &s = it->second;
     const Mode &o = s.written;
+    SinkStep(w, s);
     // the cylinder goes by the radius written last, not by the mode's offset: the share of it a tire gets changes
     // when the settings page changes the deepest mode
     const float newCylinder = Cylinder(s, m, radius);
@@ -729,8 +763,8 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
     // announce = the end of a mode change: every wheel gets its line, also one whose last value went in a few steps
     // earlier (2026-10-02: Reduced ended with no wheel lines in the log)
     if (announce || (logWrite && !same))
-        Log(L"wheel %p -> %s: asphalt %.3f, mud %.3f, cylinder %.4f (stock %.3f, %.3f, %.4f; the game draws this tire up to %.3f flatter)", (void *)w.wheel,
-            m.name, s.asphalt * m.asphalt, s.substance * m.substance, newCylinder, s.asphalt, s.substance, s.cylinder, s.room);
+        Log(L"wheel %p -> %s: asphalt %.3f, mud %.3f, cylinder %.4f (stock %.3f, %.3f, %.4f; the game draws this tire up to %.3f flatter, its contact sinks %.3f)",
+            (void *)w.wheel, m.name, s.asphalt * m.asphalt, s.substance * m.substance, newCylinder, s.asphalt, s.substance, s.cylinder, s.room, s.sinkUsed);
     return !same;
 }
 
@@ -742,7 +776,12 @@ struct Scaled { float stock, written; };
 struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
 static std::unordered_map<uint64_t, VehicleStock> g_vehicles;
 
-static void ApplyValue(uint64_t addr, Scaled &s, float factor, float lowest, float highest, float cap = 3.0e38f)
+// What a gear's number gets on top of its number x roll, so that the gear's top, 2a + 5 (a + 2 in the high gear),
+// grows by roll (see the gear speeds in ApplyVehicle).
+static float GearAdd(float roll, bool high) { return (roll - 1.0f) * (high ? 2.0f : 2.5f); }
+
+// add: on top of stock x factor, for a stock above 0 (the gear numbers, GearAdd).
+static void ApplyValue(uint64_t addr, Scaled &s, float factor, float lowest, float highest, float cap = 3.0e38f, float add = 0.0f)
 {
     float now;
     if (!Read(addr, now)) return;
@@ -752,7 +791,7 @@ static void ApplyValue(uint64_t addr, Scaled &s, float factor, float lowest, flo
         if (!(now >= lowest && now <= highest)) return;
         s.stock = s.written = now;
     }
-    const float want = min(cap, s.stock * factor);
+    const float want = min(cap, s.stock * factor + (s.stock > 0.0f ? add : 0.0f));
     if (want != s.written && Write(addr, want)) s.written = want;
 }
 
@@ -774,7 +813,8 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     ApplyValue(vehicle + 0x69C, v.steering, m.steering, 0.0001f, 10.0f);
     // Plain-ground grip: when a wheel is not on asphalt (byte wheel+0x1C8), the contact function (RVA 0xc402d0) sets the
     // body friction from a float per wheel, the tire BodyFriction, in the vector at [vehicle+0x68]+0x98 .. +0xA0 (the
-    // truck action). Expeditions keeps its scaled frictions between 0.05 and 10; so does this.
+    // truck action). Expeditions keeps its scaled frictions between 0.05 and 10; this takes stock from 0.05 to 10 and
+    // writes at most 10.
     uint64_t action = 0, begin = 0, end = 0;
     Read(vehicle + 0x68, action);
     const bool groundOk = wheelCount && Read(action + 0x98, begin) && Read(action + 0xA0, end) && end > begin && end - begin == wheelCount * 4;
@@ -785,7 +825,11 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     }
     // Gear speeds: the truck action's list of wheel turning speeds, one per gear (reverse, the gears, the high gear),
     // at [vehicle+0x68]+0x58 .. +0x60. The gearbox setup fills it (RVA 0xd763b0) and the drive reads the current
-    // gear's (index at +0x74) every frame (RVA 0xd717e0). A fitted gearbox gives new values, taken as stock.
+    // gear's (index at +0x74) every frame (RVA 0xd717e0). A fitted gearbox gives new values, taken as stock. The game
+    // governs a gear to a wheel speed of 2a + 5 rad/s for its number a, a + 2 in the high gear (the gauge mod's reading
+    // of the game, its TruckGearTop): for that top to grow by roll, a grows by roll and by (roll - 1) times 2.5, or 2 in
+    // the high gear, the last of the list. a alone times roll fell short, most in the low gears (x1.078 for x1.117 at
+    // a = 5, 2026-10-18).
     uint64_t gearBegin = 0, gearEnd = 0;
     const bool gearsOk = Read(action + 0x58, gearBegin) && Read(action + 0x60, gearEnd) && gearEnd > gearBegin && (gearEnd - gearBegin) % 4 == 0 &&
                          gearEnd - gearBegin <= 32 * 4;
@@ -793,7 +837,7 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     {
         const size_t count = (size_t)(gearEnd - gearBegin) / 4;
         if (v.gears.size() != count) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
-        for (size_t i = 0; i < count; i++) ApplyValue(gearBegin + i * 4, v.gears[i], roll, -1000.0f, 1000.0f);
+        for (size_t i = 0; i < count; i++) ApplyValue(gearBegin + i * 4, v.gears[i], roll, -1000.0f, 1000.0f, 3.0e38f, GearAdd(roll, i + 1 == count));
     }
     if (first || announce)
     {
@@ -1484,7 +1528,7 @@ static DWORD WINAPI Run(void *)
                 Log(L"pad: %d more of the game's XInputGetState pointers go through the panel's filter", n);
             }
         }
-        // the settings page: edits count on this pass (the modes walk to edited factors like to a new mode) and go
+        // the settings page: edits count on this pass (an edited factor counts at once) and go
         // into the ini once they have rested a second; "read the ini again" applies the file as it is
         bool edited = false;
         if (InterlockedExchange(&g_reloadAsked, 0))
@@ -2000,7 +2044,11 @@ static DWORD WINAPI Run(void *)
             if (!wheels.empty())
             {
                 const auto wi = g_wheels.find(wheels[0].wheel);
-                if (wi != g_wheels.end()) live.room = wi->second.room;
+                if (wi != g_wheels.end())
+                {
+                    live.room = max(0.0f, wi->second.room - wi->second.sinkUsed);
+                    live.sink = wi->second.sinkUsed;
+                }
             }
             live.outsideC = g_outsideC;
             live.outsideFrom = g_outsideFromMod ? 1 : 0;
@@ -2222,7 +2270,45 @@ static bool FlattenTest()
     const bool rolls = atStock == 1.0f && fabsf(atLow - 1.117f) < 0.004f && fabsf(speed - 0.951f) < 0.003f;
     printf("%s rolling radius: gear speeds x%.3f at stock, x%.3f at that Low (1.117 by hand): the truck keeps %.1f%% of its speed where the smaller wheel alone keeps %.1f%%\n",
            rolls ? "ok  " : "FAIL", atStock, atLow, speed * 100.0f, s.writtenCylinder / stock * 100.0f);
-    return limits && shared && fits && rolls;
+    // the gear numbers: a gear's top is 2a + 5 (a + 2 in the high gear), and it grows by the roll factor exactly
+    bool gears = true;
+    for (float a : { 3.0f, 5.0f, 20.0f })
+    {
+        const float top = 2.0f * a + 5.0f, high = a + 2.0f;
+        gears = gears && fabsf(2.0f * (a * atLow + GearAdd(atLow, false)) + 5.0f - top * atLow) < 1e-4f * top &&
+                fabsf(a * atLow + GearAdd(atLow, true) + 2.0f - high * atLow) < 1e-4f * high;
+    }
+    printf("%s gear numbers: at that Low a gear of number 5 goes to %.3f, its top x%.3f as the roll asks (the number alone x%.3f gave x%.3f)\n",
+           gears ? "ok  " : "FAIL", 5.0f * atLow + GearAdd(atLow, false), (2.0f * (5.0f * atLow + GearAdd(atLow, false)) + 5.0f) / 15.0f, atLow,
+           (10.0f * atLow + 5.0f) / 15.0f);
+    // the cold: Low carried past its own offset (12 cm at -18 C and colder) still takes no more than the room, on a
+    // tire with less room than the deepest mode (the scout) and on one with more (0.80 m, none of its own)
+    s.writtenCylinder = stock;
+    g_deepest = 0.10f;
+    low.radiusOffset = 0.12f;
+    const float coldScout = stock - Cylinder(s, low, 0.47f);
+    Stock big = { 0.0f, 2.0f, 3.3f, 0.80f, kStockMode, 0.80f, FlattenLimit(0.80f), 0.80f };
+    const float coldBig = 0.80f - Cylinder(big, low, 0.80f);
+    const bool cold = fabsf(coldScout - s.room) < 0.0005f && fabsf(coldBig - big.room) < 0.0005f;
+    printf("%s cold: a 0.12 m Low gets %.3f m on the scout (room %.3f) and %.3f m on a 0.80 m tire (room %.3f)\n", cold ? "ok  " : "FAIL",
+           coldScout, s.room, coldBig, big.room);
+    // a soft tire: a contact 3 cm inside the cylinder comes off the room once it has settled; a vanilla tire's contact
+    // at the cylinder takes nothing; readings outside the window (in the air, a moved field) are not taken
+    Stock soft = s, firm = s;
+    for (int i = 0; i < 400; i++)
+    {
+        SinkUpdate(soft, soft.writtenCylinder - 0.03f);
+        SinkUpdate(firm, firm.writtenCylinder);
+        SinkUpdate(firm, 0.2f);
+        SinkUpdate(firm, 0.6f);
+    }
+    low.radiusOffset = 0.10f;
+    const float softLow = stock - Cylinder(soft, low, 0.47f), firmLow = stock - Cylinder(firm, low, 0.47f);
+    const bool sinks = fabsf(soft.sinkUsed - 0.03f) < 0.0001f && firm.sinkUsed == 0.0f && fabsf(softLow - (s.room - 0.03f)) < 0.0005f &&
+                       fabsf(firmLow - s.room) < 0.0005f;
+    printf("%s soft tire: a contact 3 cm inside the cylinder reads %.3f m and Low gets %.3f m (a firm tire %.3f m)\n", sinks ? "ok  " : "FAIL",
+           soft.sinkUsed, softLow, firmLow);
+    return limits && shared && fits && rolls && gears && cold && sinks;
 }
 
 // The pressure scale and the outside temperature (panel.h, outside.h): at each mode's pressure the factors are the

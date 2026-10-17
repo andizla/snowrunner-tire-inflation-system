@@ -215,6 +215,7 @@ struct TpLive
     float speed;                 // km/h
     int damage, capacity;        // the first wheel's tire damage; capacity 0 = not found
     float room;                  // metres the game can draw the first wheel's tire flatter (the modes' flattening fits in it); below 0 = not known
+    float sink;                  // metres its contact sits inside the cylinder (a soft tire), already taken off room
     float outsideC;              // the outside temperature in force
     int outsideFrom;             // 0 = AmbientC, 1 = another mod's block (outside.h)
     float pressure;              // the tires' pressure as a share of Normal's, where it stands between the modes

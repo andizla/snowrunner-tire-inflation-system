@@ -34,7 +34,7 @@ With a pad (any pad Windows sees as an Xbox pad):
 
 With the keyboard, F3 opens the panel and steps the pressure down, from Low round to the highest mode. There is no key to confirm with: leave the choice alone.
 
-A choice left alone confirms itself after 5 seconds. The tires then take up to 6 seconds to deflate or inflate: 6 from Normal to Low, less for a smaller step (the pressure moves on one scale: Low is 45% of Normal's, Reduced 65%, Increased 125%). The change only goes on while the truck stands still: a choice made while driving waits, and a hint at the top left says so (`StandStill`, see Realism). With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
+A choice left alone confirms itself after 5 seconds. The tires then take 6 seconds to deflate from Normal to Low, less for a smaller step, and up to 9 from Low to Increased (the pressure moves on one scale: Low is 45% of Normal's, Reduced 65%, Increased 125%). The change only goes on while the truck stands still: a choice made while driving waits, and a hint at the top left says so (`StandStill`, see Realism). With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
 
 The mode belongs to the truck you drive: another truck takes the current mode when you get in. Every game start begins at Normal.
 
@@ -62,9 +62,9 @@ Multipliers against the tire's own values:
 | Fuel use while moving | x1.5 | x1.25 | x0.85 |
 | Steering speed | x0.7 | x0.85 | x1.1 |
 
-Each wheel takes the grip for the ground under it, so a truck with two wheels on a gravel road and two in sand grips differently left and right. Grip stops at 10, as in Expeditions.
+Each wheel takes the grip for the ground under it, so a truck with two wheels on a gravel road and two in sand grips differently left and right. Each grip multiplier stops at 10, as in Expeditions, and so does the ground grip the game is given.
 
-The game draws the flattened tires itself, and only so flat. Where 10 cm would put the tread under the ground, both steps shrink by the same share: a scout on 94 cm tires gets 6.7 and 4 cm. A flattened tire rolls a little less far per turn, as a real one does: that scout loses about 5% of its speed at Low and 3% at Reduced.
+The game draws the flattened tires itself, and only so flat. Where 10 cm would put the tread under the ground, both steps shrink by the same share: a scout on 94 cm tires gets 6.7 and 4 cm. In the cold no step goes past that room. A tire that comes soft, as some modded tires do, sinks into the ground under the truck's weight, and the game draws a tire by where it touches the ground: the mod measures how far each wheel's contact sits inside its round shape and takes that off the room first, so such a tire is flattened less. A vanilla tire sinks next to nothing. The tab's truck section shows the first wheel's sink and room. A flattened tire rolls a little less far per turn, as a real one does: that scout loses about 5% of its speed at Low and 3% at Reduced.
 
 ## Tire damage
 
@@ -84,7 +84,7 @@ A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning 
 Four settings in the tab and the ini. The first two are on by default.
 
 - Pressure changes only while the truck stands still (`StandStill`). A choice made while driving waits, and a change under way pauses, until the truck stands. A hint at the top left says so.
-- The tires feel the outside temperature (`Temperature`). The air in them follows the gas law, with Normal taken as 35 psi: at 20 below, Normal holds 83% of its pressure and runs softer, flatter and with more grip on soft ground, and Low is as soft as the tires go; at 35 above, Normal holds 110%. Cold rubber grips less, most on asphalt and rock: a fifth less at 20 below. Warm rubber grips a little more on asphalt. In the heat soft tires wear from lower speeds, in the cold from higher ones. The modes' numbers are for 15 C. The outside temperature is `AmbientC` (the tab's slider, 15 to begin with), or comes by map and hour from a gauge mod by the same author while that runs: it publishes the temperature in a block of shared memory, whose layout `src\outside.h` has. The tab shows the temperature in force and the pressure the tires hold.
+- The tires feel the outside temperature (`Temperature`). The air in them follows the gas law, with Normal taken as 35 psi: at 20 below, Normal holds 83% of its pressure and runs softer, flatter and with more grip on soft ground, and Low is as soft as the tires go; at 35 above, Normal holds 110%. Cold rubber grips less, most on asphalt and rock: a fifth less at 20 below. Warm rubber grips a little more on asphalt and rock. Above Normal's pressure the tires slide toward Increased's numbers, as over-inflated tires do, also with Increased switched off. In the heat soft tires wear from lower speeds, in the cold from higher ones. The modes' numbers are for 15 C. The outside temperature is `AmbientC` (the tab's slider, 15 to begin with), or comes by map and hour from a gauge mod by the same author while that runs: it publishes the temperature in a block of shared memory, whose layout `src\outside.h` has. The tab shows the temperature in force and the pressure the tires hold.
 - Hard mode (`HardMode`). The numbers and options nearest to real tires, all at once: a change takes half a minute and only while the truck stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla balance is on, no asphalt floor, no base grip, and the modes get these numbers:
 
 | | Low | Reduced | Increased |
@@ -95,7 +95,7 @@ Four settings in the tab and the ini. The first two are on by default.
 | Grip on rock | x1.6 | x1.3 | x0.92 |
 | Grip on asphalt | x0.8 | x0.9 | x0.97 |
 | Grip in mud | x1.35 | x1.18 | x0.9 |
-| Tire radius | 5 cm less | 2.5 cm less | unchanged |
+| Tire radius | up to 5 cm less | up to 2.5 cm less | unchanged |
 | Fuel use while moving | x1.25 | x1.12 | x0.96 |
 | Steering speed | x0.8 | x0.9 | x1.05 |
 | Wear starts above | 30 km/h | 50 km/h | |
@@ -114,7 +114,7 @@ With ReShade, the overlay has a Tire Inflation System tab. It shows the truck's 
 - Every number in the two tables of the modes, and tire damage on or off.
 - Hard mode, changes only while standing still, the outside temperature and whether the tires feel it.
 - Whether flattened tires roll like real ones. On by default. Off, the truck loses about three times as much speed.
-- Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down to the best vanilla tire of their kind. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
+- Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down just far enough that some vanilla tire, of any kind, matches or beats them in all three. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
 - The key, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
@@ -163,7 +163,7 @@ At its start the mod looks through the exe for the places it needs: two of the g
 - Fuel and steering: the truck's fuel consumption values and its steering speed.
 - The pressure: one number, the tires' pressure as a share of Normal's, moves between the modes at the set pace, and every factor is read off it between the two nearest modes. The outside temperature moves that number by the gas law before the factors are read, and scales the grip for the rubber. The temperature is read from another mod's block of shared memory (`src\outside.h`) while that is there and fresh, else from `AmbientC`.
 - Damage: the game's damage data for each wheel. The game's truck update asks Windows once a frame which window is in front. That import table entry leads through the mod, which deals the damage at that moment, on the game's own thread, and then runs the game's damage update. The update makes a worn out tire flat, mends a repaired one and sums the truck's damage. On a build of the game where the mod does not find that call, it deals the damage from its own thread and makes the worn out tire flat itself; the game's damage display then follows at the next damage the game deals.
-- Pad: the game keeps two pointers to `XInputGetState`. The mod points both at a filter that hides the panel's buttons from the game while the panel uses them.
+- Pad: the game keeps pointers to `XInputGetState` (two in the Steam build). The mod points them at a filter that hides the panel's buttons from the game while the panel uses them.
 - Panel: drawn through ReShade's add-on overlay. The text is baked from the game's own font files at run time.
 - Sound: a thread of its own plays through XAudio2, the library the game brings and uses itself, and only holds a sound device while a sound plays. The two recordings are in the `.asi` (`assets`, `src\sounds.rc`): each has its start, a steady part that goes round for as long as the change lasts, and its stop. The compressor is made by code: 47 knocks a second that ring in a housing, with the air it draws and the motor's hum. The air it lets go as it stops comes out of the game's `shared_sound.pak`, a zip in which the samples lie as WAV files. A tank decides when the compressor runs: a filling takes air out of it, and below a mark the compressor runs until it is full.
 

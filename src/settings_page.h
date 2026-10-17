@@ -104,7 +104,9 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         static const char *surfaces[5] = { "dirt", "gravel", "sand", "rock", "paved ground" };
         ImGui::Text("First wheel on %s, %.0f km/h.", surfaces[live.surface < 0 || live.surface > kSurfacePaved ? kSurfaceDirt : live.surface], live.speed);
         if (live.capacity > 0) ImGui::Text("Its tire: %d of %d damage.", live.damage, live.capacity);
-        if (live.room >= 0.0f) ImGui::Text("The game draws it up to %.1f cm flatter.", live.room * 100.0f);
+        if (live.room >= 0.0f && live.sink > 0.0f)
+            ImGui::Text("Its contact sinks %.1f cm into the ground; the game draws it up to %.1f cm flatter.", live.sink * 100.0f, live.room * 100.0f);
+        else if (live.room >= 0.0f) ImGui::Text("The game draws it up to %.1f cm flatter.", live.room * 100.0f);
         ImGui::Text("Outside %.0f C (%s): the tires hold %.0f%% of Normal's pressure, %.0f%% once the air's temperature counts.", live.outsideC,
                     live.outsideFrom ? "another mod's, by map and hour" : "AmbientC", live.pressure * 100.0f, live.pressureAir * 100.0f);
     }

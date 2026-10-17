@@ -117,8 +117,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             "balance is on, and the modes get gentler numbers (half the pressure is about half again the contact patch). "
             "While it is on, everything below but the outside temperature, the controls, the panel and the sounds is set by "
             "it and greyed out; TirePressure.ini keeps your own numbers for when it is off.");
-    if (ImGui::Checkbox("Insane mode", &s.insaneMode)) { if (s.insaneMode) s.hardMode = false; act |= kPageChanged; }
-    PageTip("Harder than real tires: Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h and are worn out "
+    if (ImGui::Checkbox("Globalhacker insanity mode", &s.insaneMode)) { if (s.insaneMode) s.hardMode = false; act |= kPageChanged; }
+    PageTip("Built from the player Globalhacker's own settings, and harder than real tires: Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h and are worn out "
             "within seconds a little faster, a change takes 25 s and only while the truck stands, flattened tires lose the "
             "speed the smaller wheel loses, no Increased mode, and the vanilla balance at 2 puts tires that out-grip every "
             "vanilla tire below it. Greys out the same settings as hard mode.");

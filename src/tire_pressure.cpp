@@ -389,7 +389,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_temperature = s.temperature;
     g_ambientC = s.ambientC;
     g_hardMode = in.hardMode || in.insaneMode;
-    if (log && in.insaneMode) Log(L"insane mode: the hardcore numbers and options are in force (the ini keeps your own)");
+    if (log && in.insaneMode) Log(L"Globalhacker insanity mode: the hardcore numbers and options are in force (the ini keeps your own)");
     else if (log && in.hardMode) Log(L"hard mode: the realistic numbers and options are in force (the ini keeps your own)");
     if (log)
         Log(L"a pressure change %s; the tires %s the outside temperature (AmbientC %g C where no other mod publishes one)",

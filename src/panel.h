@@ -168,7 +168,7 @@ inline void HardSettings(TpSettings &s)
     memcpy(s.mode, kHardModes, sizeof s.mode);
 }
 
-// Insane mode: harder than real tires, after a player's own hardcore set (2026-10). Low grips x2 on dirt and x0.4 on
+// Globalhacker insanity mode: harder than real tires, built from the player Globalhacker's own hardcore set (2026-10). Low grips x2 on dirt and x0.4 on
 // asphalt; soft tires wear from 15 km/h (Low) and 20 km/h (Reduced) and are worn out within seconds a little faster;
 // flattened tires lose the speed the smaller wheel loses; no Increased mode; the vanilla balance at 2 puts tires that
 // out-grip every vanilla tire below it.

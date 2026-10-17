@@ -3,6 +3,7 @@
 ## [1.3.0]
 
 - The vanilla balance's strength goes up to 2 (1.2: up to 1). Above 1 a tire that out-grips every vanilla tire ends below the vanilla tire: at 2 its ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it. Vanilla tires stay as they are at any strength. Asked for by a player with modded trucks that should be harder to drive than vanilla ones.
+- Insane mode, `InsaneMode`: a hardcore set harder than real tires, after that player's own settings. Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h in Low and 20 km/h in Reduced and are worn out within seconds a little faster, a change takes 25 seconds and only while the truck stands, flattened tires lose the speed the smaller wheel loses, no Increased mode, and the vanilla balance at 2. A checkbox under hard mode; the two exclude each other, and the same settings are greyed out.
 
 ## [1.2.1]
 

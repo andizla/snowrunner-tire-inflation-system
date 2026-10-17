@@ -81,7 +81,7 @@ A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning 
 
 ## Realism
 
-Three settings in the tab and the ini. The first two are on by default.
+Four settings in the tab and the ini. The first two are on by default.
 
 - Pressure changes only while the truck stands still (`StandStill`). A choice made while driving waits, and a change under way pauses, until the truck stands. A hint at the top left says so.
 - The tires feel the outside temperature (`Temperature`). The air in them follows the gas law, with Normal taken as 35 psi: at 20 below, Normal holds 83% of its pressure and runs softer, flatter and with more grip on soft ground, and Low is as soft as the tires go; at 35 above, Normal holds 110%. Cold rubber grips less, most on asphalt and rock: a fifth less at 20 below. Warm rubber grips a little more on asphalt. In the heat soft tires wear from lower speeds, in the cold from higher ones. The modes' numbers are for 15 C. The outside temperature is `AmbientC` (the tab's slider, 15 to begin with), or comes by map and hour from a gauge mod by the same author while that runs: it publishes the temperature in a block of shared memory, whose layout `src\outside.h` has. The tab shows the temperature in force and the pressure the tires hold.
@@ -104,6 +104,8 @@ Three settings in the tab and the ini. The first two are on by default.
 | Every | 8 seconds | 10 seconds | |
 
 Airing a tire down to half its pressure lengthens its contact patch by about half, which is that much more grip on sand and soft ground and a little less on hard ground; over-inflating does the reverse and gains nothing on asphalt. A soft tire's sidewalls flex and heat at speed, so its wear starts higher up than the defaults but ends a tire faster. While hard mode is on, every other setting but the outside temperature, the controls, the panel and the sounds is greyed out in the tab, and `TirePressure.ini` keeps your own numbers for when it is off.
+
+- Insane mode (`InsaneMode`). Harder than real tires, for players who want the game to fight back: Low grips x2 on dirt and x0.4 on asphalt, Reduced x1.5 and x0.45; soft tires wear from 15 km/h in Low (the most from 20, 8 to 16 every 2 seconds) and from 20 km/h in Reduced (the most from 25, 4 to 12 every 2 seconds), so they are worn out within seconds a little too fast; a change takes 25 seconds and only while the truck stands; flattened tires lose the speed the smaller wheel loses; no Increased mode; and the vanilla balance at 2. Hard mode and insane mode exclude each other and grey out the same settings.
 
 ## Settings
 

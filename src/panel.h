@@ -63,6 +63,7 @@ struct TpSettings
     bool temperature;        // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
+    bool insaneMode;         // InsaneMode: a hardcore set harder than real tires (InsaneSettings) in the same place; it wins over HardMode
     float mode[3][14];       // [Reduced], [Low], [Increased]: the keys of kModeKeys
 };
 static const int kSettingsModes[3] = { kReduced, kLow, kIncreased }; // PressureMode of TpSettings::mode[i]
@@ -113,6 +114,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.temperature = true;
     s.ambientC = 15.0f;
     s.hardMode = false;
+    s.insaneMode = false;
     // Reduced and Low: the "default tire inflation" set of an Expeditions tire file, but for asphalt: Expeditions'
     // 1.3 / 2.0 are for its rock models, while in SnowRunner that grip only acts on paved ground (IsAsphalt roads,
     // concrete, pavers, bridges; rocks count as ground). Aired down on pavement the wider patch is eaten up by the
@@ -164,6 +166,38 @@ inline void HardSettings(TpSettings &s)
     s.standStill = true;
     s.temperature = true;
     memcpy(s.mode, kHardModes, sizeof s.mode);
+}
+
+// Insane mode: harder than real tires, after a player's own hardcore set (2026-10). Low grips x2 on dirt and x0.4 on
+// asphalt; soft tires wear from 15 km/h (Low) and 20 km/h (Reduced) and are worn out within seconds a little faster;
+// flattened tires lose the speed the smaller wheel loses; no Increased mode; the vanilla balance at 2 puts tires that
+// out-grip every vanilla tire below it.
+static const float kInsaneModes[3][kModeKeyCount] = {
+    { 1.5f, 0.45f, 1.25f, 0.06f, 1.5f, 0.75f, 1.3f, 1.7f, 1.5f, 20.0f / 3.6f, 25.0f / 3.6f, 4.0f, 12.0f, 2.0f },  // Reduced
+    { 2.0f, 0.4f, 1.5f, 0.12f, 1.75f, 0.6f, 1.6f, 2.3f, 2.0f, 15.0f / 3.6f, 20.0f / 3.6f, 8.0f, 16.0f, 2.0f },     // Low
+    { 0.92f, 0.97f, 0.9f, 0.0f, 0.96f, 1.05f, 0.95f, 0.85f, 0.92f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f } };             // Increased (off)
+static const float kInsaneSeconds = 25.0f;
+
+inline void InsaneSettings(TpSettings &s)
+{
+    s.seconds = kInsaneSeconds;
+    s.base[0] = s.base[1] = s.base[2] = 1.0f;
+    s.vanillaBalance = true;
+    s.balanceStrength = 2.0f;
+    s.asphaltFloor = 0.0f;
+    s.increased = false;
+    s.tireDamage = true;
+    s.rollingRadius = false;
+    s.standStill = true;
+    s.temperature = true;
+    memcpy(s.mode, kInsaneModes, sizeof s.mode);
+}
+
+// The preset in force, if any: insane mode over hard mode over the player's own settings.
+inline void PresetSettings(TpSettings &s)
+{
+    if (s.insaneMode) InsaneSettings(s);
+    else if (s.hardMode) HardSettings(s);
 }
 
 void SettingsGet(TpSettings &out);        // the settings in force (any thread)

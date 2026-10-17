@@ -192,6 +192,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"Temperature", L"%.0f", s.temperature ? 1 : 0);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
+    put(T, L"InsaneMode", L"%.0f", s.insaneMode ? 1 : 0);
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) put(kModeSections[m], Wide(kModeKeys[k]), L"%g", s.mode[m][k]);
 }
@@ -299,6 +300,7 @@ static void ReadIni(TpSettings &s)
     s.temperature = GetPrivateProfileIntW(T, L"Temperature", s.temperature ? 1 : 0, ini.c_str()) != 0;
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
+    s.insaneMode = GetPrivateProfileIntW(T, L"InsaneMode", s.insaneMode ? 1 : 0, ini.c_str()) != 0;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++)
             s.mode[m][k] = min(kModeRange[k].hi, max(kModeRange[k].lo, IniFloat(kModeSections[m], Wide(kModeKeys[k]), s.mode[m][k], ini)));
@@ -307,9 +309,9 @@ static void ReadIni(TpSettings &s)
 // Puts settings in force: the key, the panel, the pad bindings, the modes with the base grip in them.
 static void ApplySettings(const TpSettings &in, bool log)
 {
-    // hard mode: the realistic numbers and options in place of the player's own, which the ini keeps
+    // hard or insane mode: their numbers and options in place of the player's own, which the ini keeps
     TpSettings s = in;
-    if (in.hardMode) HardSettings(s);
+    PresetSettings(s);
     g_modeCount = s.increased ? 4 : 3;
     g_view.count = g_modeCount;
     g_asphaltFloor = s.asphaltFloor;
@@ -386,8 +388,9 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_standStill = s.standStill;
     g_temperature = s.temperature;
     g_ambientC = s.ambientC;
-    g_hardMode = in.hardMode;
-    if (log && in.hardMode) Log(L"hard mode: the realistic numbers and options are in force (the ini keeps your own)");
+    g_hardMode = in.hardMode || in.insaneMode;
+    if (log && in.insaneMode) Log(L"insane mode: the hardcore numbers and options are in force (the ini keeps your own)");
+    else if (log && in.hardMode) Log(L"hard mode: the realistic numbers and options are in force (the ini keeps your own)");
     if (log)
         Log(L"a pressure change %s; the tires %s the outside temperature (AmbientC %g C where no other mod publishes one)",
             s.standStill ? L"only goes on while the truck stands still" : L"goes on while driving too", s.temperature ? L"feel" : L"do not feel", s.ambientC);
@@ -2069,7 +2072,8 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
 {
     bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
                 a.confirmSeconds == b.confirmSeconds && a.vanillaBalance == b.vanillaBalance && a.balanceStrength == b.balanceStrength &&
-                a.standStill == b.standStill && a.temperature == b.temperature && a.ambientC == b.ambientC && a.hardMode == b.hardMode;
+                a.standStill == b.standStill && a.temperature == b.temperature && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
+                a.insaneMode == b.insaneMode;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
     same = same && a.asphaltFloor == b.asphaltFloor && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
@@ -2117,6 +2121,7 @@ static bool IniTest(const wchar_t *userIni)
     c.temperature = false;
     c.ambientC = -3.0f;
     c.hardMode = true;
+    c.insaneMode = true;
     int unchanged = 0;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++)
@@ -2129,7 +2134,7 @@ static bool IniTest(const wchar_t *userIni)
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
                  c.rollingRadius == d.rollingRadius || c.standStill == d.standStill || c.temperature == d.temperature || c.ambientC == d.ambientC ||
-                 c.hardMode == d.hardMode;
+                 c.hardMode == d.hardMode || c.insaneMode == d.insaneMode;
     WriteIni(c);
     ReadIni(b);
     wchar_t probe[16] = {};
@@ -2269,10 +2274,21 @@ static bool RealismTest()
                       h.key == 'K' && h.soundVolume == 12.0f && h.ambientC == -5.0f && h.mode[1][kModeGround] == kHardModes[1][kModeGround] && h.mode[1][kModeGround] < d.mode[1][kModeGround];
     printf("%s realism: hard mode sets its options and numbers (Low dirt x%.2f, the default's x%.2f) and leaves the controls, the sounds and the outside temperature alone\n",
            hard ? "ok  " : "FAIL", h.mode[1][kModeGround], d.mode[1][kModeGround]);
+    // insane mode wins over hard mode and sets its own set; neither touches the controls
+    TpSettings x = d;
+    x.key = 'K';
+    x.hardMode = x.insaneMode = true;
+    PresetSettings(x);
+    TpSettings none = d;
+    PresetSettings(none);
+    const bool insane = x.seconds == kInsaneSeconds && !x.increased && !x.rollingRadius && x.balanceStrength == 2.0f && x.key == 'K' &&
+                        x.mode[1][kModeAsphalt] == kInsaneModes[1][kModeAsphalt] && x.mode[1][kModeDamageTick] == 2.0f && SameSettings(none, d);
+    printf("%s realism: insane mode wins over hard mode (Low asphalt x%.2f, wear every %.0f s, balance %.1f), and no preset leaves the settings as they are\n",
+           insane ? "ok  " : "FAIL", x.mode[1][kModeAsphalt], x.mode[1][kModeDamageTick], x.balanceStrength);
     g_mode = kNormal;
     g_pressure = kModePressure[kNormal];
     g_now = FactorsAt(g_pressure);
-    return at && between && below && above && modes && temps && past && hard;
+    return at && between && below && above && modes && temps && past && hard && insane;
 }
 
 // The state published for other mods (tire_state.h): the block is made, written, opened by its name as another mod

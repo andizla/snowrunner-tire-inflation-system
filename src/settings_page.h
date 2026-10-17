@@ -81,8 +81,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     static const char *modeNames[kModeCount] = { "Low", "Reduced", "Normal", "Increased" };
     // hard mode: its numbers and options are shown, greyed out, in place of the player's own, which the ini keeps
     TpSettings hard = s;
-    if (s.hardMode) HardSettings(hard);
-    TpSettings &e = s.hardMode ? hard : s;
+    PresetSettings(hard);
+    TpSettings &e = s.hardMode || s.insaneMode ? hard : s;
 
     ImGui::SeparatorText("Truck");
     if (live.wheels > 0)
@@ -111,13 +111,19 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     else ImGui::TextDisabled("No truck driven.");
 
     ImGui::SeparatorText("Realism");
-    changed(ImGui::Checkbox("Hard mode", &s.hardMode));
+    if (ImGui::Checkbox("Hard mode", &s.hardMode)) { if (s.hardMode) s.insaneMode = false; act |= kPageChanged; }
     PageTip("The numbers and options nearest to real tires, all at once: a change takes half a minute and only while the truck "
             "stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla "
             "balance is on, and the modes get gentler numbers (half the pressure is about half again the contact patch). "
             "While it is on, everything below but the outside temperature, the controls, the panel and the sounds is set by "
             "it and greyed out; TirePressure.ini keeps your own numbers for when it is off.");
-    ImGui::BeginDisabled(s.hardMode);
+    if (ImGui::Checkbox("Insane mode", &s.insaneMode)) { if (s.insaneMode) s.hardMode = false; act |= kPageChanged; }
+    PageTip("Harder than real tires: Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h and are worn out "
+            "within seconds a little faster, a change takes 25 s and only while the truck stands, flattened tires lose the "
+            "speed the smaller wheel loses, no Increased mode, and the vanilla balance at 2 puts tires that out-grip every "
+            "vanilla tire below it. Greys out the same settings as hard mode.");
+    const bool preset = s.hardMode || s.insaneMode;
+    ImGui::BeginDisabled(preset);
     changed(ImGui::Checkbox("Pressure changes only while the truck stands still", &e.standStill));
     PageTip("A choice made while driving waits, and a change under way pauses, until the truck stands. A hint at the top left says so.");
     changed(ImGui::Checkbox("Tires feel the outside temperature", &e.temperature));
@@ -133,7 +139,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             "while it runs, and this slider is then not in force.");
 
     ImGui::SeparatorText("Grip");
-    ImGui::BeginDisabled(s.hardMode);
+    ImGui::BeginDisabled(preset);
     changed(ImGui::Checkbox("Vanilla balance", &e.vanillaBalance));
     PageTip("Tires that grip better than every vanilla tire on ground, asphalt and mud at once come down to the best "
             "vanilla tire of their kind. Vanilla tires stay as they are.");
@@ -286,7 +292,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::EndDisabled();
     PageLabel("Change takes", labelX);
     ImGui::SetNextItemWidth(w);
-    ImGui::BeginDisabled(s.hardMode);
+    ImGui::BeginDisabled(preset);
     changed(ImGui::SliderFloat("##seconds", &e.seconds, 0.0f, 30.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp));
     PageTip("How long the tires take from Normal to Low; a smaller step takes its share.");
     ImGui::EndDisabled();

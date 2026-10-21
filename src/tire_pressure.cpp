@@ -57,8 +57,8 @@ static Tick g_ticks[kModeCount] = {};
 static bool g_tireDamage = true; // ini TireDamage
 static float g_asphaltFloor = 0.0f; // ini AsphaltFloor: paved grip every tire gets at least, 0 = off
 static int g_key = VK_F3;
-// the panel (panel.cpp): UI=0 turns it off (F3 then cycles the modes directly, as without ReShade)
-static bool g_uiWanted = true, g_ui = false, g_padOk = false, g_reshadeOk = false;
+// the panel (panel.cpp): UI=0 turns it off (F3 then cycles the modes directly, as when the overlay cannot start)
+static bool g_uiWanted = true, g_ui = false, g_padOk = false, g_overlayOk = false;
 static int g_confirmMs = (int)(kConfirmDefault * 1000.0f); // the panel's selection confirms itself after this long without input, 0 = never
 static uint32_t g_padOpen = 0, g_padLower = 0, g_padRaise = 0, g_padConfirm = 0, g_padCancel = 0;
 static HMODULE g_self = nullptr;
@@ -66,7 +66,7 @@ static bool g_beep = true;
 static bool g_balanceOn = false;      // ini VanillaBalance (vanilla_balance.h)
 static float g_balanceStrength = 1.0f;
 
-// The ini's settings in force (panel.h TpSettings). The settings page in ReShade's overlay reads them and hands back
+// The ini's settings in force (panel.h TpSettings). The Tire Inflation tab of the NEXT GEN menu reads them and hands back
 // edits (SettingsPut, render thread); this thread applies those on its next pass and saves the ini a second later.
 static SRWLOCK g_setLock = SRWLOCK_INIT;
 static TpSettings g_set;
@@ -104,7 +104,7 @@ static uint64_t g_base = 0;
 static int g_mode = kNormal;
 static Mode g_now = g_modes[kNormal]; // the factors in force, moving towards g_modes[g_mode]
 
-// The log is rewritten at each game start. This thread and ReShade's render thread (PanelLog) both write it: one at a
+// The log is rewritten at each game start. This thread and the game's render thread (the overlay, PanelLog) both write it: one at a
 // time, as the file is opened for one writer and a second open would fail and lose its line.
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in (a second copy of the mod sets it to add to the first copy's log)
@@ -210,7 +210,7 @@ static void ReadIni(TpSettings &s)
         if (_wfopen_s(&f, ini.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
         {
             fwprintf(f, L"; TirePressure: tire pressure for the truck being driven: Low, Reduced, Normal and (Increased=1) Increased.\n"
-                        L"; The Tire Inflation System tab in ReShade's overlay edits everything here in the game.\n"
+                        L"; The Tire Inflation tab of the NEXT GEN menu (End opens it) edits everything here in the game.\n"
                         L"; Key is a virtual key code (114 = F3). Beep=1 beeps once for Normal, twice for Reduced, three times for Low,\n"
                         L"; and high for Increased. Seconds is how long the tires take to deflate or inflate to the new mode.\n"
                         L"; SoundVolume (0 to 100, 0 = none): air let out while the tires deflate, air going in while they fill,\n"
@@ -219,7 +219,7 @@ static void ReadIni(TpSettings &s)
                         L"; mod's own, none = without it, or the name of a WAV file in this folder, or of a sample in the game's\n"
                         L"; shared_sound.pak ([sound]\\actors\\actor_lamp_generator_loop.pcm). The first three play round and\n"
                         L"; round while they last; a WAV file with a loop marked in it plays up to the loop once.\n"
-                        L"; UI=1 shows the Tire Inflation System panel (needs ReShade with add-on support): the key opens it and\n"
+                        L"; UI=1 shows the Tire Inflation System panel, drawn by the mod itself: the key opens it and\n"
                         L"; steps the pressure down, the choice confirms itself after ConfirmSeconds. Pad buttons (XInput): DPadUp,\n"
                         L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None.\n"
                         L"; BaseGround, BaseAsphalt and BaseMud scale the grip of every mode, Normal too.\n"
@@ -322,7 +322,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_seconds = s.seconds;
     g_soundVolume = s.soundVolume / 100.0f * kSoundFull;
     g_uiWanted = s.ui;
-    g_ui = g_uiWanted && g_reshadeOk;
+    g_ui = g_uiWanted && g_overlayOk;
     g_panelScale = s.uiScale;
     g_confirmMs = (int)(s.confirmSeconds * 1000.0f + 0.5f);
     g_panelConfirmMs = g_confirmMs;
@@ -1449,7 +1449,7 @@ static DWORD WINAPI Run(void *)
     const DWORD stamp = *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
     Log(L"TirePressure " TP_VERSION L": exe stamp %08lx", stamp);
     SettingsDefaults(g_set); // what the settings page shows until the ini is read
-    g_reshadeOk = PanelInit(g_self);
+    g_overlayOk = PanelInit(g_self);
     // The mod's places in the exe, looked for by what the game's code is like around them (build_find.h), so it needs
     // no list of builds. Steam's exe only makes its code readable as it starts, so the first looks can come too early:
     // they are repeated for a minute. Without the places the mod cannot do without, this is a game version the mod
@@ -1502,8 +1502,8 @@ static DWORD WINAPI Run(void *)
     else Log(L"state for other mods: not published (the shared memory could not be made)");
     if (!SoundStart(g_dir)) Log(L"sound: none, as its thread did not start");
     g_now = FactorsAt(g_pressure); // with a base grip, Normal is not the stock values: the first wheels get it straight away
-    Log(L"panel: %s", g_ui ? L"drawn through ReShade's overlay" : g_uiWanted ? L"ReShade not found: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
-    if (g_reshadeOk) Log(L"settings: the Tire Inflation System tab in ReShade's overlay");
+    Log(L"panel: %s", g_ui ? L"drawn by the mod's own overlay" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
+    if (g_overlayOk) Log(L"settings: the Tire Inflation tab of the NEXT GEN menu (End opens it)");
     bool down = false, chainSeen = false, moving = false, panelOpen = false;
     int sel = 0;
     uint32_t padPrev = 0;
@@ -1519,7 +1519,7 @@ static DWORD WINAPI Run(void *)
         Sleep(50);
         // The game fills its pointers to XInputGetState as it goes (this build has two, and one is only set when
         // that part of the game first reads the pad): every two seconds the new ones are sent through the filter.
-        if (g_reshadeOk && tick % 40 == 0)
+        if (g_overlayOk && tick % 40 == 0)
         {
             const int n = PadInit(g_base);
             if (n)
@@ -1608,7 +1608,7 @@ static DWORD WINAPI Run(void *)
         {
             chainSeen = true;
             Log(L"driven truck found: %zu wheels", wheels.size());
-            if (g_reshadeOk && !g_padOk) Log(L"pad: none of the game's XInputGetState pointers found so far: the pad works the panel, the game sees the presses too");
+            if (g_overlayOk && !g_padOk) Log(L"pad: none of the game's XInputGetState pointers found so far: the pad works the panel, the game sees the presses too");
             if (g_probeByHand) Log(L"tire damage: dealt by hand (ProbeByHand=1)");
             else if (HookTruckUpdate()) Log(L"tire damage: dealt on the game's own thread, from its truck update, with its damage update after");
             else Log(L"tire damage: the game's truck update is not where this build has it, so the damage is dealt by hand");

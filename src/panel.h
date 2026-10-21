@@ -1,5 +1,5 @@
-// panel.h: the Tire Inflation System panel (drawn through ReShade's add-on overlay), its settings page in ReShade's
-// overlay, and the gamepad (XInput) side of TirePressure.asi. tire_pressure.cpp runs the logic and owns the settings;
+// panel.h: the Tire Inflation System panel (drawn by Next Gen's own overlay), its Tire Inflation tab in the NEXT GEN
+// menu, and the gamepad (XInput) side of TirePressure.asi. tire_pressure.cpp runs the logic and owns the settings;
 // the render thread only reads g_view and hands edited settings back through SettingsPut.
 #pragma once
 #include <windows.h>
@@ -38,7 +38,7 @@ extern volatile LONG g_pageCapturing; // 1 while the settings page waits for pad
 extern volatile LONG g_modOff;        // 1 = the mod stood down (a game version it cannot work on): the page says so
 extern volatile LONG g_padThread, g_padThreadChanges, g_overlayThread; // thread ids, for the log (0 = not seen yet)
 
-bool PanelInit(HMODULE self);     // registers with ReShade (panel + settings page); false = no ReShade
+bool PanelInit(HMODULE self);     // starts the overlay (panel + the menu's tab); false = it cannot start
 void PanelLog(const wchar_t *fmt, ...); // a line in TirePressure.log (tire_pressure.cpp)
 
 // Everything in TirePressure.ini that the settings page edits ([TirePressure], [Reduced], [Low], [Increased]).

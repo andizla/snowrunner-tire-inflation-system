@@ -28,3 +28,5 @@ bool NgReShadeWatch(HMODULE self, void (*found)(IDXGISwapChain *))
     reshade::register_event<reshade::addon_event::present>(&OnPresent);
     return true;
 }
+
+HMODULE NgReShadeModule() { return reshade::internal::get_reshade_module_handle(); }

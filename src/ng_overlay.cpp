@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <float.h>
+#include <malloc.h>
+#include <intrin.h>
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 #include "imgui.h"
@@ -919,7 +921,16 @@ static void Frame(IDXGISwapChain *sc)
         g_wnd = sd.OutputWindow;
         NG_LOG(L"overlay: drawing on the game's swap chain (%u x %u, format %d, window %p)%s", sd.BufferDesc.Width, sd.BufferDesc.Height, (int)sd.BufferDesc.Format, sd.OutputWindow,
                first ? L"" : L", a new one");
-        if (first) InputTake(g_wnd);
+        if (first)
+        {
+            // how deep the game's Present call already is in its thread's stack, for a fault's log line to compare with
+            ULONG_PTR low = 0, high = 0;
+            GetCurrentThreadStackLimits(&low, &high);
+            const ULONG_PTR here = (ULONG_PTR)_AddressOfReturnAddress();
+            NG_LOG(L"overlay: the game presents on thread %lu, %llu of its %llu KB of stack in use there", GetCurrentThreadId(),
+                   (unsigned long long)((high - here) / 1024), (unsigned long long)((high - low) / 1024));
+            InputTake(g_wnd);
+        }
     }
     g_scSeen = now;
     ID3D11Device *dev = nullptr;
@@ -1023,6 +1034,98 @@ static void Frame(IDXGISwapChain *sc)
     bb->Release();
 }
 
+// ---- a fault in the overlay ----
+
+// What a fault leaves for the log: its code, where it was, and the stack it happened on. The filter that keeps them runs
+// on that stack, which after an overflow has a page or two left: it calls nothing and only copies.
+static DWORD g_faultCode = 0;
+static ULONG_PTR g_faultAt = 0, g_faultRsp = 0, g_faultTop = 0;
+static ULONG_PTR g_faultWords[1024] = {};
+static int g_faultWordCount = 0;
+
+static int FaultNote(EXCEPTION_POINTERS *ep)
+{
+    g_faultCode = ep->ExceptionRecord->ExceptionCode;
+    g_faultAt = (ULONG_PTR)ep->ExceptionRecord->ExceptionAddress;
+    g_faultRsp = (ULONG_PTR)ep->ContextRecord->Rsp;
+    g_faultTop = (ULONG_PTR)__readgsqword(8); // the top of the thread's stack, from its thread block
+    g_faultWordCount = 0;
+    if (g_faultRsp < g_faultTop && g_faultTop - g_faultRsp < (64u << 20))
+        for (ULONG_PTR p = g_faultRsp; p + sizeof(ULONG_PTR) <= g_faultTop && g_faultWordCount < 1024; p += sizeof(ULONG_PTR))
+            g_faultWords[g_faultWordCount++] = *(const ULONG_PTR *)p;
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// A code address as module+offset ("TirePressure.asi+1a2b3"), or bare outside any module.
+static void AddressName(ULONG_PTR a, wchar_t *out, size_t size)
+{
+    HMODULE m = nullptr;
+    wchar_t path[MAX_PATH] = L"";
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)a, &m) && GetModuleFileNameW(m, path, MAX_PATH))
+    {
+        const wchar_t *name = wcsrchr(path, L'\\');
+        _snwprintf_s(out, size, _TRUNCATE, L"%s+%llx", name ? name + 1 : path, (unsigned long long)(a - (ULONG_PTR)m));
+    }
+    else _snwprintf_s(out, size, _TRUNCATE, L"%llx", (unsigned long long)a);
+}
+
+static bool IsCode(ULONG_PTR a)
+{
+    MEMORY_BASIC_INFORMATION mi = {};
+    return a > 0x10000 && VirtualQuery((const void *)a, &mi, sizeof(mi)) == sizeof(mi) && mi.Type == MEM_IMAGE &&
+           (mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+// The fault's log lines: where it was, how much of its stack the thread had used, and the code its stack returns to,
+// nearest first (a function that keeps calling itself, or hooks that call round, show as the same few addresses).
+static void FaultLog()
+{
+    wchar_t at[MAX_PATH + 32];
+    AddressName(g_faultAt, at, MAX_PATH + 32);
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    NG_LOG(L"overlay: a fault while drawing (exception %08lx at %s, thread %lu, %llu of its %llu KB of stack in use): the overlay stops, the game goes on",
+           g_faultCode, at, GetCurrentThreadId(), (unsigned long long)((g_faultTop - g_faultRsp) / 1024), (unsigned long long)((high - low) / 1024));
+    // the same address over and over is written once with its count
+    wchar_t line[2048] = L"";
+    size_t len = 0;
+    int shown = 0, repeats = 0;
+    ULONG_PTR last = 0;
+    for (int i = 0; i <= g_faultWordCount && shown < 16; i++)
+    {
+        const ULONG_PTR a = i < g_faultWordCount ? g_faultWords[i] : 0; // 0 after the last: writes the one before
+        if (i < g_faultWordCount && !IsCode(a)) continue;
+        if (a && a == last) { repeats++; continue; }
+        if (last)
+        {
+            wchar_t name[MAX_PATH + 32];
+            AddressName(last, name, MAX_PATH + 32);
+            const int n = repeats > 1 ? _snwprintf_s(line + len, 2048 - len, _TRUNCATE, L"%s%s (%d times)", shown ? L", " : L"", name, repeats)
+                                      : _snwprintf_s(line + len, 2048 - len, _TRUNCATE, L"%s%s", shown ? L", " : L"", name);
+            if (n < 0) break;
+            len += (size_t)n;
+            shown++;
+        }
+        last = a;
+        repeats = 1;
+    }
+    if (shown) NG_LOG(L"overlay: the code on the stack at the fault, nearest first: %s", line);
+}
+
+// A mod whose overlay stopped leaves the menu: its tab goes, another mod's tab shows, and with no other tab left the
+// menu closes, so the game never waits for input from a menu nobody draws.
+static void MenuLeave()
+{
+    NgShared *sh = g_shared;
+    if (g_slot < 0) return;
+    InterlockedExchange(&sh->slots[g_slot].ready, 0);
+    InterlockedCompareExchange(&sh->chosen, -1, g_slot);
+    bool other = false;
+    for (int i = 0; i < kNgSlots; i++)
+        if (sh->slots[i].ready) other = true;
+    if (!other) MenuClose();
+}
+
 // A fault in the overlay ends the overlay, never the game.
 static void FrameGuarded(IDXGISwapChain *sc)
 {
@@ -1030,10 +1133,13 @@ static void FrameGuarded(IDXGISwapChain *sc)
     {
         Frame(sc);
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    __except (FaultNote(GetExceptionInformation()))
     {
+        // an overflow used up the stack's guard page: without a new one the thread's next overflow would end the game
+        if (g_faultCode == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
         InterlockedExchange(&g_broken, 1);
-        NG_LOG(L"overlay: a fault while drawing (exception %08lx): the overlay stops, the game goes on", GetExceptionCode());
+        MenuLeave();
+        FaultLog();
     }
 }
 
@@ -1101,6 +1207,13 @@ static DWORD WINAPI StartThread(void *)
     {
         NG_LOG(L"overlay: ReShade is installed: the overlay hooks the game's own swap chain at its first present, with no DirectX probe of its own");
         return 0;
+    }
+    if (const HMODULE reshade = NgReShadeModule())
+    {
+        wchar_t name[MAX_PATH] = L"?";
+        GetModuleFileNameW(reshade, name, MAX_PATH);
+        NG_LOG(L"overlay: ReShade is in the game (%s) but did not take the overlay as an add-on (it takes it from 6.8 on, in its build with full add-on "
+               L"support; ReShade.log says why): the overlay makes a DirectX probe of its own", name);
     }
     void **table = (void **)g_shared->table;
     const bool found = table != nullptr;

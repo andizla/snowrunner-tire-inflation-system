@@ -2,6 +2,10 @@
 
 ## [1.3.0]
 
+- No ReShade needed: the panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device; Next Gen Gameplay draws with the same code. Where ReShade is installed the mod takes the game's swap chain from it and draws after it, over Luma's HDR too. The zip no longer brings ReShade.
+- The settings are in the Tire Inflation tab of the NEXT GEN menu, which Delete opens and closes; with Next Gen Gameplay installed its Gameplay tab is in the same window. The key is set in `NextGen.ini` next to the exe, or in the menu: click the key's name at its top right, then press the new key. While the menu is open the game gets no mouse and no keys.
+- Works alongside the Spotter minimap mod. With ReShade too, Spotter needs its own `reshade_addon_mode` on (in its `options.json`): its DirectX probe at start otherwise ends the game while ReShade sets up its hooks.
+- The mod is now called Next Gen Tire Inflation; its files keep the name `TirePressure`, and `TirePressure.ini` keeps working.
 - A tire that comes soft no longer goes far too flat. The game draws a tire by where it touches the ground, and a soft tire's contact sinks into the ground under the truck's weight, so at Low its tread went under the ground (a tester's modded truck). The mod measures how far each wheel's contact sits inside its round shape, smoothed over a couple of seconds and in 5 mm steps, and takes that off the flattening the tire has room for. The wheel lines in the log and the tab's truck section show it. A vanilla tire sinks next to nothing and is flattened as before.
 - In the cold Low flattens no further than the tire has room for. Below 15 C its flattening is carried past 10 cm, up to 12, and was shared out for the 10 cm, so it went up to a fifth past what the game draws flat.
 - The gear speeds make up a flattened tire's speed in every gear. The game turns a gear's number a into a top wheel speed of 2a + 5 (a + 2 in the high gear); the mod scaled a alone, which fell short in the low gears (at the scout's Low a gear of number 5 rose x1.078 for x1.117).

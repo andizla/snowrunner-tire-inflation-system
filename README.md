@@ -1,6 +1,6 @@
-# SnowRunner Tire Inflation System
+# Next Gen Tire Inflation
 
-Tire pressure you change while driving, as in Expeditions: A MudRunner Game.
+Formerly the SnowRunner Tire Inflation System; its files keep the name `TirePressure`. Tire pressure you change while driving, as in Expeditions: A MudRunner Game.
 
 The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased. Let air out and the tires flatten, grip harder on dirt, sand, rock and in mud, and lose grip on asphalt. The truck also uses more fuel and steers slower. Increased is the road mode: more grip on asphalt, less everywhere else, less fuel. Soft tires driven too fast take damage until they go flat, and a flat tire has no grip. Cold air and cold rubber change how the tires grip, a change of pressure waits for the truck to stand still, and hard mode sets everything to the most realistic numbers. You pick the mode on Expeditions' panel, drawn in SnowRunner's font, with the pad or a key. You hear the air go out and in, and every few fillings the compressor.
 
@@ -9,16 +9,15 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 ## What you need
 
 - SnowRunner for Windows. The mod was made on the Steam version (the game build of 22 July 2026). At every start it looks for the places it needs in the game's code. Where it does not find the ones it cannot do without, on another build of the game, it writes that into its log and does nothing. The Epic Games Store and Game Pass versions have not been tested.
-- For the panel and the settings tab: ReShade 6.8.0 or newer, the build "with full add-on support". The zip brings it along. Without ReShade the key still changes the pressure. Switch `Beep` on in the ini to hear which mode you are in.
+- Nothing else. The mod draws its panel and its settings itself; ReShade is not needed, and where it is installed (with Luma for HDR, say) the mod draws after it, on the picture that goes to the screen.
 
 ## Install
 
 1. Close the game.
 2. Copy `version.dll` and `TirePressure.asi` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`.
-3. No ReShade in the game yet? Copy `dxgi.dll` and `ReShade.ini` from the zip's `ReShade` folder there too.
-4. Start the game. The Home key opens ReShade's overlay.
+3. Start the game. Delete opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
 
-The `ReShade` folder holds ReShade 6.8.0 with full add-on support as reshade.me offers it, unchanged, and a `ReShade.ini` that only skips its first-start tutorial. If ReShade is already in the game, or another mod's `dxgi.dll`, leave those as they are: any ReShade from 6.8.0 on with add-on support will do. `TirePressure.asi` finds ReShade when the game starts.
+Up to 1.2 the panel and the tab needed ReShade, which the zip brought along. ReShade is no longer needed: one already in the game can stay, and one that was there only for this mod can go (`dxgi.dll`, `ReShade.ini` and `ReShade.log` in `Sources\Bin`).
 
 `version.dll` is a small loader: it loads every file in that folder whose name ends in `.asi`. If you already use an ASI loader (other `.asi` mods work in that folder), copy only `TirePressure.asi` and leave your loader as it is. If another mod's `version.dll` is there and it is not an ASI loader, rename that one to `version_chain.dll` first, and this loader passes everything on to it.
 
@@ -109,7 +108,7 @@ Airing a tire down to half its pressure lengthens its contact patch by about hal
 
 ## Settings
 
-With ReShade, the overlay has a Tire Inflation System tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play:
+The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play. Delete opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. With Next Gen Gameplay installed, its Gameplay tab is in the same window. While the menu is open the game gets no mouse and no keys.
 
 - Every number in the two tables of the modes, and tire damage on or off.
 - Hard mode, changes only while standing still, the outside temperature and whether the tires feel it.
@@ -119,13 +118,13 @@ With ReShade, the overlay has a Tire Inflation System tab. It shows the truck's 
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
 - The key, the pad buttons, the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
-Changes count at once and are saved to `TirePressure.ini` in the same folder. Without ReShade, edit that file: the game writes it with the defaults and a short guide on its first start.
+Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start.
 
 Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` each put another sound in place of the mod's own: the name of a WAV file in `Sources\Bin`, or of a sample in the game's `shared_sound.pak` such as `[sound]\actors\actor_lamp_generator_loop.pcm`. `none` leaves that sound out. The first three play round and round while they last. A WAV file with a loop marked in it plays up to the loop once, then goes round in the loop, and plays what follows the loop as the sound stops.
 
 ## Remove
 
-Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll` and `AsiLoader.log` from `Sources\Bin`. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. If you took ReShade from the zip and want it gone too, delete `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
+Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll` and `AsiLoader.log` from `Sources\Bin`. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. `NextGen.ini` goes too when no other Next Gen mod is left. A ReShade taken from the zip of an earlier version can go with `dxgi.dll`, `ReShade.ini` and `ReShade.log`, if no other mod needs it.
 
 ## Notes
 
@@ -164,13 +163,13 @@ At its start the mod looks through the exe for the places it needs: two of the g
 - The pressure: one number, the tires' pressure as a share of Normal's, moves between the modes at the set pace, and every factor is read off it between the two nearest modes. The outside temperature moves that number by the gas law before the factors are read, and scales the grip for the rubber. The temperature is read from another mod's block of shared memory (`src\outside.h`) while that is there and fresh, else from `AmbientC`.
 - Damage: the game's damage data for each wheel. The game's truck update asks Windows once a frame which window is in front. That import table entry leads through the mod, which deals the damage at that moment, on the game's own thread, and then runs the game's damage update. The update makes a worn out tire flat, mends a repaired one and sums the truck's damage. On a build of the game where the mod does not find that call, it deals the damage from its own thread and makes the worn out tire flat itself; the game's damage display then follows at the next damage the game deals.
 - Pad: the game keeps pointers to `XInputGetState` (two in the Steam build). The mod points them at a filter that hides the panel's buttons from the game while the panel uses them.
-- Panel: drawn through ReShade's add-on overlay. The text is baked from the game's own font files at run time.
+- Panel and menu: drawn by Next Gen's own overlay, the same code as Next Gen Gameplay's. The mod hooks the game's Present, the call that puts each frame on the screen, by its slot in the swap chain's method table, and draws with Dear ImGui on the game's own device just before the frame goes out. It finds the slot with a DirectX probe on Windows' WARP software device; where ReShade is installed, ReShade hands it the game's swap chain at its first present instead. While the menu is open, the game's reads of the mouse and the keys (through user32 and DirectInput) get nothing new, and releases still reach it. The text is baked from the game's own font files at run time.
 - Sound: a thread of its own plays through XAudio2, the library the game brings and uses itself, and only holds a sound device while a sound plays. The two recordings are in the `.asi` (`assets`, `src\sounds.rc`): each has its start, a steady part that goes round for as long as the change lasts, and its stop. The compressor is made by code: 47 knocks a second that ring in a housing, with the air it draws and the motor's hum. The air it lets go as it stops comes out of the game's `shared_sound.pak`, a zip in which the samples lie as WAV files. A tank decides when the compressor runs: a filling takes air out of it, and below a mark the compressor runs until it is full.
 
 ## Licence and credits
 
 GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
-The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour. The sounds of air let out of a tire and of air going into one (`assets`) were recorded for this mod and are under its licence.
+The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. Where ReShade by Patrick Mours (crosire) is installed, its add-on API hands the mod the game's swap chain. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour. The sounds of air let out of a tire and of air going into one (`assets`) were recorded for this mod and are under its licence.
 
 SnowRunner and Expeditions are games by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

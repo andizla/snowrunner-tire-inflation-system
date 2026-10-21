@@ -28,8 +28,9 @@ copy /y out\version.dll out\test\twice\version.dll >nul || goto fail
 copy /y out\test\loader_test.exe out\test\twice\loader_test.exe >nul || goto fail
 copy /y out\test\probe.asi out\test\twice\probe.asi >nul || goto fail
 rem the mod itself, and the read-only tools for the running game
-rem panel.cpp: the pressure panel through ReShade's add-on overlay (headers only, deps\reshade and deps\imgui), its
-rem text in the game's font through stb_truetype (deps\stb)
+rem Dear ImGui (deps\imgui) and its DirectX 11 renderer (src\ng_dx11.cpp) compiled in; ng_overlay.cpp is Next Gen's overlay
+rem (the Present hook, the NEXT GEN menu), ng_reshade.cpp takes the swap chain from ReShade where it is installed;
+rem panel.cpp draws the pressure panel and the Tire Inflation tab with it, its text in the game's font (deps\stb)
 cl /nologo /c /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ deps\imgui\imgui.cpp deps\imgui\imgui_draw.cpp deps\imgui\imgui_tables.cpp deps\imgui\imgui_widgets.cpp src\ng_dx11.cpp || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ src\ng_overlay.cpp src\panel.cpp || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\reshade\include /Fo:out\obj\ng_reshade.obj src\ng_reshade.cpp || goto fail

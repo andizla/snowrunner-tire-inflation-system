@@ -2,7 +2,7 @@
 
 ## ReShade add-on API
 
-`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them only to be handed the game's swap chain where ReShade is installed, and needs no ReShade. The release zip also carries ReShade 6.8.0 itself in its `ReShade` folder: `ReShade64.dll` of the build with full add-on support from https://reshade.me, unchanged, under the name `dxgi.dll`. Both are distributed under the BSD 3-Clause License:
+`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them only to be handed the game's swap chain where ReShade is installed, and needs no ReShade. Distributed under the BSD 3-Clause License (up to 1.2 the release zip also carried ReShade 6.8.0 itself, under the same licence):
 
 Copyright 2014 Patrick Mours. All rights reserved.
 

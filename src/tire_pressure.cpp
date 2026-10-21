@@ -1447,7 +1447,7 @@ static DWORD WINAPI Run(void *)
     }
     const BYTE *image = (const BYTE *)g_base;
     const DWORD stamp = *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
-    Log(L"TirePressure " TP_VERSION L": exe stamp %08lx", stamp);
+    Log(L"Next Gen Tire Inflation " TP_VERSION L" (TirePressure): exe stamp %08lx", stamp);
     SettingsDefaults(g_set); // what the settings page shows until the ini is read
     g_overlayOk = PanelInit(g_self);
     // The mod's places in the exe, looked for by what the game's code is like around them (build_find.h), so it needs

@@ -704,8 +704,11 @@ static void MenuDraw(float s)
         }
         // the chosen mod's page
         ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + headH + 12.0f * s));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * s, 4.0f * s));
-        const bool body = ImGui::BeginChild("##page", ImVec2(size.x - 2.0f * pad + 6.0f * s, size.y - headH - 12.0f * s - pad), ImGuiChildFlags_None, ImGuiWindowFlags_None);
+        // the page's content keeps a margin from the window's edges; it is no navigation target of its own (as one it
+        // got the keyboard's orange frame around it, its content flush against the frame)
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * s, 6.0f * s));
+        const bool body = ImGui::BeginChild("##page", ImVec2(size.x - 2.0f * pad + 6.0f * s, size.y - headH - 12.0f * s - pad), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                                            ImGuiWindowFlags_None);
         ImGui::PopStyleVar();
         if (body && g_client.page) g_client.page();
         ImGui::EndChild();

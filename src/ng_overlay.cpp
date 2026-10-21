@@ -25,6 +25,10 @@ static NgClient g_client = {};
 // ---- the block the Next Gen mods in one game share ----
 
 static const LONG kNgSharedVersion = 1;
+// The menu's key when NextGen.ini has none: Delete. Compact keyboards (75 percent) have it, where End is often missing;
+// the game, ReShade (Home, and Page Up for its screenshots here), the Spotter minimap mod (F4 to F9, Insert, Home) and
+// Steam (F12) leave it free. The user's choice, 2026-10-21.
+static const int kNgKeyDefault = VK_DELETE;
 static const int kNgSlots = 8;
 struct NgShared
 {
@@ -64,7 +68,7 @@ static void SharedJoin()
         if (InterlockedCompareExchange(&s->version, -1, 0) == 0)
         {
             s->chosen = -1;
-            s->key = VK_END;
+            s->key = kNgKeyDefault;
             InterlockedExchange(&s->version, kNgSharedVersion);
         }
         for (int i = 0; i < 500 && s->version == -1; i++) Sleep(1);
@@ -75,7 +79,7 @@ static void SharedJoin()
     {
         g_private.version = kNgSharedVersion;
         g_private.chosen = -1;
-        g_private.key = VK_END;
+        g_private.key = kNgKeyDefault;
     }
     NgShared *sh = g_shared;
     for (int i = 0; i < kNgSlots; i++)
@@ -91,9 +95,72 @@ static void SharedJoin()
 
 bool NgMenuOpen() { return g_shared->open != 0; }
 
+// Keys the menu cannot have: the mouse's buttons, the modifiers, the Windows keys and Esc (which keeps the old key when
+// a new one is being picked, and pauses the game).
+static bool KeyNotForMenu(int vk)
+{
+    return vk < 8 || (vk >= VK_SHIFT && vk <= VK_MENU) || (vk >= VK_LSHIFT && vk <= VK_RMENU) || vk == VK_LWIN || vk == VK_RWIN || vk == VK_ESCAPE || vk > 254;
+}
+
+// A key's name as the keyboard's layout has it, such as "F2" or "End".
+static void KeyName(int vk, char *out, size_t size)
+{
+    UINT scan = MapVirtualKeyW((UINT)vk, MAPVK_VK_TO_VSC);
+    // the navigation keys and the arrows are extended keys: without the flag they are named as the number pad's
+    switch (vk)
+    {
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT:
+    case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_DIVIDE: case VK_NUMLOCK:
+        scan |= 0x100;
+    }
+    if (!scan || !GetKeyNameTextA((LONG)(scan << 16), out, (int)size)) snprintf(out, size, "Key %d", vk);
+}
+
+// NextGen.ini, next to the game's exe: one file for every Next Gen mod in the game, [Menu] Key= a virtual key code.
+static bool IniPath(wchar_t *path, size_t size)
+{
+    const DWORD n = GetModuleFileNameW(nullptr, path, (DWORD)size);
+    wchar_t *slash = n && n < size ? wcsrchr(path, L'\\') : nullptr;
+    if (!slash || (size_t)(slash + 1 - path) + 12 >= size) return false;
+    wcscpy_s(slash + 1, size - (size_t)(slash + 1 - path), L"NextGen.ini");
+    return true;
+}
+
+static void KeySave(int vk)
+{
+    wchar_t path[MAX_PATH + 16];
+    if (!IniPath(path, MAX_PATH + 16)) return;
+    // a new file gets its help lines first (two mods starting at once: one of them makes it)
+    const HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE)
+    {
+        static const char help[] = "; NEXT GEN: the in-game menu of the Next Gen mods (Next Gen Gameplay, Next Gen Tire Inflation).\r\n"
+                                   "; Key: the virtual key code that opens and closes it (46 = Delete, 34 = Page Down, 33 = Page Up, 36 = Home, 113 = F2).\r\n"
+                                   "; The menu sets it too: click the key's name at its top right, then press the new key.\r\n";
+        DWORD wrote = 0;
+        WriteFile(f, help, sizeof(help) - 1, &wrote, nullptr);
+        CloseHandle(f);
+    }
+    wchar_t text[16];
+    swprintf_s(text, L"%d", vk);
+    WritePrivateProfileStringW(L"Menu", L"Key", text, path);
+}
+
+static int KeyLoad()
+{
+    wchar_t path[MAX_PATH + 16];
+    if (!IniPath(path, MAX_PATH + 16)) return kNgKeyDefault;
+    const int vk = (int)GetPrivateProfileIntW(L"Menu", L"Key", 0, path);
+    if (vk > 0 && !KeyNotForMenu(vk)) return vk;
+    if (vk == 0) KeySave(kNgKeyDefault); // the first start: the file with its help lines and the default
+    return kNgKeyDefault;
+}
+
 void NgMenuKeySet(int vk)
 {
-    if (vk > 0 && vk < 256) InterlockedExchange(&g_shared->key, vk);
+    if (vk <= 0 || KeyNotForMenu(vk)) return;
+    InterlockedExchange(&g_shared->key, vk);
+    KeySave(vk);
 }
 
 // ---- the game's input while the menu is open ----
@@ -497,6 +564,8 @@ static void Star(ImDrawList *dl, ImVec2 at, float r)
 // ---- the menu ----
 
 static LONG g_placeSeen = -1;
+static bool g_keyCapture = false;  // the menu waits for a new key
+static bool g_captureWas[256] = {}; // the keys that were down, so only a new press counts
 
 static void MenuClose()
 {
@@ -604,14 +673,35 @@ static void MenuDraw(float s)
         const ImU32 xcol = closeHot ? IM_COL32_WHITE : IM_COL32(170, 170, 175, 255);
         dl->AddLine(ImVec2(cc.x - m, cc.y - m), ImVec2(cc.x + m, cc.y + m), xcol, 2.0f * s);
         dl->AddLine(ImVec2(cc.x - m, cc.y + m), ImVec2(cc.x + m, cc.y - m), xcol, 2.0f * s);
-        char note[96];
-        char keyName[32] = "End";
-        const UINT scan = MapVirtualKeyW((UINT)sh->key, MAPVK_VK_TO_VSC);
-        if (sh->key != VK_END && scan) GetKeyNameTextA((LONG)(scan << 16), keyName, sizeof(keyName));
-        snprintf(note, sizeof(note), "%s %s   %s closes", g_client.tab ? g_client.tab : "", g_client.version ? g_client.version : "", keyName);
+        // before it, the menu's key, a button that takes a new one (the next key pressed), and left of that the version
+        char name[32], keyText[64];
+        KeyName(sh->key, name, sizeof(name));
+        if (g_keyCapture) snprintf(keyText, sizeof(keyText), "Press a key (Esc keeps %s)", name);
+        else snprintf(keyText, sizeof(keyText), "%s opens and closes", name);
         const float notePx = 17.0f * s;
-        const ImVec2 nt = g_fontText->CalcTextSizeA(notePx, FLT_MAX, 0.0f, note);
-        if (closeAt.x - 14.0f * s - nt.x > x) dl->AddText(g_fontText, notePx, ImVec2(closeAt.x - 14.0f * s - nt.x, p.y + (headH - nt.y) * 0.5f), IM_COL32(142, 142, 147, 255), note);
+        const ImVec2 kt = g_fontText->CalcTextSizeA(notePx, FLT_MAX, 0.0f, keyText);
+        const ImVec2 keyBox(kt.x + 18.0f * s, closeSize);
+        const ImVec2 keyAt(closeAt.x - 10.0f * s - keyBox.x, closeAt.y);
+        if (keyAt.x > x)
+        {
+            ImGui::SetCursorScreenPos(keyAt);
+            if (ImGui::InvisibleButton("##key", keyBox))
+            {
+                g_keyCapture = !g_keyCapture;
+                for (int vk = 0; vk < 256; vk++) g_captureWas[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0; // keys already down do not count
+            }
+            const bool hot = ImGui::IsItemHovered();
+            const ImVec2 keyEnd(keyAt.x + keyBox.x, keyAt.y + keyBox.y);
+            if (g_keyCapture) dl->AddRectFilled(keyAt, keyEnd, IM_COL32(236, 103, 19, 210), 6.0f * s);
+            else if (hot) dl->AddRectFilled(keyAt, keyEnd, IM_COL32(255, 255, 255, 24), 6.0f * s);
+            else dl->AddRect(keyAt, keyEnd, IM_COL32(255, 255, 255, 40), 6.0f * s, 0, 1.0f * s);
+            dl->AddText(g_fontText, notePx, ImVec2(keyAt.x + 9.0f * s, keyAt.y + (keyBox.y - kt.y) * 0.5f), g_keyCapture || hot ? IM_COL32_WHITE : IM_COL32(190, 190, 195, 255), keyText);
+            if (hot && !g_keyCapture) ImGui::SetTooltip("Click, then press the key that opens and closes this menu. It is kept in NextGen.ini.");
+            char ver[64];
+            snprintf(ver, sizeof(ver), "%s %s", g_client.tab ? g_client.tab : "", g_client.version ? g_client.version : "");
+            const ImVec2 vt = g_fontText->CalcTextSizeA(notePx, FLT_MAX, 0.0f, ver);
+            if (keyAt.x - 14.0f * s - vt.x > x) dl->AddText(g_fontText, notePx, ImVec2(keyAt.x - 14.0f * s - vt.x, p.y + (headH - vt.y) * 0.5f), IM_COL32(142, 142, 147, 255), ver);
+        }
         // the chosen mod's page
         ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + headH + 12.0f * s));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * s, 4.0f * s));
@@ -856,7 +946,24 @@ static void Frame(IDXGISwapChain *sc)
     // the menu's key: opens and closes it for every Next Gen mod at once
     NgShared *sh = g_shared;
     const bool front = GetForegroundWindow() == g_wnd;
-    const bool keyDown = front && (GetAsyncKeyState(sh->key ? sh->key : VK_END) & 0x8000) != 0;
+    // a new key for it: the next key pressed while the menu waits for one; Esc keeps the old one
+    if (g_keyCapture && (!sh->open || sh->chosen != g_slot || !front)) g_keyCapture = false;
+    for (int vk = 8; g_keyCapture && vk < 255; vk++)
+    {
+        const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0, pressed = down && !g_captureWas[vk];
+        g_captureWas[vk] = down;
+        if (!pressed || (KeyNotForMenu(vk) && vk != VK_ESCAPE)) continue;
+        g_keyCapture = false;
+        if (vk == VK_ESCAPE) break;
+        InterlockedExchange(&sh->toggledAt, (LONG)GetTickCount()); // the press that sets it does not also close the menu, here or in another mod
+        InterlockedExchange(&sh->key, vk);
+        g_keyWas = true;
+        KeySave(vk);
+        char name[32];
+        KeyName(vk, name, sizeof(name));
+        NG_LOG(L"overlay: the menu's key is now %S (%d), kept in NextGen.ini", name, vk);
+    }
+    const bool keyDown = front && (GetAsyncKeyState(sh->key ? sh->key : kNgKeyDefault) & 0x8000) != 0;
     if (keyDown && !g_keyWas)
     {
         const LONG at = (LONG)GetTickCount(), was = sh->toggledAt;
@@ -1022,6 +1129,7 @@ bool NgOverlayStart(const NgClient &client)
 {
     g_client = client;
     SharedJoin();
+    InterlockedExchange(&g_shared->key, KeyLoad());
     if (g_slot < 0)
     {
         NG_LOG(L"overlay: the menu has no room for another tab (%d mods): nothing is drawn", kNgSlots);

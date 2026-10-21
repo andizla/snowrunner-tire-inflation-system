@@ -2,7 +2,7 @@
 
 ## ReShade add-on API
 
-`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade). The release zip also carries ReShade 6.8.0 itself in its `ReShade` folder: `ReShade64.dll` of the build with full add-on support from https://reshade.me, unchanged, under the name `dxgi.dll`. Both are distributed under the BSD 3-Clause License:
+`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them only to be handed the game's swap chain where ReShade is installed, and needs no ReShade. The release zip also carries ReShade 6.8.0 itself in its `ReShade` folder: `ReShade64.dll` of the build with full add-on support from https://reshade.me, unchanged, under the name `dxgi.dll`. Both are distributed under the BSD 3-Clause License:
 
 Copyright 2014 Patrick Mours. All rights reserved.
 
@@ -16,7 +16,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ## Dear ImGui
 
-`deps/imgui` holds `imgui.h` and `imconfig.h` of Dear ImGui 1.92.5 (https://github.com/ocornut/imgui), distributed under the MIT License:
+`deps/imgui` holds the sources of Dear ImGui 1.92.1 (https://github.com/ocornut/imgui), compiled into `TirePressure.asi`, and `src/ng_dx11.cpp` is its DirectX 11 renderer with one change, both distributed under the MIT License:
 
 Copyright (c) 2014-2026 Omar Cornut
 

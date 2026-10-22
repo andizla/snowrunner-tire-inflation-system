@@ -416,12 +416,15 @@ static void OwnFault()
 // object's table is its own (its CreateDevice through a copy answers E_INVALIDARG, overlay_test 2026-10-23), so the game's
 // devices cannot be given copies. The Steam overlay (client of 2026-10-21) wraps DirectInput's objects in its own and
 // hooks only the export DirectInput8Create, so it never hooks what these slots hold, which is what looped with it in
-// DirectX.
+// DirectX. Its hook on the export hands the overlay its wrappers too, a mouse's and a keyboard's with a table each, so
+// the tables of a mouse and of a keyboard are both taken, every distinct one (on plain dinput8.dll they are one).
 typedef HRESULT(WINAPI *DiCreateFn)(HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN);
 typedef HRESULT(STDMETHODCALLTYPE *DiStateFn)(IDirectInputDevice8W *, DWORD, LPVOID);
 typedef HRESULT(STDMETHODCALLTYPE *DiDataFn)(IDirectInputDevice8W *, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
-static DiStateFn g_diState[2] = {};
-static DiDataFn g_diData[2] = {};
+// each table taken has its own hooks, which call on to what that table held: the mouse's and the keyboard's, wide and ANSI
+static const int kDiTables = 4;
+static DiStateFn g_diState[kDiTables] = {};
+static DiDataFn g_diData[kDiTables] = {};
 
 // 1 a mouse, 2 a keyboard, 0 anything else; asked of each device once.
 static int DiKind(IDirectInputDevice8W *dev)
@@ -471,8 +474,13 @@ template <int K> static HRESULT STDMETHODCALLTYPE HookDiData(IDirectInputDevice8
     return hr;
 }
 
-static int DiTake()
+static void *const kDiStateHooks[kDiTables] = { (void *)&HookDiState<0>, (void *)&HookDiState<1>, (void *)&HookDiState<2>, (void *)&HookDiState<3> };
+static void *const kDiDataHooks[kDiTables] = { (void *)&HookDiData<0>, (void *)&HookDiData<1>, (void *)&HookDiData<2>, (void *)&HookDiData<3> };
+
+// The reads taken (two to a table); tables: how many distinct tables they are in.
+static int DiTake(int &tables)
 {
+    tables = 0;
     wchar_t path[MAX_PATH] = {};
     const UINT n = GetSystemDirectoryW(path, MAX_PATH);
     if (!n || n > MAX_PATH - 16) return 0;
@@ -480,21 +488,26 @@ static int DiTake()
     const HMODULE m = LoadLibraryW(path);
     const DiCreateFn create = m ? (DiCreateFn)GetProcAddress(m, "DirectInput8Create") : nullptr;
     if (!create) return 0;
+    const GUID *const kinds[2] = { &GUID_SysMouse, &GUID_SysKeyboard };
+    void **met[kDiTables] = {};
     int hooked = 0;
-    void **first = nullptr;
     for (int k = 0; k < 2; k++)
     {
         IDirectInput8W *di = nullptr;
         if (FAILED(create(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, k ? IID_IDirectInput8A : IID_IDirectInput8W, (void **)&di, nullptr)) || !di) continue;
-        IDirectInputDevice8W *dev = nullptr;
-        if (SUCCEEDED(di->CreateDevice(GUID_SysMouse, &dev, nullptr)) && dev)
+        for (const GUID *kind : kinds)
         {
+            IDirectInputDevice8W *dev = nullptr;
+            if (FAILED(di->CreateDevice(*kind, &dev, nullptr)) || !dev) continue;
             void **table = *(void ***)dev;
-            if (table != first)
+            bool seen = false;
+            for (int i = 0; i < tables; i++) seen = seen || met[i] == table;
+            if (!seen && tables < kDiTables)
             {
-                first = first ? first : table;
-                hooked += NgSlotSwap(&table[9], k ? (void *)&HookDiState<1> : (void *)&HookDiState<0>, (void **)&g_diState[k]);
-                hooked += NgSlotSwap(&table[10], k ? (void *)&HookDiData<1> : (void *)&HookDiData<0>, (void **)&g_diData[k]);
+                met[tables] = table;
+                hooked += NgSlotSwap(&table[9], kDiStateHooks[tables], (void **)&g_diState[tables]);
+                hooked += NgSlotSwap(&table[10], kDiDataHooks[tables], (void **)&g_diData[tables]);
+                tables++;
             }
             dev->Release();
         }
@@ -523,9 +536,10 @@ static void InputTake(HWND wnd)
         NG_LOG(L"overlay: the game window's messages could not be taken (error %lu): with the menu open the game still gets clicks and keys", GetLastError());
         g_gameWndProc = (WNDPROC)(g_wndUnicode ? DefWindowProcW : DefWindowProcA);
     }
-    const int di = DiTake();
-    NG_LOG(L"overlay: the menu takes the game's input while open (%d of 4 user32 imports of the game, %s window messages, %d of 4 DirectInput reads)", n,
-           g_wndUnicode ? L"Unicode" : L"ANSI", di);
+    int tables = 0;
+    const int di = DiTake(tables);
+    NG_LOG(L"overlay: the menu takes the game's input while open (%d of 4 user32 imports of the game, %s window messages, %d DirectInput reads in %d method table%s)",
+           n, g_wndUnicode ? L"Unicode" : L"ANSI", di, tables, tables == 1 ? L"" : L"s");
 }
 
 // ---- the theme ----

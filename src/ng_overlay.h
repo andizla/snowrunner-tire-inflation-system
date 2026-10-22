@@ -1,9 +1,9 @@
 // ng_overlay.h: Next Gen's own overlay. A mod draws what it shows over the game (a gauge cluster, a panel) and its tab
 // of the NEXT GEN menu with Dear ImGui, compiled into the mod, on the game's own DirectX 11 device. No ReShade is
-// needed: the overlay finds the swap chain's Present with a DirectX probe of its own on the WARP software device (no
-// hardware device is ever made, so ReShade, which skips WARP, never takes it for the game's), and hooks Present by its
-// slot in the swap chain's method table, calling on to whatever was there (the game, ReShade, the Spotter minimap mod
-// and Next Gen Graphics all keep working, in any order).
+// needed: the overlay takes the game's imports of CreateDXGIFactory1 and D3D11CreateDevice and gives every swap chain
+// the game makes a method table of its own with the overlay's Present, which calls on to what the table held (DirectX,
+// the Steam overlay's hook on it, ReShade). DirectX's own tables stay as they are (ng_overlay.cpp says why). With
+// ReShade installed the swap chains come from ReShade's presents instead (ng_reshade.cpp).
 // The same two files (ng_overlay.h, ng_overlay.cpp) are in every Next Gen mod (Next Gen Gameplay, Next Gen Tire
 // Inflation). The mods in one game share the menu through a block of named shared memory: one window with a tab per
 // mod, opened and closed with one key (Delete unless NextGen.ini next to the game's exe says otherwise; the menu sets it
@@ -23,7 +23,8 @@ struct NgClient
     void (*deviceGone)();                 // the game's device is going: free every texture NgTextureMake made
 };
 
-// Starts the overlay: a thread finds the swap chain's Present and hooks it. false: it cannot start (in the log).
+// Starts the overlay: takes the game's imports (or ReShade's events) that bring its swap chains, so call it before the
+// game makes its DirectX device. false: it cannot start (in the log).
 bool NgOverlayStart(const NgClient &client);
 // A texture of w x h pixels, 8-bit RGBA, on the game's device, for ImDrawList::PushTexture; 0 when none was made.
 // Only from frame() or page().

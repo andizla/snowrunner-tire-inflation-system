@@ -1,9 +1,10 @@
-// ng_overlay.cpp: Next Gen's own overlay (ng_overlay.h): the swap chain probe and Present hook, Dear ImGui on the game's
+// ng_overlay.cpp: Next Gen's own overlay (ng_overlay.h): the Present hook on the game's swap chains, Dear ImGui on the game's
 // DirectX 11 device, the input the menu takes from the game while it is open, and the NEXT GEN menu with its theme.
 // The same file is in every Next Gen mod; keep the copies alike (kNgSharedVersion says which block layout they share).
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +47,7 @@ struct NgShared
     volatile LONG cursorX, cursorY; // where the cursor was when the menu opened: the game sees it there until it closes
     volatile LONG placeTurn; // counts the window's moves and new sizes
     float x, y, w, h;        // the window's place and size, 0 before it was first drawn
-    volatile LONG64 table;   // the swap chain's method table, once a mod found it (the others need no probe of their own)
+    volatile LONG64 table;   // unused since 2026-10-23 (a probe's method table until then), kept for the block's layout
     struct Slot
     {
         volatile LONG used, ready;
@@ -733,7 +734,7 @@ static void MenuDraw(float s)
 typedef HRESULT(STDMETHODCALLTYPE *PresentFn)(IDXGISwapChain *, UINT, UINT);
 static PresentFn g_present = nullptr;
 static volatile LONG g_broken = 0;
-static HWND g_probeWnd = nullptr, g_wnd = nullptr;
+static HWND g_wnd = nullptr;
 static IDXGISwapChain *g_sc = nullptr; // the swap chain drawn on (not held: only compared)
 static ULONGLONG g_scSeen = 0;
 static ID3D11Device *g_dev = nullptr;
@@ -914,7 +915,7 @@ static void Frame(IDXGISwapChain *sc)
         // another swap chain: the overlay keeps to the one it draws on, unless that one is gone (it has not presented
         // for 3 s) or the new one shows in the same window (the game made its swap chain anew)
         DXGI_SWAP_CHAIN_DESC sd = {};
-        if (FAILED(sc->GetDesc(&sd)) || !sd.OutputWindow || sd.OutputWindow == g_probeWnd) return;
+        if (FAILED(sc->GetDesc(&sd)) || !sd.OutputWindow) return;
         if (g_sc && now - g_scSeen < 3000 && sd.OutputWindow != g_wnd) return;
         const bool first = !g_sc;
         g_sc = sc;
@@ -1149,95 +1150,227 @@ static HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain *sc, UINT sync, UINT
     return g_present(sc, sync, flags);
 }
 
-// ---- the start ----
+// ---- the game's swap chains ----
+// The overlay hooks Present on the swap chains the game makes, and on no other. The game makes its DXGI factory with
+// CreateDXGIFactory1 and its device with D3D11CreateDevice, imports of its exe (the build of 2026-10-20): the overlay
+// takes those two import slots, gives each factory they bring (a device's through its adapter) a method table of its
+// own with the overlay's CreateSwapChain and CreateSwapChainForHwnd, and gives each swap chain those make a method table
+// of its own with the overlay's Present. DirectX's own method tables are never written to.
+// The Steam overlay hooks the code of whatever function a new swap chain's Present slot holds, at every swap chain made,
+// and keeps one pointer to call on to. Until 2026-10-23 this overlay found DirectX's table through a probe's swap chain
+// and put its hook there: Steam hooked DirectX's Present at the probe and this overlay's at the game's swap chain, and
+// from then on the two called each other until the stack ran out (a tester's game at its first frame, on Steam's client
+// of 2026-10-21). Steam reads DirectX's tables only, never these copies, so its hook stays on DirectX's Present.
 
-// The swap chain's method table, from a swap chain made for the purpose on the WARP software device in a hidden
-// window and released at once. A hardware device here would make ReShade, where it is installed, load its add-ons onto it.
-static void **ProbeTable()
+typedef HRESULT(WINAPI *CreateFactoryFn)(REFIID, void **);
+typedef HRESULT(WINAPI *CreateDeviceFn)(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL *, UINT, UINT, ID3D11Device **,
+                                        D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
+typedef HRESULT(STDMETHODCALLTYPE *CreateSwapChainFn)(IDXGIFactory *, IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **);
+typedef HRESULT(STDMETHODCALLTYPE *CreateSwapChainHwndFn)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
+                                                         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
+static CreateFactoryFn g_gameCreateFactory = nullptr;
+static CreateDeviceFn g_gameCreateDevice = nullptr;
+static CreateSwapChainFn g_createSwapChain = nullptr;
+static CreateSwapChainHwndFn g_createSwapChainHwnd = nullptr;
+static volatile LONG g_scOwned = 0;   // the swap chains given the overlay's Present
+static volatile LONG g_ownBroken = 0; // a fault while giving one: no more are taken
+
+// The overlay's method tables: each one a copy of a table with some of its slots the overlay's, made once and put on
+// every object that has that table. A copy takes the word before the table too (C++'s type information, which a cast
+// reads) and up to kTableWords after its start, as far as the same memory goes, as the object's own code may read its
+// class's further methods through the same pointer.
+static const size_t kTableWords = 512;
+struct TableCopy
 {
-    const HWND wnd = CreateWindowExW(0, L"STATIC", L"Next Gen overlay probe", WS_OVERLAPPED, 0, 0, 64, 64, nullptr, nullptr, nullptr, nullptr);
-    if (!wnd)
-    {
-        NG_LOG(L"overlay: no window for the DirectX probe (error %lu): nothing is drawn", GetLastError());
-        return nullptr;
-    }
-    g_probeWnd = wnd;
-    DXGI_SWAP_CHAIN_DESC sd = {};
-    sd.BufferCount = 1;
-    sd.BufferDesc.Width = 64;
-    sd.BufferDesc.Height = 64;
-    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.OutputWindow = wnd;
-    sd.SampleDesc.Count = 1;
-    sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
-    IDXGISwapChain *sc = nullptr;
-    ID3D11Device *dev = nullptr;
-    ID3D11DeviceContext *ctx = nullptr;
-    const HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 2, D3D11_SDK_VERSION, &sd, &sc, &dev, nullptr, &ctx);
-    void **table = SUCCEEDED(hr) && sc ? *(void ***)sc : nullptr;
-    if (sc) sc->Release();
-    if (ctx) ctx->Release();
-    if (dev) dev->Release();
-    DestroyWindow(wnd);
-    if (!table) NG_LOG(L"overlay: the DirectX probe on the WARP device failed (%08lx): nothing is drawn", (unsigned long)hr);
-    return table;
+    void **from, **to;
+};
+static TableCopy g_tables[16] = {};
+static int g_tableCount = 0;
+static SRWLOCK g_tableLock = SRWLOCK_INIT;
+
+static bool TableIsOurs(void **t)
+{
+    AcquireSRWLockShared(&g_tableLock);
+    bool ours = false;
+    for (int i = 0; i < g_tableCount; i++)
+        if (g_tables[i].to == t) ours = true;
+    ReleaseSRWLockShared(&g_tableLock);
+    return ours;
 }
 
-// The game's swap chain as ReShade hands it over (ng_reshade.cpp): its method table hooked as a probe's would be.
-static void HookFrom(IDXGISwapChain *sc)
+// The overlay's copy of the table from, with hook in slot and hook2 in slot2 (none when slot2 < 0); nullptr when none
+// can be made.
+static void **TableCopyOf(void **from, int slot, void *hook, int slot2, void *hook2)
 {
-    void **table = sc ? *(void ***)sc : nullptr;
-    if (!table || !SlotSwap(&table[8], (void *)&HookPresent, (void **)&g_present))
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    AcquireSRWLockExclusive(&g_tableLock);
+    void **to = nullptr;
+    for (int i = 0; i < g_tableCount; i++)
+        if (g_tables[i].from == from) to = g_tables[i].to;
+    MEMORY_BASIC_INFORMATION mi = {};
+    if (!to && g_tableCount < (int)(sizeof(g_tables) / sizeof(g_tables[0])) && VirtualQuery(from - 1, &mi, sizeof(mi)) == sizeof(mi) &&
+        mi.State == MEM_COMMIT && (mi.Protect & readable) && !(mi.Protect & PAGE_GUARD))
     {
-        NG_LOG(L"overlay: the swap chain ReShade handed over could not be hooked (error %lu): nothing is drawn", GetLastError());
+        size_t words = (size_t)((BYTE *)mi.BaseAddress + mi.RegionSize - (BYTE *)(from - 1)) / sizeof(void *);
+        if (words > kTableWords + 1) words = kTableWords + 1;
+        const size_t need = (size_t)(slot > slot2 ? slot : slot2) + 2;
+        void **block = words >= need ? (void **)HeapAlloc(GetProcessHeap(), 0, words * sizeof(void *)) : nullptr;
+        if (block)
+        {
+            memcpy(block, from - 1, words * sizeof(void *));
+            to = block + 1; // never freed: an object keeps it to its end
+            to[slot] = hook;
+            if (slot2 >= 0) to[slot2] = hook2;
+            g_tables[g_tableCount++] = { from, to };
+        }
+    }
+    ReleaseSRWLockExclusive(&g_tableLock);
+    return to;
+}
+
+// The first table this mod takes sets what its hook calls on to; another one is taken only when it holds the same
+// there. (A table another Next Gen mod made from this one's holds that mod's hook: its object has this mod's already.)
+static bool CallsOnTo(void **mine, void *there)
+{
+    InterlockedCompareExchangePointer(mine, there, nullptr);
+    return *mine == there;
+}
+
+// A module's file name for an address in it, or "?".
+static void ModuleOf(const void *a, wchar_t *out, size_t size)
+{
+    HMODULE m = nullptr;
+    wchar_t path[MAX_PATH] = L"?";
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)a, &m)) GetModuleFileNameW(m, path, MAX_PATH);
+    const wchar_t *slash = wcsrchr(path, L'\\');
+    wcsncpy_s(out, size, slash ? slash + 1 : path, _TRUNCATE);
+}
+
+static void SwapChainOwn(IDXGISwapChain *sc)
+{
+    void **from = *(void ***)sc;
+    if (TableIsOurs(from) || !CallsOnTo((void **)&g_present, from[8])) return;
+    void **to = TableCopyOf(from, 8, (void *)&HookPresent, -1, nullptr);
+    if (!to)
+    {
+        NG_LOG(L"overlay: no method table of its own could be made for a swap chain the game made: nothing is drawn on it");
         return;
     }
-    NG_LOG(L"overlay: Present hooked (the game's swap chain from ReShade's first present), tab slot %d", g_slot);
+    InterlockedExchangePointer((void **)sc, to);
+    InterlockedIncrement(&g_scOwned);
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sc->GetDesc(&sd);
+    wchar_t onto[MAX_PATH];
+    ModuleOf((const void *)g_present, onto, MAX_PATH);
+    NG_LOG(L"overlay: Present hooked on a swap chain the game made (%u x %u, window %p; it calls on to %s), tab slot %d", sd.BufferDesc.Width, sd.BufferDesc.Height,
+           sd.OutputWindow, onto, g_slot);
 }
 
-static DWORD WINAPI StartThread(void *)
+static HRESULT STDMETHODCALLTYPE HookCreateSwapChain(IDXGIFactory *f, IUnknown *dev, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **out);
+static HRESULT STDMETHODCALLTYPE HookCreateSwapChainHwnd(IDXGIFactory2 *f, IUnknown *dev, HWND wnd, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                                         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *full, IDXGIOutput *output, IDXGISwapChain1 **out);
+
+static void FactoryOwn(IDXGIFactory *f)
 {
-    // with ReShade installed no probe is made: the game's swap chain comes from ReShade's first present
-    HMODULE self = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&StartThread, &self);
-    if (self && NgReShadeWatch(self, &HookFrom))
-    {
-        NG_LOG(L"overlay: ReShade is installed: the overlay hooks the game's own swap chain at its first present, with no DirectX probe of its own");
-        return 0;
-    }
-    if (const HMODULE reshade = NgReShadeModule())
-    {
-        wchar_t name[MAX_PATH] = L"?";
-        GetModuleFileNameW(reshade, name, MAX_PATH);
-        NG_LOG(L"overlay: ReShade is in the game (%s) but did not take the overlay as an add-on (it takes it from 6.8 on, in its build with full add-on "
-               L"support; ReShade.log says why): the overlay makes a DirectX probe of its own", name);
-    }
-    void **table = (void **)g_shared->table;
-    const bool found = table != nullptr;
-    if (!table)
-    {
-        table = ProbeTable();
-        if (!table) return 0;
-        InterlockedExchange64(&g_shared->table, (LONG64)table);
-    }
-    if (!SlotSwap(&table[8], (void *)&HookPresent, (void **)&g_present))
-    {
-        NG_LOG(L"overlay: the swap chain's Present could not be hooked (error %lu): nothing is drawn", GetLastError());
-        return 0;
-    }
-    HMODULE owner = nullptr;
-    wchar_t ownerName[MAX_PATH] = L"?";
-    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)g_present, &owner))
-    {
-        GetModuleFileNameW(owner, ownerName, MAX_PATH);
-        const wchar_t *slash = wcsrchr(ownerName, L'\\');
-        if (slash) memmove(ownerName, slash + 1, (wcslen(slash + 1) + 1) * sizeof(wchar_t));
-    }
-    NG_LOG(L"overlay: Present hooked (%s; it calls on to %s), tab slot %d", found ? L"the method table another Next Gen mod found" : L"found with a WARP probe", ownerName,
-           g_slot);
+    void **from = *(void ***)f;
+    if (TableIsOurs(from)) return;
+    IDXGIFactory2 *f2 = nullptr;
+    const bool hwnd = SUCCEEDED(f->QueryInterface(__uuidof(IDXGIFactory2), (void **)&f2)) && f2;
+    if (f2) f2->Release();
+    if (!CallsOnTo((void **)&g_createSwapChain, from[10]) || (hwnd && !CallsOnTo((void **)&g_createSwapChainHwnd, from[15]))) return;
+    void **to = TableCopyOf(from, 10, (void *)&HookCreateSwapChain, hwnd ? 15 : -1, (void *)&HookCreateSwapChainHwnd);
+    if (to) InterlockedExchangePointer((void **)f, to);
+    else NG_LOG(L"overlay: no method table of its own could be made for a DXGI factory the game made: its swap chains get no overlay");
+}
+
+static void DeviceFactoryOwn(ID3D11Device *dev)
+{
+    IDXGIDevice *dd = nullptr;
+    IDXGIAdapter *ad = nullptr;
+    IDXGIFactory *f = nullptr;
+    if (SUCCEEDED(dev->QueryInterface(__uuidof(IDXGIDevice), (void **)&dd)) && dd && SUCCEEDED(dd->GetAdapter(&ad)) && ad &&
+        SUCCEEDED(ad->GetParent(__uuidof(IDXGIFactory), (void **)&f)) && f)
+        FactoryOwn(f);
+    if (f) f->Release();
+    if (ad) ad->Release();
+    if (dd) dd->Release();
+}
+
+// A fault while taking a factory or swap chain ends the overlay's taking, never the game's call: the game gets what it
+// made either way.
+static void OwnFault()
+{
+    if (InterlockedExchange(&g_ownBroken, 1) == 0)
+        NG_LOG(L"overlay: a fault while taking a DXGI factory or swap chain the game made: the overlay takes no more (the game goes on)");
+}
+
+static void SwapChainOwnGuarded(IDXGISwapChain *sc)
+{
+    if (g_ownBroken) return;
+    __try { SwapChainOwn(sc); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { OwnFault(); }
+}
+
+static void FactoryOwnGuarded(IDXGIFactory *f)
+{
+    if (g_ownBroken) return;
+    __try { FactoryOwn(f); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { OwnFault(); }
+}
+
+static void DeviceFactoryOwnGuarded(ID3D11Device *dev)
+{
+    if (g_ownBroken) return;
+    __try { DeviceFactoryOwn(dev); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { OwnFault(); }
+}
+
+static HRESULT STDMETHODCALLTYPE HookCreateSwapChain(IDXGIFactory *f, IUnknown *dev, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **out)
+{
+    const HRESULT hr = g_createSwapChain(f, dev, desc, out);
+    if (SUCCEEDED(hr) && out && *out) SwapChainOwnGuarded(*out);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE HookCreateSwapChainHwnd(IDXGIFactory2 *f, IUnknown *dev, HWND wnd, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                                         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *full, IDXGIOutput *output, IDXGISwapChain1 **out)
+{
+    const HRESULT hr = g_createSwapChainHwnd(f, dev, wnd, desc, full, output, out);
+    if (SUCCEEDED(hr) && out && *out) SwapChainOwnGuarded(*out);
+    return hr;
+}
+
+static HRESULT WINAPI HookCreateFactory(REFIID riid, void **out)
+{
+    const HRESULT hr = g_gameCreateFactory(riid, out);
+    if (SUCCEEDED(hr) && out && *out) FactoryOwnGuarded((IDXGIFactory *)*out);
+    return hr;
+}
+
+static HRESULT WINAPI HookCreateDevice(IDXGIAdapter *adapter, D3D_DRIVER_TYPE type, HMODULE soft, UINT flags, const D3D_FEATURE_LEVEL *levels, UINT count,
+                                       UINT sdk, ID3D11Device **dev, D3D_FEATURE_LEVEL *level, ID3D11DeviceContext **ctx)
+{
+    const HRESULT hr = g_gameCreateDevice(adapter, type, soft, flags, levels, count, sdk, dev, level, ctx);
+    if (SUCCEEDED(hr) && dev && *dev) DeviceFactoryOwnGuarded(*dev);
+    return hr;
+}
+
+// ---- the start ----
+
+// The game's swap chain as ReShade hands it over (ng_reshade.cpp), the native one under ReShade's: given the overlay's
+// Present as one the game made would be.
+static void SwapChainFromReShade(IDXGISwapChain *sc)
+{
+    if (sc) SwapChainOwnGuarded(sc);
+}
+
+// Two minutes after the start without a swap chain of the game's through the overlay's hooks: the log says so.
+static DWORD WINAPI WatchThread(void *)
+{
+    Sleep(120000);
+    if (!g_scOwned && !g_ownBroken)
+        NG_LOG(L"overlay: no swap chain of the game's came through the overlay's hooks in two minutes: nothing is drawn (the game may have made "
+               L"its DXGI factory and device before the overlay started)");
     return 0;
 }
 
@@ -1251,12 +1384,34 @@ bool NgOverlayStart(const NgClient &client)
         NG_LOG(L"overlay: the menu has no room for another tab (%d mods): nothing is drawn", kNgSlots);
         return false;
     }
-    const HANDLE t = CreateThread(nullptr, 0, StartThread, nullptr, 0, nullptr);
-    if (!t)
+    // with ReShade installed the game's swap chains come from ReShade's presents
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&NgOverlayStart, &self);
+    if (self && NgReShadeWatch(self, &SwapChainFromReShade))
     {
-        NG_LOG(L"overlay: no thread for the start (error %lu): nothing is drawn", GetLastError());
+        NG_LOG(L"overlay: ReShade is installed: the overlay takes the game's swap chains from ReShade's presents");
+        return true;
+    }
+    if (const HMODULE reshade = NgReShadeModule())
+    {
+        wchar_t name[MAX_PATH] = L"?";
+        GetModuleFileNameW(reshade, name, MAX_PATH);
+        NG_LOG(L"overlay: ReShade is in the game (%s) but did not take the overlay as an add-on (it takes it from 6.8 on, in its build with full add-on "
+               L"support; ReShade.log says why): the overlay takes the game's swap chains as the game makes them, ReShade's own, and draws under ReShade's effects",
+               name);
+    }
+    const HMODULE exe = GetModuleHandleW(nullptr);
+    const bool factory = SlotSwap(ImportSlot(exe, "dxgi.dll", "CreateDXGIFactory1"), (void *)&HookCreateFactory, (void **)&g_gameCreateFactory);
+    const bool device = SlotSwap(ImportSlot(exe, "d3d11.dll", "D3D11CreateDevice"), (void *)&HookCreateDevice, (void **)&g_gameCreateDevice);
+    if (!factory && !device)
+    {
+        NG_LOG(L"overlay: the game's exe imports neither CreateDXGIFactory1 nor D3D11CreateDevice: nothing is drawn");
         return false;
     }
-    CloseHandle(t);
+    NG_LOG(L"overlay: the game's swap chains get the overlay's Present as the game makes them (through its import%s of %s), in method tables of their own; "
+           L"DirectX's own stay untouched",
+           factory && device ? L"s" : L"", factory && device ? L"CreateDXGIFactory1 and D3D11CreateDevice" : factory ? L"CreateDXGIFactory1" : L"D3D11CreateDevice");
+    const HANDLE t = CreateThread(nullptr, 0, WatchThread, nullptr, 0, nullptr);
+    if (t) CloseHandle(t);
     return true;
 }

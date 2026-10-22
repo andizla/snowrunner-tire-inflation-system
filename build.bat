@@ -27,6 +27,11 @@ cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D LOADER_TEST_CHAIN /Fo:out\
 copy /y out\version.dll out\test\twice\version.dll >nul || goto fail
 copy /y out\test\loader_test.exe out\test\twice\loader_test.exe >nul || goto fail
 copy /y out\test\probe.asi out\test\twice\probe.asi >nul || goto fail
+rem the game's crash reporter loads version.dll too: the test under its name wants no .asi in it and the game's log kept
+if not exist out\test\helper mkdir out\test\helper
+copy /y out\version.dll out\test\helper\version.dll >nul || goto fail
+copy /y out\test\loader_test.exe out\test\helper\crash_reporter.exe >nul || goto fail
+copy /y out\test\probe.asi out\test\helper\probe.asi >nul || goto fail
 rem the mod itself, and the read-only tools for the running game
 rem Dear ImGui (deps\imgui) and its DirectX 11 renderer (src\ng_dx11.cpp) compiled in; ng_overlay.cpp is Next Gen's overlay
 rem (the Present hook, the NEXT GEN menu), ng_reshade.cpp takes the swap chain from ReShade where it is installed;

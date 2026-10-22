@@ -9,6 +9,10 @@
 //
 // The .asi files are loaded from a thread, so they load after the loader lock of this DLL's own load is released.
 // Log: AsiLoader.log next to the exe, rewritten each start.
+//
+// The game's other programs in Bin (its crash reporter, converters and encoders) load this DLL as well. They get no
+// .asi files, and their one line goes at the end of the game's log instead of replacing it, so the crash reporter's
+// line there says the game crashed (a tester's log of 2026-10-22 was the crash reporter's, the mods loaded into it).
 #include <windows.h>
 #include <stdio.h>
 #include <string>
@@ -19,13 +23,16 @@ extern "C" void *g_verReal[64] = {};
 
 static std::wstring g_dir;      // the folder of this DLL, with the last backslash; empty = not known, nothing is loaded from it
 static std::wstring g_forwards; // for the log: where the calls go
+static bool g_logFresh = true;  // the first line rewrites the log; false = every line is added at its end
+
+static const wchar_t *const kHelpers[] = { L"crash_reporter.exe", L"SnowrunnerResourceConverter.exe", L"TextureConverter.exe", L"lame.exe",
+                                           L"opusenc.exe",        L"xma2encode.exe",                  L"xwmaencode.exe" };
 
 static void Log(const wchar_t *fmt, ...)
 {
-    static bool first = true;
     FILE *f = nullptr;
-    if (_wfopen_s(&f, (g_dir + L"AsiLoader.log").c_str(), first ? L"w, ccs=UTF-8" : L"a, ccs=UTF-8") != 0 || !f) return;
-    first = false;
+    if (_wfopen_s(&f, (g_dir + L"AsiLoader.log").c_str(), g_logFresh ? L"w, ccs=UTF-8" : L"a, ccs=UTF-8") != 0 || !f) return;
+    g_logFresh = false;
     va_list ap;
     va_start(ap, fmt);
     vfwprintf(f, fmt, ap);
@@ -80,7 +87,19 @@ static bool LoadRealVersion(HINSTANCE self, bool chained)
 
 static DWORD WINAPI LoadAsiFiles(void *)
 {
-    Log(L"asi loader in %s", ModulePath(nullptr).c_str());
+    const std::wstring exe = ModulePath(nullptr);
+    const size_t cut = exe.find_last_of(L"\\/");
+    const std::wstring name = cut == std::wstring::npos ? exe : exe.substr(cut + 1);
+    for (const wchar_t *helper : kHelpers)
+        if (!_wcsicmp(name.c_str(), helper))
+        {
+            SYSTEMTIME t;
+            GetLocalTime(&t);
+            g_logFresh = false;
+            Log(L"%02u:%02u:%02u %s started, one of the game's own programs: no .asi loaded into it", t.wHour, t.wMinute, t.wSecond, name.c_str());
+            return 0;
+        }
+    Log(L"asi loader in %s", exe.c_str());
     Log(L"version.dll calls go to %s", g_forwards.c_str());
     WIN32_FIND_DATAW fd = {};
     const HANDLE h = FindFirstFileW((g_dir + L"*.asi").c_str(), &fd);

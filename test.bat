@@ -8,6 +8,8 @@ set failed=0
 out\test\loader_test.exe || set failed=1
 out\test\chain\loader_test.exe || set failed=1
 out\test\twice\loader_test.exe already || set failed=1
+echo the game's log> out\test\helper\AsiLoader.log
+out\test\helper\crash_reporter.exe helper || set failed=1
 out\test\probe_test.exe || set failed=1
 if %failed%==1 (echo TESTS FAILED & exit /b 1)
 echo TESTS OK

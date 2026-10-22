@@ -8,7 +8,9 @@
 // build.bat also puts the three files into out\test\chain with a second copy of the proxy as version_chain.dll: run
 // there, the same test checks that a chain of two of these loaders ends in System32 (it once ran in a circle). In
 // out\test\twice the chain file is the stand-in: run there with the argument "already", the test also wants the
-// proxy's log to say that it left the loaded probe.asi alone.
+// proxy's log to say that it left the loaded probe.asi alone. In out\test\helper the test is named crash_reporter.exe,
+// as the game's crash reporter that loads version.dll too: run there with the argument "helper", it wants the calls to
+// go through, no .asi loaded, and the log test.bat put there (as the game's) kept, with one line added.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,6 +104,30 @@ int main(int argc, char **argv)
            back ? "" : " DID NOT RETURN in 10 s", v.major, v.minor, v.build, v.wide, v.ansi);
     if (!back) { printf("1 FAILED\n"); fflush(stdout); ExitProcess(1); }
     fails += !(v.wide && v.ansi);
+
+    if (argc > 1 && !strcmp(argv[1], "helper"))
+    {
+        std::string log;
+        for (int i = 0; i < 50 && log.find("crash_reporter.exe started") == std::string::npos; i++, Sleep(100))
+        {
+            log.clear();
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, (dir + L"AsiLoader.log").c_str(), L"rb") != 0 || !f) continue;
+            char part[512];
+            for (size_t n; (n = fread(part, 1, sizeof part, f)) > 0;) log.append(part, n);
+            fclose(f);
+        }
+        Sleep(500); // time for a probe.asi that should not come
+        const bool none = GetModuleHandleW(L"probe.asi") == nullptr;
+        printf("%s no .asi loaded into the game's crash reporter\n", none ? "ok  " : "FAIL");
+        fails += !none;
+        const bool kept = log.find("the game's log") != std::string::npos && log.find("crash_reporter.exe started, one of the game's own programs") != std::string::npos &&
+                          log.find("asi loader in") == std::string::npos;
+        printf("%s the game's log kept, with the crash reporter's line added\n", kept ? "ok  " : "FAIL");
+        fails += !kept;
+        printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
+        return fails;
+    }
 
     // the marker of this very process
     bool marker = false;

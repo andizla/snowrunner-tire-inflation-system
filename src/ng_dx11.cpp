@@ -1,7 +1,8 @@
 // ng_dx11.cpp: Dear ImGui's DirectX 11 renderer (backends/imgui_impl_dx11.cpp of Dear ImGui 1.92.1, MIT, Omar Cornut),
-// changed for Next Gen's overlay in one place: on a picture in linear light (the 16-bit float swap chain of an HDR
-// game, scRGB), the pixel shader turns ImGui's sRGB colours into linear light at a paper white of its own
-// (ImGui_ImplDX11_SetLinearScale). Marked [NEXT GEN].
+// changed for Next Gen's overlay: on a picture in linear light (the 16-bit float swap chain of an HDR game, scRGB),
+// the pixel shader turns ImGui's sRGB colours into linear light at a paper white of its own
+// (ImGui_ImplDX11_SetLinearScale); and with IM_ASSERT off (imconfig.h), a device or texture DirectX did not give is
+// not used further. Marked [NEXT GEN].
 // dear imgui: Renderer Backend for DirectX11
 // This needs to be used along with a Platform Backend (e.g. Win32)
 
@@ -350,8 +351,8 @@ static void ImGui_ImplDX11_DestroyTexture(ImTextureData* tex)
     if (backend_tex == nullptr)
         return;
     IM_ASSERT(backend_tex->pTextureView == (ID3D11ShaderResourceView*)(intptr_t)tex->TexID);
-    backend_tex->pTextureView->Release();
-    backend_tex->pTexture->Release();
+    if (backend_tex->pTextureView) backend_tex->pTextureView->Release(); // [NEXT GEN] null-safe
+    if (backend_tex->pTexture) backend_tex->pTexture->Release();
     IM_DELETE(backend_tex);
 
     // Clear identifiers and mark as destroyed (in order to allow e.g. calling InvalidateDeviceObjects while running)
@@ -390,6 +391,12 @@ void ImGui_ImplDX11_UpdateTexture(ImTextureData* tex)
         subResource.SysMemSlicePitch = 0;
         bd->pd3dDevice->CreateTexture2D(&desc, &subResource, &backend_tex->pTexture);
         IM_ASSERT(backend_tex->pTexture != nullptr && "Backend failed to create texture!");
+        // [NEXT GEN] a texture DirectX did not make is not used: the next frame asks again
+        if (!backend_tex->pTexture)
+        {
+            IM_DELETE(backend_tex);
+            return;
+        }
 
         // Create texture view
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -400,6 +407,13 @@ void ImGui_ImplDX11_UpdateTexture(ImTextureData* tex)
         srvDesc.Texture2D.MostDetailedMip = 0;
         bd->pd3dDevice->CreateShaderResourceView(backend_tex->pTexture, &srvDesc, &backend_tex->pTextureView);
         IM_ASSERT(backend_tex->pTextureView != nullptr && "Backend failed to create texture!");
+        // [NEXT GEN] likewise its view
+        if (!backend_tex->pTextureView)
+        {
+            backend_tex->pTexture->Release();
+            IM_DELETE(backend_tex);
+            return;
+        }
 
         // Store identifiers
         tex->SetTexID((ImTextureID)(intptr_t)backend_tex->pTextureView);
@@ -650,14 +664,14 @@ bool    ImGui_ImplDX11_Init(ID3D11Device* device, ID3D11DeviceContext* device_co
     IDXGIAdapter* pDXGIAdapter = nullptr;
     IDXGIFactory* pFactory = nullptr;
 
+    // [NEXT GEN] the device and its context are kept also when the factory is not given (the AddRef below ran into a
+    // null pointer then); the factory is not needed to draw
+    bd->pd3dDevice = device;
+    bd->pd3dDeviceContext = device_context;
     if (device->QueryInterface(IID_PPV_ARGS(&pDXGIDevice)) == S_OK)
         if (pDXGIDevice->GetParent(IID_PPV_ARGS(&pDXGIAdapter)) == S_OK)
             if (pDXGIAdapter->GetParent(IID_PPV_ARGS(&pFactory)) == S_OK)
-            {
-                bd->pd3dDevice = device;
-                bd->pd3dDeviceContext = device_context;
                 bd->pFactory = pFactory;
-            }
     if (pDXGIDevice) pDXGIDevice->Release();
     if (pDXGIAdapter) pDXGIAdapter->Release();
     bd->pd3dDevice->AddRef();

@@ -181,7 +181,7 @@ static uint64_t BuildAccessorTarget(const BuildImage &im, uint64_t function)
 // build of the same source keeps the registers but not always the frame (the Game Pass build of 2026-10, stamp
 // 6a607d39, had neither the truck update's call nor this pattern); (3) the small function that hands out the static
 // object control is a field of, 0x18 into it, by the code around that function: the tail of the one before it, the
-// function itself and the start of the one after, as the gauge mod's harvest of the Steam build has it.
+// function itself and the start of the one after, as the gauge mod's harvest of the Steam build 6a607c05 has it.
 static uint64_t BuildControl(const BuildImage &im, uint32_t from, uint32_t to, std::wstring &report, int only = 0)
 {
     static const char *const kThreeCalls[2] = {

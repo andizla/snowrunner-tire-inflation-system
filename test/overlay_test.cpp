@@ -4,15 +4,20 @@
 // makes its DXGI factory, device and swap chains through its imports as SnowRunner does (CreateDXGIFactory1,
 // D3D11CreateDevice), on the WARP software device in a hidden window, and checks that:
 // - both mods draw on a swap chain made by a factory from CreateDXGIFactory1 (CreateSwapChain), and on one made by the
-//   factory of a device made without an adapter (CreateSwapChainForHwnd, flip model);
+//   factory of a device made without an adapter (CreateSwapChainForHwnd, flip model), once for each Present and for
+//   each Present1;
 // - such swap chains have a method table of the mods' own, and every factory the same one, made once;
 // - DirectX's own method tables are as they were before the mods came in (the Steam overlay hooks what they hold at
 //   each swap chain made, and with the overlay's hook in them the two called each other until the stack ran out), and a
-//   swap chain made without the program's imports (D3D11CreateDeviceAndSwapChain) gets no overlay.
+//   swap chain made without the program's imports (D3D11CreateDeviceAndSwapChain) gets no overlay;
+// - DirectInput, where a table cannot be copied (DirectInput checks its objects' tables): the mods' reads are in
+//   dinput8.dll's device table after the first frame, and a keyboard and a mouse made after it read through them.
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_4.h>
 #include <stdio.h>
+#define DIRECTINPUT_VERSION 0x0800
+#include <dinput.h>
 
 #ifdef OVERLAY_TEST_MOD
 
@@ -144,6 +149,26 @@ int main()
         dev->Release();
     }
 
+    // DirectInput's own method tables before the mods come in, through dinput8.dll's export found by name (no mod takes
+    // that way)
+    typedef HRESULT(WINAPI * DiCreateFn)(HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN);
+    const HMODULE di8 = LoadLibraryW(L"dinput8.dll");
+    const DiCreateFn diByName = di8 ? (DiCreateFn)GetProcAddress(di8, "DirectInput8Create") : nullptr;
+    void **devTable = nullptr, *devState = nullptr, *devData = nullptr;
+    {
+        IDirectInput8W *di = nullptr;
+        IDirectInputDevice8W *kb = nullptr;
+        Check(diByName && SUCCEEDED(diByName(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8W, (void **)&di, nullptr)) && di &&
+                  SUCCEEDED(di->CreateDevice(GUID_SysKeyboard, &kb, nullptr)) && kb,
+              "a DirectInput keyboard before the mods");
+        if (!kb) return 1;
+        devTable = *(void ***)kb;
+        devState = devTable[9];
+        devData = devTable[10];
+        kb->Release();
+        di->Release();
+    }
+
     // two Next Gen mods
     wchar_t dir[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, dir, MAX_PATH);
@@ -179,8 +204,8 @@ int main()
     if (!sc) return 1;
     Check(*(void ***)sc != scTable && (*(void ***)sc)[8] != scPresent, "the swap chain has a method table of the mods' own");
     Check(Presents(sc, 10) == 10, "10 presents");
-    sprintf_s(line, "both mods drew on it (A %ld frames, B %ld)", framesA, framesB);
-    Check(framesA >= 9 && framesB >= 9, line);
+    sprintf_s(line, "both mods drew on it once for each present (A %ld frames, B %ld)", framesA, framesB);
+    Check(framesA == 10 && framesB == 10, line);
     IDXGIFactory1 *again = nullptr;
     Check(SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&again)) && again && *(void ***)again == ourFactoryTable,
           "a second factory gets the same method table, made once");
@@ -214,12 +239,49 @@ int main()
     if (!sc1) return 1;
     const LONG wasA = framesA, wasB = framesB;
     Check(Presents(sc1, 10) == 10, "10 presents");
-    sprintf_s(line, "both mods drew on the new swap chain (A %ld frames, B %ld)", framesA - wasA, framesB - wasB);
-    Check(framesA - wasA >= 9 && framesB - wasB >= 9, line);
+    sprintf_s(line, "both mods drew on the new swap chain once for each present (A %ld frames, B %ld)", framesA - wasA, framesB - wasB);
+    Check(framesA - wasA == 10 && framesB - wasB == 10, line);
+    const LONG was1A = framesA, was1B = framesB;
+    DXGI_PRESENT_PARAMETERS pp = {};
+    int presented1 = 0;
+    for (int i = 0; i < 10; i++)
+        if (SUCCEEDED(sc1->Present1(0, 0, &pp))) presented1++;
+    Check(presented1 == 10, "10 presents by Present1");
+    sprintf_s(line, "both mods drew once for each Present1 too (A %ld frames, B %ld)", framesA - was1A, framesB - was1B);
+    Check(framesA - was1A == 10 && framesB - was1B == 10, line);
     sc1->Release();
     f2->Release();
     ctx2->Release();
     dev2->Release();
+
+    // the game's mouse and keys: the mods' reads are in DirectInput's own device table since the first frame, and a
+    // keyboard and a mouse made now (as a pad or a mouse plugged in later) read through them
+    {
+        Check(devTable[9] != devState && devTable[10] != devData, "the mods' DirectInput reads are in dinput8.dll's device table");
+        IDirectInput8W *di = nullptr;
+        Check(SUCCEEDED(DirectInput8Create(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8W, (void **)&di, nullptr)) && di,
+              "DirectInput8Create through the program's import");
+        if (!di) return 1;
+        IDirectInputDevice8W *kb = nullptr, *mouse = nullptr;
+        const HRESULT hrKb = di->CreateDevice(GUID_SysKeyboard, &kb, nullptr), hrMouse = di->CreateDevice(GUID_SysMouse, &mouse, nullptr);
+        sprintf_s(line, "a keyboard and a mouse from it (%08lx, %08lx)", (unsigned long)hrKb, (unsigned long)hrMouse);
+        Check(SUCCEEDED(hrKb) && kb && SUCCEEDED(hrMouse) && mouse, line);
+        if (!kb || !mouse) return 1;
+        BYTE keys[256] = {};
+        DIMOUSESTATE ms = {};
+        DIDEVICEOBJECTDATA data[8] = {};
+        DWORD count = 8;
+        const bool ready = SUCCEEDED(kb->SetDataFormat(&c_dfDIKeyboard)) && SUCCEEDED(kb->SetCooperativeLevel(other, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE)) &&
+                           SUCCEEDED(mouse->SetDataFormat(&c_dfDIMouse)) && SUCCEEDED(mouse->SetCooperativeLevel(other, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE));
+        DIPROPDWORD buffer = { { sizeof(DIPROPDWORD), sizeof(DIPROPHEADER), 0, DIPH_DEVICE }, 16 };
+        const bool acquired = ready && SUCCEEDED(kb->SetProperty(DIPROP_BUFFERSIZE, &buffer.diph)) && SUCCEEDED(kb->Acquire()) && SUCCEEDED(mouse->Acquire());
+        Check(acquired && SUCCEEDED(kb->GetDeviceState(sizeof keys, keys)) && SUCCEEDED(mouse->GetDeviceState(sizeof ms, &ms)) &&
+                  SUCCEEDED(kb->GetDeviceData(sizeof(DIDEVICEOBJECTDATA), data, &count, 0)),
+              "the keyboard's and the mouse's reads go through the mods' hooks");
+        mouse->Release();
+        kb->Release();
+        di->Release();
+    }
 
     // DirectX's own tables are as they were, and a swap chain made without the program's imports gets no overlay
     {

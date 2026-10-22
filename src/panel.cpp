@@ -8,6 +8,7 @@
 // Gameplay, where installed, has its tab in the same menu. The panel keeps the name Expeditions gives the system in
 // its own menus, so players know it.
 #include <windows.h>
+#include <vector>
 #include <xinput.h>
 #include <math.h>
 #include <stdio.h>
@@ -192,25 +193,38 @@ int PadInit(uint64_t exeBase)
         g_realGetState = own ? (XInputGetStateFn)GetProcAddress(own, "XInputGetState") : nullptr;
     }
     if (!real || !exeBase) return 0;
-    // the game loads xinput9_1_0.dll by name and keeps XInputGetState in more than one pointer (this build: its input
-    // system's at RVA 0x2af0e80 and a lazily filled one at 0x2ab7bc0): every copy in the image's non-code sections
-    // goes to the filter
+    // the game loads xinput9_1_0.dll by name and keeps XInputGetState in more than one pointer (the Steam build
+    // 6a607c05: its input system's at RVA 0x2af0e80 and a lazily filled one at 0x2ab7bc0): every copy in the image's
+    // non-code sections goes to the filter. The sections are read through ReadProcessMemory, as the mod reads the
+    // game's memory elsewhere: a page that cannot be read is passed over, not a fault on the mod's thread. Each copy
+    // is taken only while it still holds the real function, through the lock the Next Gen mods take around their
+    // slot writes.
     int n = 0;
+    const size_t kChunk = 8192; // 64 KB at a time
+    std::vector<uint64_t> chunk(kChunk);
     const BYTE *image = (const BYTE *)exeBase;
     const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + ((const IMAGE_DOS_HEADER *)image)->e_lfanew);
     const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
     for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
     {
         if (sec->Characteristics & IMAGE_SCN_MEM_EXECUTE) continue;
-        uint64_t *p = (uint64_t *)(image + sec->VirtualAddress), *end = p + sec->Misc.VirtualSize / 8;
-        for (; p < end; p++)
+        const uint64_t start = exeBase + sec->VirtualAddress;
+        const size_t words = sec->Misc.VirtualSize / 8;
+        for (size_t at = 0; at < words; at += kChunk)
         {
-            if (*p != (uint64_t)real) continue;
-            DWORD old = 0;
-            if (!VirtualProtect(p, 8, PAGE_READWRITE, &old)) continue;
-            InterlockedExchange64((volatile LONG64 *)p, (LONG64)&PadHook);
-            VirtualProtect(p, 8, old, &old);
-            n++;
+            const size_t count = words - at < kChunk ? words - at : kChunk;
+            const uint64_t from = start + at * 8;
+            if (!ReadProcessMemory(GetCurrentProcess(), (const void *)from, chunk.data(), count * 8, nullptr))
+                for (size_t w = 0; w < count; w += 512) // a page of it cannot be read: page by page, those as nothing found
+                {
+                    const size_t c = count - w < 512 ? count - w : 512;
+                    if (!ReadProcessMemory(GetCurrentProcess(), (const void *)(from + w * 8), chunk.data() + w, c * 8, nullptr)) memset(chunk.data() + w, 0, c * 8);
+                }
+            for (size_t w = 0; w < count; w++)
+            {
+                void *was = nullptr;
+                if (chunk[w] == (uint64_t)real && NgSlotSwap((void **)(from + w * 8), (void *)&PadHook, &was, (void *)real)) n++;
+            }
         }
     }
     return n;

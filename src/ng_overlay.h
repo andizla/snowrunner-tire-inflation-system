@@ -26,6 +26,11 @@ struct NgClient
 // Starts the overlay: takes the game's imports (or ReShade's events) that bring its swap chains, so call it before the
 // game makes its DirectX device. false: it cannot start (in the log).
 bool NgOverlayStart(const NgClient &client);
+// Puts value in a pointer slot (an import of a module, or a pointer the game keeps) and gives back in was what was
+// there; with expect, only while the slot still holds that. Every Next Gen mod in the process takes one lock around
+// these writes, and a write that faults (the page made read-only again by another writer) is tried again. false: not
+// written.
+bool NgSlotSwap(void **slot, void *value, void **was, void *expect = nullptr);
 // A texture of w x h pixels, 8-bit RGBA, on the game's device, for ImDrawList::PushTexture; 0 when none was made.
 // Only from frame() or page().
 ImTextureID NgTextureMake(const void *rgba, int w, int h);

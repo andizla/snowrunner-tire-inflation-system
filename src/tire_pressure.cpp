@@ -3,8 +3,9 @@
 // under each wheel, shrinks the wheel's collision cylinder (the game's own soft tire rendering then draws the
 // flattening), scales fuel use and steering speed, and soft tires driven too fast take damage.
 //
-// Where the values live (found on the running game 2026-10-02; the RVAs are the Steam build's, build_find.h finds
-// each build's own):
+// Where the values live (found on the running game 2026-10-02; the RVAs are those of the Steam build of then, exe
+// stamp 6a607c05, and lie elsewhere in later builds such as 6ab52f5d of 2026-10-20; build_find.h finds each build's
+// own):
 //   truck control global at RVA 0x2a8eb78; the driven vehicle at control+8
 //   vehicle+0x200 / +0x208 -> begin / end of its array of wheel model pointers; wheel model+0x2C8 -> wheel object
 //   wheel object (vtable RVA 0x2258918): +0x18 Havok body, +0x94 radius, +0xA0 SubstanceFriction, +0xA4 BodyFrictionAsphalt
@@ -25,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 #include "panel.h"
+#include "ng_overlay.h"
 #include "vanilla_balance.h"
 #include "marker.h"
 #include "build_find.h"
@@ -773,7 +775,8 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
 // SteerSpeed at vehicle+0x69C. Each value keeps its own stock: one the game changed gives its new value as stock, the
 // others keep theirs, so nothing scaled can be taken for stock (see ApplyWheel for what that did once).
 struct Scaled { float stock, written; };
-struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
+// action, groundAt, gearsAt: the truck action and its two lists the record was made for.
+struct VehicleStock { uint64_t action, groundAt, gearsAt; Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
 static std::unordered_map<uint64_t, VehicleStock> g_vehicles;
 
 // What a gear's number gets on top of its number x roll, so that the gear's top, 2a + 5 (a + 2 in the high gear),
@@ -795,19 +798,45 @@ static void ApplyValue(uint64_t addr, Scaled &s, float factor, float lowest, flo
     if (want != s.written && Write(addr, want)) s.written = want;
 }
 
+// Whether a value still holds what was written there last.
+static bool StillWritten(uint64_t addr, const Scaled &s)
+{
+    float now;
+    return Read(addr, now) && now == s.written;
+}
+
+static bool AllStillWritten(uint64_t begin, const std::vector<Scaled> &list)
+{
+    for (size_t i = 0; i < list.size(); i++)
+        if (!StillWritten(begin + i * 4, list[i])) return false;
+    return true;
+}
+
 // ground: the ground grip factor of each wheel (ground grip index = wheel index): the mode's factor for the ground
 // under it times its vanilla balance factor. roll: the factor for the gear speeds (RollFactor, the wheels' mean).
 static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, bool announce, const std::vector<float> &ground, float roll)
 {
     if (!vehicle) return;
+    uint64_t action = 0;
+    Read(vehicle + 0x68, action);
     auto it = g_vehicles.find(vehicle);
+    // Another truck can be made where a freed one was: it has another truck action, and its values are its own stock, not
+    // what was written for the one before. Its record starts anew then, unless all three values still hold what was
+    // written (the same truck with a new action: its values must not be taken for stock and scaled again).
+    if (it != g_vehicles.end() && it->second.action != action &&
+        !(StillWritten(vehicle + 0xE38, it->second.fuelA) && StillWritten(vehicle + 0xE3C, it->second.fuelB) && StillWritten(vehicle + 0x69C, it->second.steering)))
+    {
+        g_vehicles.erase(it);
+        it = g_vehicles.end();
+    }
     const bool first = it == g_vehicles.end();
     if (first)
     {
         const float none = nanf("");
-        it = g_vehicles.insert({ vehicle, VehicleStock{ { none, none }, { none, none }, { none, none } } }).first;
+        it = g_vehicles.insert({ vehicle, VehicleStock{ action, 0, 0, { none, none }, { none, none }, { none, none } } }).first;
     }
     VehicleStock &v = it->second;
+    v.action = action;
     ApplyValue(vehicle + 0xE38, v.fuelA, m.fuel, 0.0f, 1000.0f);
     ApplyValue(vehicle + 0xE3C, v.fuelB, m.fuel, 0.0f, 1000.0f);
     ApplyValue(vehicle + 0x69C, v.steering, m.steering, 0.0001f, 10.0f);
@@ -815,12 +844,13 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     // body friction from a float per wheel, the tire BodyFriction, in the vector at [vehicle+0x68]+0x98 .. +0xA0 (the
     // truck action). Expeditions keeps its scaled frictions between 0.05 and 10; this takes stock from 0.05 to 10 and
     // writes at most 10.
-    uint64_t action = 0, begin = 0, end = 0;
-    Read(vehicle + 0x68, action);
+    uint64_t begin = 0, end = 0;
     const bool groundOk = wheelCount && Read(action + 0x98, begin) && Read(action + 0xA0, end) && end > begin && end - begin == wheelCount * 4;
     if (groundOk)
     {
-        if (v.ground.size() != wheelCount) v.ground.assign(wheelCount, Scaled{ nanf(""), nanf("") });
+        // a list elsewhere starts anew too, unless it still holds what was written (the same values moved)
+        if (v.ground.size() != wheelCount || (v.groundAt != begin && !AllStillWritten(begin, v.ground))) v.ground.assign(wheelCount, Scaled{ nanf(""), nanf("") });
+        v.groundAt = begin;
         for (size_t i = 0; i < wheelCount; i++) ApplyValue(begin + i * 4, v.ground[i], i < ground.size() ? ground[i] : m.body, 0.05f, 10.0f, 10.0f);
     }
     // Gear speeds: the truck action's list of wheel turning speeds, one per gear (reverse, the gears, the high gear),
@@ -836,7 +866,8 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     if (gearsOk)
     {
         const size_t count = (size_t)(gearEnd - gearBegin) / 4;
-        if (v.gears.size() != count) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
+        if (v.gears.size() != count || (v.gearsAt != gearBegin && !AllStillWritten(gearBegin, v.gears))) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
+        v.gearsAt = gearBegin;
         for (size_t i = 0; i < count; i++) ApplyValue(gearBegin + i * 4, v.gears[i], roll, -1000.0f, 1000.0f, 3.0e38f, GearAdd(roll, i + 1 == count));
     }
     if (first || announce)
@@ -1034,7 +1065,7 @@ static int DamageForSpeed(const Tick &tk, float speed)
     return (int)((float)tk.minDamage * (1.0f - t) + (float)tk.maxDamage * t);
 }
 
-// The game's own damage update (Build::damageUpdate, RVA 0xd6f690 in the Steam build; one argument: the vehicle). From
+// The game's own damage update (Build::damageUpdate, RVA 0xd6f690 in the Steam build 6a607c05; one argument: the vehicle). From
 // each part's damage it makes a worn
 // out tire flat or mends a repaired one, sets the parts' effects (a wheel's: 1 when flat), sums the damage
 // (vehicle+0x108, the capacity at +0x10C) and tells the truck's script how much the sum changed (RVA 0xb27760). In
@@ -1087,9 +1118,9 @@ static TickResult DealDamage(uint64_t vehicle, const std::vector<WheelRef> &whee
 // call at RVA 0xa572c4). The import slot is pointed at ForegroundHook below (data, no code is changed): for that one
 // caller it first deals the damage this mod's thread asked for and runs the game's damage update, on the game's
 // thread and at a point of its frame where the game does the same. Every other caller just gets its answer.
-// The RVAs above are the Steam build's; Build has each build's own (foregroundSlot, truckUpdateReturn).
+// The RVAs above are the Steam build 6a607c05's; Build has each build's own (foregroundSlot, truckUpdateReturn).
 // Build::firstArgument is the way from the address of that call's return address to the update's saved first
-// argument: the function keeps it in its caller's home space (entry rsp + 8), and in the Steam build the call sits
+// argument: the function keeps it in its caller's home space (entry rsp + 8), and in the Steam build 6a607c05 (6ab52f5d too) the call sits
 // 0x410 below the entry rsp (8 pushes, a 0x3C8 frame, the call), which makes 0x418.
 struct DamageJob { uint64_t vehicle; int add, set; float speed; ULONGLONG posted; };
 static SRWLOCK g_jobLock = SRWLOCK_INIT;
@@ -1150,11 +1181,15 @@ static bool HookTruckUpdate()
     MEMORY_BASIC_INFORMATION mi = {};
     if (!Read((uint64_t)slot, real) || !real || !VirtualQuery(real, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
         !(mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return false;
-    DWORD old = 0;
-    if (!VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old)) return false;
+    // the hook needs the real function as soon as the slot leads to it; the slot is taken only while it still holds
+    // that function, through the lock the Next Gen mods take around their slot writes
     g_foregroundReal = (HWND (WINAPI *)())real;
-    InterlockedExchangePointer(slot, (void *)ForegroundHook);
-    VirtualProtect(slot, sizeof *slot, old, &old);
+    void *was = nullptr;
+    if (!NgSlotSwap(slot, (void *)ForegroundHook, &was, real))
+    {
+        g_foregroundReal = nullptr;
+        return false;
+    }
     return true;
 }
 
@@ -1517,7 +1552,7 @@ static DWORD WINAPI Run(void *)
     for (DWORD tick = 0;; tick++)
     {
         Sleep(50);
-        // The game fills its pointers to XInputGetState as it goes (this build has two, and one is only set when
+        // The game fills its pointers to XInputGetState as it goes (the builds 6a607c05 and 6ab52f5d have two, and one is only set when
         // that part of the game first reads the pad): every two seconds the new ones are sent through the filter.
         if (g_overlayOk && tick % 40 == 0)
         {
@@ -2459,16 +2494,22 @@ static bool BuildTest(const wchar_t *file)
     Build b;
     std::wstring missing;
     const bool found = BuildFindAll({ image.data(), image.size(), base }, b, missing);
-    static const Build kSteam = { 0x6a607c05, 0x2e02000, 0x2a8eb78, 0x2258918, 0x23c2c08, 0xd6f690, 0x21be360, 0xa57535, 0x418 };
-    const bool known = b.stamp == kSteam.stamp;
-    const bool same = b.image == kSteam.image && b.control == kSteam.control && b.wheelVtable == kSteam.wheelVtable && b.cylinderVtable == kSteam.cylinderVtable &&
-                      b.damageUpdate == kSteam.damageUpdate && b.foregroundSlot == kSteam.foregroundSlot && b.truckUpdateReturn == kSteam.truckUpdateReturn &&
-                      b.firstArgument == kSteam.firstArgument;
+    // the numbers of the builds the mod is checked on: the Steam build it was made on (6a607c05), and the game's update
+    // of 2026-10-20 (6ab52f5d; each place compared with the first build's code in the code review of 2026-10-23)
+    static const Build kKnown[] = { { 0x6a607c05, 0x2e02000, 0x2a8eb78, 0x2258918, 0x23c2c08, 0xd6f690, 0x21be360, 0xa57535, 0x418 },
+                                    { 0x6ab52f5d, 0x2e06000, 0x2a92e38, 0x225ab38, 0x23c54a8, 0xd710b0, 0x21c0360, 0xa58de5, 0x418 } };
+    const Build *k = nullptr;
+    for (const Build &row : kKnown)
+        if (row.stamp == b.stamp) k = &row;
+    const bool known = k != nullptr;
+    const bool same = known && b.image == k->image && b.control == k->control && b.wheelVtable == k->wheelVtable && b.cylinderVtable == k->cylinderVtable &&
+                      b.damageUpdate == k->damageUpdate && b.foregroundSlot == k->foregroundSlot && b.truckUpdateReturn == k->truckUpdateReturn &&
+                      b.firstArgument == k->firstArgument;
     bool ok = found && (!known || (same && missing.empty()));
     printf("%s game code in %ls (build stamp %08x, image %x): control %llx, wheel class %llx, cylinder class %llx, damage update %llx, foreground slot %llx, "
            "truck update return %llx, first argument +%llx%s\n", ok ? "ok  " : "FAIL", file, b.stamp, b.image, b.control, b.wheelVtable, b.cylinderVtable, b.damageUpdate,
            b.foregroundSlot, b.truckUpdateReturn, b.firstArgument,
-           !found ? "" : !known ? ": a build the test has no numbers for" : same ? ": as the mod was made with" : ": NOT the numbers the mod was made with");
+           !found ? "" : !known ? ": a build the test has no numbers for" : same ? ": as the test has them for this build" : ": NOT the numbers the test has for this build");
     if (!found) printf("     not as the mod needs it: %ls\n", missing.c_str());
     else if (!missing.empty()) printf("     without the game-thread path (tire damage would be dealt from the mod's own thread): %ls\n", missing.c_str());
     if (known)
@@ -2478,7 +2519,7 @@ static bool BuildTest(const wchar_t *file)
         const BuildImage img = { image.data(), image.size(), base };
         uint64_t ways[3];
         for (int w = 0; w < 3; w++) ways[w] = BuildControl(img, 0, 0xFFFFFFFFu, none, w + 1);
-        const bool agree = ways[0] == kSteam.control && ways[1] == kSteam.control && ways[2] == kSteam.control;
+        const bool agree = ways[0] == k->control && ways[1] == k->control && ways[2] == k->control;
         printf("%s game code: the control global by each of its three ways alone, over the whole code: %llx, %llx, %llx\n", agree ? "ok  " : "FAIL", ways[0], ways[1], ways[2]);
         ok = ok && agree;
     }

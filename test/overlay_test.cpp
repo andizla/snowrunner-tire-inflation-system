@@ -11,7 +11,13 @@
 //   each swap chain made, and with the overlay's hook in them the two called each other until the stack ran out), and a
 //   swap chain made without the program's imports (D3D11CreateDeviceAndSwapChain) gets no overlay;
 // - DirectInput, where a table cannot be copied (DirectInput checks its objects' tables): the mods' reads are in
-//   dinput8.dll's device table after the first frame, and a keyboard and a mouse made after it read through them.
+//   dinput8.dll's device table after the first frame, and a keyboard and a mouse made after it read through them;
+// - a stand-in for the Steam overlay's hook, put in DirectX's factory table before the mods come in, as Steam's sits in
+//   DXGI's code under every other hook: at each new swap chain it notes what the swap chain's Present slot holds, as
+//   Steam does before it hooks that function with one pointer to call on to for all. It may only ever see DirectX's own
+//   Present: a second function there is what looped with Steam (the tester's crash of 2026-10-22);
+// - the two mods writing slots on one read-only page at once, as at the game's start: every write lands, none faults,
+//   and the page stays read-only.
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_4.h>
@@ -41,6 +47,12 @@ static void TestFrame() { InterlockedIncrement(g_frames); }
 static void TestPage() {}
 static void TestDeviceGone() {}
 
+extern "C" __declspec(dllexport) bool TestSlotSwap(void **slot, void *value)
+{
+    void *was = nullptr;
+    return NgSlotSwap(slot, value, &was);
+}
+
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
     strncpy_s(g_tab, tab, _TRUNCATE);
@@ -59,7 +71,65 @@ extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, vola
 #else
 
 typedef bool (*StartFn)(const char *tab, int order, volatile LONG *frames);
+typedef bool (*SwapFn)(void **slot, void *value);
 static int g_failed = 0;
+
+// The Steam overlay's way, in short: at every swap chain made, a look at what its Present slot holds (Steam then hooks
+// that function, keeping one pointer to call on to). These note each function seen there.
+typedef HRESULT(STDMETHODCALLTYPE *CreateSwapChainFn)(IDXGIFactory *, IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **);
+typedef HRESULT(STDMETHODCALLTYPE *CreateSwapChainHwndFn)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
+                                                         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
+static CreateSwapChainFn g_steamCreate = nullptr;
+static CreateSwapChainHwndFn g_steamCreateHwnd = nullptr;
+static void *g_steamSaw[8] = {};
+static int g_steamSawCount = 0, g_steamLooks = 0;
+
+static void SteamLook(IUnknown *sc)
+{
+    void *present = (*(void ***)sc)[8];
+    g_steamLooks++;
+    for (int i = 0; i < g_steamSawCount; i++)
+        if (g_steamSaw[i] == present) return;
+    if (g_steamSawCount < 8) g_steamSaw[g_steamSawCount++] = present;
+}
+
+static HRESULT STDMETHODCALLTYPE SteamCreate(IDXGIFactory *f, IUnknown *dev, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **out)
+{
+    const HRESULT hr = g_steamCreate(f, dev, desc, out);
+    if (SUCCEEDED(hr) && out && *out) SteamLook(*out);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE SteamCreateHwnd(IDXGIFactory2 *f, IUnknown *dev, HWND wnd, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                                 const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *full, IDXGIOutput *output, IDXGISwapChain1 **out)
+{
+    const HRESULT hr = g_steamCreateHwnd(f, dev, wnd, desc, full, output, out);
+    if (SUCCEEDED(hr) && out && *out) SteamLook(*out);
+    return hr;
+}
+
+static void TableWrite(void **slot, void *value)
+{
+    DWORD old = 0;
+    VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old);
+    *slot = value;
+    VirtualProtect(slot, sizeof(void *), old, &old);
+}
+
+// One mod's slot writes, many at once with the other's.
+struct SwapRun
+{
+    SwapFn swap;
+    void **slot;
+    int done;
+};
+
+static DWORD WINAPI SwapThread(void *p)
+{
+    SwapRun *r = (SwapRun *)p;
+    for (int i = 1; i <= 20000; i++) r->done += r->swap(r->slot, (void *)(intptr_t)i) ? 1 : 0;
+    return 0;
+}
 
 static void Check(bool ok, const char *what)
 {
@@ -141,6 +211,11 @@ int main()
         scTable = *(void ***)sc;
         scPresent = scTable[8];
         fTable = *(void ***)f;
+        // the Steam stand-in under every other hook, as Steam's detour in DXGI's code is
+        g_steamCreate = (CreateSwapChainFn)fTable[10];
+        g_steamCreateHwnd = (CreateSwapChainHwndFn)fTable[15];
+        TableWrite(&fTable[10], (void *)&SteamCreate);
+        TableWrite(&fTable[15], (void *)&SteamCreateHwnd);
         fCreate = fTable[10];
         fCreateHwnd = fTable[15];
         f->Release();
@@ -302,6 +377,29 @@ int main()
         sc3->Release();
         ctx3->Release();
         dev3->Release();
+    }
+
+    // what the Steam stand-in saw in the Present slots of the swap chains made since the mods came in
+    sprintf_s(line, "the Steam stand-in saw only DirectX's own Present in every new swap chain (%d looks, %d function%s)", g_steamLooks, g_steamSawCount,
+              g_steamSawCount == 1 ? "" : "s");
+    Check(g_steamLooks >= 3 && g_steamSawCount == 1 && g_steamSaw[0] == scPresent, line);
+
+    // the two mods writing slots on one read-only page at once
+    {
+        const SwapFn swapA = (SwapFn)GetProcAddress(a, "TestSlotSwap"), swapB = (SwapFn)GetProcAddress(b, "TestSlotSwap");
+        void **page = (void **)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        DWORD old = 0;
+        const bool made = swapA && swapB && page && VirtualProtect(page, 4096, PAGE_READONLY, &old);
+        SwapRun ra = { swapA, page, 0 }, rb = { swapB, page ? page + 1 : nullptr, 0 };
+        HANDLE th[2] = { made ? CreateThread(nullptr, 0, SwapThread, &ra, 0, nullptr) : nullptr, made ? CreateThread(nullptr, 0, SwapThread, &rb, 0, nullptr) : nullptr };
+        if (th[0] && th[1]) WaitForMultipleObjects(2, th, TRUE, 60000);
+        MEMORY_BASIC_INFORMATION mi = {};
+        const bool readOnly = page && VirtualQuery(page, &mi, sizeof(mi)) == sizeof(mi) && mi.Protect == PAGE_READONLY;
+        sprintf_s(line, "the two mods wrote slots on one read-only page at once: %d and %d of 20000 writes, the page %s", ra.done, rb.done,
+                  readOnly ? "read-only again" : "NOT read-only");
+        Check(th[0] && th[1] && ra.done == 20000 && rb.done == 20000 && page[0] == (void *)20000 && page[1] == (void *)20000 && readOnly, line);
+        for (HANDLE h : th)
+            if (h) CloseHandle(h);
     }
 
     printf(g_failed ? "OVERLAY TEST FAILED (%d)\n" : "OVERLAY TEST OK\n", g_failed);

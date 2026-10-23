@@ -64,6 +64,9 @@ struct NgShared
         char tab[40];
     } slots[kNgSlots];
 };
+// Next Gen Graphics (hid.dll) reads the block too: its F keys go silent while graphics is not 0, read at byte 192 of a
+// version 3 block. A layout that moves it needs a new kNgSharedVersion.
+static_assert(offsetof(NgShared, graphics) == 192, "hid.dll reads NgShared::graphics at byte 192 of block version 3");
 static NgShared g_private = {};
 static NgShared *g_shared = &g_private;
 static int g_slot = -1;

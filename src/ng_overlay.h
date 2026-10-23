@@ -39,6 +39,13 @@ void NgTextureFree(ImTextureID tex);
 bool NgMenuOpen();
 // The menu's key, a virtual key code; 0 leaves it. Saved in NextGen.ini, which every Next Gen mod reads at start.
 void NgMenuKeySet(int vk);
+// What the start found about ReShade, which the release brings for the overlay to take the game's swap chains from:
+// registered (ReShade took the overlay as an add-on), the ReShade module that did not, the dxgi.dll beside the game's
+// exe. Sets the notice the menu shows above the tab's page and the line shown at the top for the first 15 s; returns 0
+// with ReShade working, 1 for a ReShade that takes no add-ons, 2 for no ReShade, 3 for another program's dxgi.dll.
+// NgOverlayStart calls it; NgReShadeNote() is the notice, empty with ReShade working.
+int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi);
+const char *NgReShadeNote();
 // The theme's colours, for a mod's own drawing: the logo's orange (top, middle, bottom of its gradient) and the greys.
 static const ImU32 kNgOrangeTop = IM_COL32(255, 203, 57, 255), kNgOrange = IM_COL32(254, 158, 32, 255), kNgOrangeLow = IM_COL32(236, 103, 19, 255);
 static const ImU32 kNgGreyDeep = IM_COL32(20, 20, 22, 255), kNgGrey = IM_COL32(42, 42, 46, 255), kNgGreyLight = IM_COL32(74, 74, 80, 255);

@@ -53,6 +53,13 @@ extern "C" __declspec(dllexport) bool TestSlotSwap(void **slot, void *value)
     return NgSlotSwap(slot, value, &was);
 }
 
+extern "C" __declspec(dllexport) int TestReShade(bool registered, HMODULE reshade, const wchar_t *dxgi, char *note, int size)
+{
+    const int r = reshade || dxgi || registered ? NgReShadeCheck(registered, reshade, dxgi) : -1;
+    strncpy_s(note, size, NgReShadeNote(), _TRUNCATE);
+    return r;
+}
+
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
     strncpy_s(g_tab, tab, _TRUNCATE);
@@ -136,6 +143,55 @@ static void Check(bool ok, const char *what)
     printf("%s %s\n", ok ? "ok    " : "FAILED", what);
     fflush(stdout);
     if (!ok) g_failed++;
+}
+
+static void WriteAll(const wchar_t *path, const void *data, DWORD n)
+{
+    const HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD put = 0;
+    if (f == INVALID_HANDLE_VALUE) return;
+    WriteFile(f, data, n, &put, nullptr);
+    CloseHandle(f);
+}
+
+// What the start makes of ReShade in each case, and what the menu's notice then says: the start of the two mods found no
+// ReShade and no dxgi.dll beside this exe; the other cases are read from files made for them.
+static void TestReShadeCases(HMODULE a, HMODULE b)
+{
+    typedef int (*RsFn)(bool, HMODULE, const wchar_t *, char *, int);
+    const RsFn rsA = a ? (RsFn)GetProcAddress(a, "TestReShade") : nullptr, rsB = b ? (RsFn)GetProcAddress(b, "TestReShade") : nullptr;
+    char note[1024] = "";
+    Check(rsA && rsA(false, nullptr, nullptr, note, sizeof(note)) == -1 && strncmp(note, "ReShade is not in the game.", 27) == 0,
+          "no ReShade and no dxgi.dll beside the exe: the start's notice says ReShade is not in the game");
+    if (!rsB) return;
+    wchar_t tmp[MAX_PATH], none[MAX_PATH], rs[MAX_PATH], edge[MAX_PATH], other[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    wcscat_s(tmp, L"ng_rs_test\\");
+    CreateDirectoryW(tmp, nullptr);
+    swprintf_s(none, L"%snone\\dxgi.dll", tmp);
+    swprintf_s(rs, L"%srs.dll", tmp);
+    swprintf_s(edge, L"%sedge.dll", tmp);
+    swprintf_s(other, L"%sother.dll", tmp);
+    static char bytes[70000];
+    static const char mark[] = "crosire's ReShade";
+    memset(bytes, 'x', sizeof(bytes));
+    memcpy(bytes + 100, mark, sizeof(mark) - 1);
+    WriteAll(rs, bytes, 1000);
+    memset(bytes, 'x', sizeof(bytes));
+    memcpy(bytes + 65536 - 8, mark, sizeof(mark) - 1); // across the end of the reader's first 64 KB
+    WriteAll(edge, bytes, sizeof(bytes));
+    memset(bytes, 'x', sizeof(bytes));
+    WriteAll(other, bytes, sizeof(bytes));
+    Check(rsB(false, nullptr, none, note, sizeof(note)) == 2 && strstr(note, "copy dxgi.dll and ReShade.ini"), "no dxgi.dll: ReShade is missing, and the notice says what to copy");
+    Check(rsB(false, nullptr, rs, note, sizeof(note)) == 1 && strstr(note, "takes no add-ons"), "a dxgi.dll that is ReShade but took no add-on: the notice says so");
+    Check(rsB(false, nullptr, edge, note, sizeof(note)) == 1, "ReShade's name across the end of the reader's 64 KB is still found");
+    Check(rsB(false, nullptr, other, note, sizeof(note)) == 3 && strstr(note, "another program's dxgi.dll"), "another program's dxgi.dll: the notice says so");
+    Check(rsB(false, GetModuleHandleW(L"kernel32.dll"), nullptr, note, sizeof(note)) == 1, "a ReShade module that did not take the add-on: no add-ons");
+    Check(rsB(true, nullptr, nullptr, note, sizeof(note)) == 0 && !note[0], "ReShade took the add-on: no notice");
+    DeleteFileW(rs);
+    DeleteFileW(edge);
+    DeleteFileW(other);
+    RemoveDirectoryW(tmp);
 }
 
 static HWND Window(const wchar_t *title)
@@ -258,6 +314,7 @@ int main()
     static volatile LONG framesA = 0, framesB = 0;
     Check(startA("A", 1, &framesA), "mod A's overlay starts");
     Check(startB("B", 2, &framesB), "mod B's overlay starts");
+    TestReShadeCases(a, b);
 
     // the game's way: a factory from CreateDXGIFactory1, a device on one of its adapters, the swap chain from the factory
     IDXGIFactory1 *f = nullptr;

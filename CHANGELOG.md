@@ -2,7 +2,8 @@
 
 ## [1.3.0]
 
-- No ReShade needed: the panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device; Next Gen Gameplay draws with the same code. Where ReShade is installed the mod takes the game's swap chain from it and draws after it, over Luma's HDR too. The zip no longer brings ReShade.
+- The panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay; Next Gen Gameplay draws with the same code. The zip brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and binds no keys, and the mod takes the game's swap chains from it, drawing after ReShade and Luma's HDR. Without ReShade the mod draws on its own, but on a tester's PC with RivaTuner and two screens the game then crashed; with ReShade it did not.
+- When ReShade is missing, takes no add-ons, or another program's `dxgi.dll` is in its place, the mod says so at the start: in a line at the top for 15 seconds and in the NEXT GEN menu, with what to do, and in its log.
 - The settings are in the Tire Inflation tab of the NEXT GEN menu, which Delete opens and closes; with Next Gen Gameplay installed its Gameplay tab is in the same window. The key is set in `NextGen.ini` next to the exe, or in the menu: click the key's name at its top right, then press the new key. While the menu is open the game gets no mouse and no keys.
 - Works alongside the Spotter minimap mod. With ReShade too, Spotter needs its own `reshade_addon_mode` on (in its `options.json`): its DirectX probe at start otherwise ends the game while ReShade sets up its hooks.
 - Should one Next Gen mod's overlay fail, its tab leaves the NEXT GEN menu and the other mod's tab shows; with no tab left the menu closes, so the game never loses its mouse and keys to a menu nobody draws. The log says where it failed.

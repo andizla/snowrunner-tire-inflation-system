@@ -739,6 +739,88 @@ static void MenuOpen()
     InterlockedExchange(&sh->open, 1);
 }
 
+// ---- ReShade in the game ----
+// The release brings ReShade 6.8.0 (dxgi.dll, without its start banner, and a ReShade.ini that loads no effects and binds
+// no keys), and the overlay takes the game's swap chains from it. Without it the overlay draws on its own, and on a
+// tester's PC with RivaTuner and two screens the game then crashed (2026-10-23); with ReShade it did not. What the start
+// found is told in the log, in the menu above the tab's page and, for the first 15 s, in a line at the top that the first
+// mod in order draws, so it shows once however many Next Gen mods are in the game.
+enum { kRsOk, kRsNoAddons, kRsMissing, kRsOther };
+static int g_rs = kRsOk;
+static char g_rsNote[720] = "";   // the menu's notice; empty while ReShade hands the overlay its presents
+static const char *g_rsLine = ""; // the line at the top, before the menu's key
+static ULONGLONG g_rsLineAt = 0;  // when that line first showed
+
+// Whether a file is ReShade by its bytes: every ReShade names itself so in the line that starts its log.
+static bool FileIsReShade(const wchar_t *path)
+{
+    const HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    static const char kMark[] = "crosire's ReShade";
+    const size_t m = sizeof(kMark) - 1;
+    static char buf[1 << 16];
+    size_t keep = 0;
+    bool found = false;
+    DWORD got = 0;
+    while (!found && ReadFile(f, buf + keep, (DWORD)(sizeof(buf) - keep), &got, nullptr) && got)
+    {
+        const size_t have = keep + got;
+        for (size_t i = 0; i + m <= have && !found; i++) found = memcmp(buf + i, kMark, m) == 0;
+        keep = have < m - 1 ? have : m - 1; // a name cut by the read's end is found with the next one
+        memmove(buf, buf + have - keep, keep);
+    }
+    CloseHandle(f);
+    return found;
+}
+
+int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi)
+{
+    if (registered) g_rs = kRsOk;
+    else if (reshade || (dxgi && FileIsReShade(dxgi))) g_rs = kRsNoAddons;
+    else g_rs = dxgi && GetFileAttributesW(dxgi) != INVALID_FILE_ATTRIBUTES ? kRsOther : kRsMissing;
+    static const char *const kNote[] = {
+        "",
+        "The ReShade in the game takes no add-ons: it is a build without full add-on support, or one older than 6.8. Next Gen's mods draw "
+        "through ReShade: put the dxgi.dll from the mod's zip in place of its own, keep your ReShade.ini and presets, and start the game "
+        "again. Until then the mods draw on their own, and with RivaTuner or a second screen the game can crash.",
+        "ReShade is not in the game. Next Gen's mods draw through it: copy dxgi.dll and ReShade.ini from the mod's zip into Sources\\Bin, "
+        "next to SnowRunner.exe, and start the game again. That ReShade shows nothing of its own: no effects, no keys, no banner. "
+        "Without it the mods draw on their own, and with RivaTuner or a second screen the game can crash.",
+        "Sources\\Bin holds another program's dxgi.dll, so ReShade cannot go there. The mods draw on their own, and with RivaTuner or a "
+        "second screen the game can crash. If that dxgi.dll is not needed, set it aside and copy in the one from the mod's zip, with "
+        "ReShade.ini.",
+    };
+    static const char *const kLine[] = { "", "Next Gen: the ReShade in the game takes no add-ons.", "Next Gen: ReShade is not in the game.",
+                                          "Next Gen: another program's dxgi.dll is in the game's folder." };
+    strcpy_s(g_rsNote, kNote[g_rs]);
+    g_rsLine = kLine[g_rs];
+    return g_rs;
+}
+
+const char *NgReShadeNote() { return g_rsNote; }
+
+// The line at the top while ReShade does not work, for the first 15 s of frames, from the first mod in order alone.
+static void ReShadeLine(float s, ULONGLONG now)
+{
+    NgShared *sh = g_shared;
+    int first = -1;
+    for (int i = 0; i < kNgSlots; i++)
+        if (sh->slots[i].ready && (first < 0 || sh->slots[i].order < sh->slots[first].order)) first = i;
+    if (first != g_slot) return;
+    if (!g_rsLineAt) g_rsLineAt = now;
+    if (now - g_rsLineAt > 15000) return;
+    char key[32], text[256];
+    KeyName(sh->key ? sh->key : kNgKeyDefault, key, sizeof(key));
+    snprintf(text, sizeof(text), "%s %s opens the NEXT GEN menu with what to do.", g_rsLine, key);
+    const float px = 20.0f * s, pad = 10.0f * s;
+    const ImVec2 t = g_fontText->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    const ImVec2 a(16.0f * s, 16.0f * s), b(a.x + t.x + 2.0f * pad + 6.0f * s, a.y + t.y + 2.0f * pad);
+    dl->AddRectFilled(a, b, IM_COL32(20, 20, 22, 230), 6.0f * s);
+    dl->AddRectFilled(a, ImVec2(a.x + 4.0f * s, b.y), kNgOrangeLow, 6.0f * s, ImDrawFlags_RoundCornersLeft);
+    dl->AddText(g_fontText, px, ImVec2(a.x + pad + 6.0f * s, a.y + pad), IM_COL32(240, 240, 240, 255), text);
+}
+
 static void MenuDraw(float s)
 {
     NgShared *sh = g_shared;
@@ -854,13 +936,25 @@ static void MenuDraw(float s)
             const ImVec2 vt = g_fontText->CalcTextSizeA(notePx, FLT_MAX, 0.0f, ver);
             if (keyAt.x - 14.0f * s - vt.x > x) dl->AddText(g_fontText, notePx, ImVec2(keyAt.x - 14.0f * s - vt.x, p.y + (headH - vt.y) * 0.5f), IM_COL32(142, 142, 147, 255), ver);
         }
+        // while ReShade does not hand the overlay its presents: what is wrong and what to do, above the page
+        float top = p.y + headH + 12.0f * s;
+        if (g_rsNote[0])
+        {
+            const float px = 17.0f * s, inner = 10.0f * s, wrap = size.x - 2.0f * pad - 2.0f * inner;
+            const ImVec2 t = g_fontText->CalcTextSizeA(px, FLT_MAX, wrap, g_rsNote);
+            const ImVec2 a(p.x + pad, top), b(p.x + size.x - pad, top + t.y + 2.0f * inner);
+            dl->AddRectFilled(a, b, IM_COL32(236, 103, 19, 40), 6.0f * s);
+            dl->AddRect(a, b, IM_COL32(236, 103, 19, 170), 6.0f * s, 0, 1.0f * s);
+            dl->AddText(g_fontText, px, ImVec2(a.x + inner, a.y + inner), IM_COL32(240, 240, 240, 255), g_rsNote, nullptr, wrap);
+            top = b.y + 10.0f * s;
+        }
         // the chosen mod's page
-        ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + headH + 12.0f * s));
+        ImGui::SetCursorScreenPos(ImVec2(p.x + pad, top));
         // the page's content keeps a margin from the window's edges; it is no navigation target of its own (as one it
         // got the keyboard's orange frame around it, its content flush against the frame)
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * s, 6.0f * s));
-        const bool body = ImGui::BeginChild("##page", ImVec2(size.x - 2.0f * pad + 6.0f * s, size.y - headH - 12.0f * s - pad), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
-                                            ImGuiWindowFlags_None);
+        const bool body = ImGui::BeginChild("##page", ImVec2(size.x - 2.0f * pad + 6.0f * s, fmaxf(size.y - (top - p.y) - pad, 40.0f * s)),
+                                            ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_None);
         ImGui::PopStyleVar();
         if (body && g_client.page) g_client.page();
         ImGui::EndChild();
@@ -1165,6 +1259,7 @@ static void Frame(IDXGISwapChain *sc)
     ImGui::NewFrame();
     if (g_client.frame) g_client.frame();
     if (menu) MenuDraw(s);
+    else if (g_rsNote[0] && !sh->open) ReShadeLine(s, now);
     ImGui::Render();
     ImDrawData *dd = ImGui::GetDrawData();
     if (dd && dd->CmdListsCount > 0)
@@ -1458,13 +1553,17 @@ static void SwapChainFromReShade(IDXGISwapChain *sc)
     if (sc) SwapChainOwnGuarded(sc);
 }
 
-// Two minutes after the start without a swap chain of the game's through the overlay's hooks: the log says so.
-static DWORD WINAPI WatchThread(void *)
+// Two minutes after the start without a swap chain of the game's, through ReShade or the overlay's hooks: the log says so.
+static DWORD WINAPI WatchThread(void *viaReShade)
 {
     Sleep(120000);
     if (!g_scOwned && !g_ownBroken)
-        NG_LOG(L"overlay: no swap chain of the game's came through the overlay's hooks in two minutes: nothing is drawn (the game may have made "
-               L"its DXGI factory and device before the overlay started)");
+    {
+        if (viaReShade) NG_LOG(L"overlay: ReShade took the overlay as an add-on but handed it no swap chain of the game's in two minutes: nothing is drawn");
+        else
+            NG_LOG(L"overlay: no swap chain of the game's came through the overlay's hooks in two minutes: nothing is drawn (the game may have made "
+                   L"its DXGI factory and device before the overlay started)");
+    }
     return 0;
 }
 
@@ -1481,12 +1580,21 @@ bool NgOverlayStart(const NgClient &client)
     // with ReShade installed the game's swap chains come from ReShade's presents
     HMODULE self = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&NgOverlayStart, &self);
-    if (self && NgReShadeWatch(self, &SwapChainFromReShade))
+    const bool viaReShade = self && NgReShadeWatch(self, &SwapChainFromReShade);
+    const HMODULE reshade = viaReShade ? nullptr : NgReShadeModule();
+    wchar_t dxgi[MAX_PATH + 16] = L"";
+    const DWORD n = GetModuleFileNameW(nullptr, dxgi, MAX_PATH);
+    wchar_t *cut = n && n < MAX_PATH ? wcsrchr(dxgi, L'\\') : nullptr;
+    if (cut) wcscpy_s(cut + 1, dxgi + MAX_PATH + 16 - (cut + 1), L"dxgi.dll");
+    NgReShadeCheck(viaReShade, reshade, cut ? dxgi : nullptr);
+    if (viaReShade)
     {
         NG_LOG(L"overlay: ReShade is installed: the overlay takes the game's swap chains from ReShade's presents");
+        const HANDLE t = CreateThread(nullptr, 0, WatchThread, (void *)1, 0, nullptr);
+        if (t) CloseHandle(t);
         return true;
     }
-    if (const HMODULE reshade = NgReShadeModule())
+    if (reshade)
     {
         wchar_t name[MAX_PATH] = L"?";
         GetModuleFileNameW(reshade, name, MAX_PATH);
@@ -1494,6 +1602,7 @@ bool NgOverlayStart(const NgClient &client)
                L"support; ReShade.log says why): the overlay takes the game's swap chains as the game makes them, ReShade's own, and draws under ReShade's effects",
                name);
     }
+    NG_LOG(L"overlay: %S", g_rsNote);
     const HMODULE exe = GetModuleHandleW(nullptr);
     const bool factory = NgSlotSwap(ImportSlot(exe, "dxgi.dll", "CreateDXGIFactory1"), (void *)&HookCreateFactory, (void **)&g_gameCreateFactory);
     const bool device = NgSlotSwap(ImportSlot(exe, "d3d11.dll", "D3D11CreateDevice"), (void *)&HookCreateDevice, (void **)&g_gameCreateDevice);

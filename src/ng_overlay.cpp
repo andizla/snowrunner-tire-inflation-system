@@ -902,8 +902,8 @@ static void GraphicsPage()
 {
     const NgGraphicsApi *api = g_graphics;
     if (!api) return;
-    ImGui::TextWrapped("Next Gen Graphics: these switch its effects on and off while you play, as its F keys do. What the game starts with is set in "
-                       "its own ini.");
+    ImGui::TextWrapped("These switch Next Gen Graphics' effects on and off while you play. What the game starts with is set in SnowRunnerShadows.ini. "
+                       "Its F keys are off while this tab is here. KeysWithMenu=1 in that ini brings them back.");
     ImGui::Spacing();
     for (int i = 0; i < api->count; i++)
     {

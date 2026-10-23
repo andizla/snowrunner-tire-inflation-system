@@ -381,16 +381,20 @@ int main()
     Check(startA && startB && a != b, "the two stand-in mods load, each its own copy");
     if (!startA || !startB) return 1;
     static volatile LONG framesA = 0, framesB = 0;
-    // a NextGen.ini beside the exe that still holds the menu's old default key (Delete), never picked in the menu: the
-    // start moves it to Page Down once
+    // a NextGen.ini beside the exe that still holds a test build's default key, never picked in the menu: each start
+    // moves it to F2 once. Mod A meets the first default (Delete), mod B the second (Page Down, moved there from Delete)
     wchar_t ini[MAX_PATH];
     swprintf_s(ini, L"%sNextGen.ini", dir);
     DeleteFileW(ini);
     WritePrivateProfileStringW(L"Menu", L"Key", L"46", ini);
     Check(startA("A", 1, &framesA), "mod A's overlay starts");
+    Check(GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_F2 && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 2,
+          "NextGen.ini's first default key, Delete, moves to F2 once");
+    WritePrivateProfileStringW(L"Menu", L"Key", L"34", ini);
+    WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"1", ini);
     Check(startB("B", 2, &framesB), "mod B's overlay starts");
-    Check(GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_NEXT && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 1,
-          "NextGen.ini's old default key, Delete, moves to Page Down once");
+    Check(GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_F2 && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 2,
+          "NextGen.ini's second default key, Page Down, moves to F2 once");
     TestReShadeCases(a, b);
 
     // the game's way: a factory from CreateDXGIFactory1, a device on one of its adapters, the swap chain from the factory

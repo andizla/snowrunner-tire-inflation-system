@@ -15,7 +15,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 
 1. Close the game.
 2. Copy the files from the zip into the game's `Sources\Bin` folder, next to `SnowRunner.exe`: `version.dll`, `TirePressure.asi`, `dxgi.dll` and `ReShade.ini`.
-3. Start the game. Page Down opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
+3. Start the game. F2 opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
 
 Already using ReShade? If Windows asks whether to replace `dxgi.dll` or `ReShade.ini`, ReShade is already in the game: choose Skip for those two, and your ReShade and its settings stay. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone. Coming from 1.2 with the ReShade it brought: replacing its `dxgi.dll` is fine, the new one only shows no banner at the start; keep your `ReShade.ini` if you changed it.
 
@@ -108,7 +108,7 @@ Airing a tire down to half its pressure lengthens its contact patch by about hal
 
 ## Settings
 
-The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play. Page Down opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. With Next Gen Gameplay installed, its Gameplay tab is in the same window. While the menu is open the game gets no mouse and no keys. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
+The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play. F2 opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. With Next Gen Gameplay installed, its Gameplay tab is in the same window. While the menu is open the game gets no mouse and no keys. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
 
 - Every number in the two tables of the modes, and tire damage on or off.
 - Hard mode, changes only while standing still, the outside temperature and whether the tires feel it.

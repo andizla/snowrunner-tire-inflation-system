@@ -212,7 +212,7 @@ static void ReadIni(TpSettings &s)
         if (_wfopen_s(&f, ini.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
         {
             fwprintf(f, L"; TirePressure: tire pressure for the truck being driven: Low, Reduced, Normal and (Increased=1) Increased.\n"
-                        L"; The Tire Inflation tab of the NEXT GEN menu (Page Down opens it, or the key in NextGen.ini) edits everything here in the game.\n"
+                        L"; The Tire Inflation tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
                         L"; Key is a virtual key code (114 = F3). Beep=1 beeps once for Normal, twice for Reduced, three times for Low,\n"
                         L"; and high for Increased. Seconds is how long the tires take to deflate or inflate to the new mode.\n"
                         L"; SoundVolume (0 to 100, 0 = none): air let out while the tires deflate, air going in while they fill,\n"
@@ -1538,7 +1538,7 @@ static DWORD WINAPI Run(void *)
     if (!SoundStart(g_dir)) Log(L"sound: none, as its thread did not start");
     g_now = FactorsAt(g_pressure); // with a base grip, Normal is not the stock values: the first wheels get it straight away
     Log(L"panel: %s", g_ui ? L"drawn by the mod's own overlay" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
-    if (g_overlayOk) Log(L"settings: the Tire Inflation tab of the NEXT GEN menu (Page Down opens it, or the key in NextGen.ini)");
+    if (g_overlayOk) Log(L"settings: the Tire Inflation tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini)");
     bool down = false, chainSeen = false, moving = false, panelOpen = false;
     int sel = 0;
     uint32_t padPrev = 0;

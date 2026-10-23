@@ -33,14 +33,14 @@ static NgClient g_client = {};
 // version 1 still does (its probe's Present hook), which can end the game with the Steam overlay. A mod of another
 // version is named in the log and keeps a menu of its own.
 static const LONG kNgSharedVersion = 3;
-// The menu's key when NextGen.ini has none: Page Down. Compact keyboards (75 percent) have it, where End is often
-// missing; the game, ReShade (Home, and Page Up for its screenshots here), the Spotter minimap mod (F4 to F9, Insert,
-// Home) and Steam (F12) leave it free. The user's choice, 2026-10-23; Delete until then, which is also the manual
-// transmission mod's menu key by default (SMT.ini SHOW MENU=Kb.211), and with ReShade that mod opens ReShade's window on
-// it, so Delete opened both. A NextGen.ini that still holds the old default (written at a first start, never picked in
-// the menu) moves to the new one once; KeyMoved=1 then keeps a Delete set there by hand.
-static const int kNgKeyDefault = VK_NEXT;
-static const int kNgKeyOld = VK_DELETE;
+// The menu's key when NextGen.ini has none: F2 (chosen 2026-10-23). Every keyboard has it, compact ones too, where
+// Home or End can sit behind Fn. Nothing else in the tested game folder takes it: ReShade has Home (and Page Up for its
+// screenshots there), Steam F12, the tire mod's panel F3, a minimap mod F4 to F11, Insert, Home, Delete and Page Up and
+// Page Down for its zoom. The test builds had Delete, which is also the manual transmission mod's menu key (SMT.ini SHOW
+// MENU=Kb.211) and opens ReShade's window with it, then Page Down. A NextGen.ini that still holds one of those defaults
+// (never picked in the menu) moves to F2 once: KeyMoved=1 marked the move from Delete to Page Down, KeyMoved=2 the move to
+// F2, after which a Delete or Page Down set there by hand stays.
+static const int kNgKeyDefault = VK_F2;
 static const int kNgSlots = 8;
 struct NgShared
 {
@@ -157,7 +157,7 @@ static void KeySave(int vk, bool picked)
     if (f != INVALID_HANDLE_VALUE)
     {
         static const char help[] = "; NEXT GEN: the in-game menu of the Next Gen mods (Next Gen Gameplay, Next Gen Tire Inflation).\r\n"
-                                   "; Key: the virtual key code that opens and closes it (34 = Page Down, the default; 33 = Page Up, 36 = Home, 46 = Delete, 113 = F2).\r\n"
+                                   "; Key: the virtual key code that opens and closes it (113 = F2, the default; 33 = Page Up, 34 = Page Down, 35 = End, 36 = Home, 46 = Delete).\r\n"
                                    "; The menu sets it too: click the key's name at its top right, then press the new key.\r\n";
         DWORD wrote = 0;
         WriteFile(f, help, sizeof(help) - 1, &wrote, nullptr);
@@ -174,12 +174,14 @@ static int KeyLoad()
     wchar_t path[MAX_PATH + 16];
     if (!IniPath(path, MAX_PATH + 16)) return kNgKeyDefault;
     const int vk = (int)GetPrivateProfileIntW(L"Menu", L"Key", 0, path);
-    if (vk == kNgKeyOld && !GetPrivateProfileIntW(L"Menu", L"Picked", 0, path) && !GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, path))
+    const UINT moved = GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, path);
+    const bool oldDefault = (vk == VK_DELETE && moved == 0) || (vk == VK_NEXT && moved < 2);
+    if (oldDefault && !GetPrivateProfileIntW(L"Menu", L"Picked", 0, path))
     {
         KeySave(kNgKeyDefault, false);
-        WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"1", path);
-        NG_LOG(L"overlay: the menu's key moves from Delete, its old default, to Page Down: the manual transmission mod opens ReShade's window on "
-               L"Delete. Another key can be set in the menu or in NextGen.ini");
+        WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"2", path);
+        NG_LOG(L"overlay: the menu's key moves from %s, a test build's default, to F2, which other mods leave free. Another key can be set "
+               L"in the menu or in NextGen.ini", vk == VK_DELETE ? L"Delete" : L"Page Down");
         return kNgKeyDefault;
     }
     if (vk > 0 && !KeyNotForMenu(vk)) return vk;

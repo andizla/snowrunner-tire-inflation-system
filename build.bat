@@ -52,6 +52,8 @@ rem program that makes its swap chains through its imports as the game does
 if not exist out\test\overlay mkdir out\test\overlay
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_MOD /I deps\imgui /I src /Fo:out\obj\overlay_mod.obj /Fe:out\test\overlay\ng_mod_a.dll test\overlay_test.cpp out\obj\ng_overlay.obj out\obj\ng_dx11.obj out\obj\imgui.obj out\obj\imgui_draw.obj out\obj\imgui_tables.obj out\obj\imgui_widgets.obj out\obj\ng_reshade.obj /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib dxgi.lib || goto fail
 copy /y out\test\overlay\ng_mod_a.dll out\test\overlay\ng_mod_b.dll >nul || goto fail
+rem a stand-in for Next Gen Graphics' NgGraphicsGetApi (src\ng_graphics.h), for the menu's Graphics tab
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_GRAPHICS /I src /Fo:out\obj\overlay_graphics.obj /Fe:out\test\overlay\ng_graphics_standin.dll test\overlay_test.cpp || goto fail
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\overlay_test.obj /Fe:out\test\overlay\overlay_test.exe test\overlay_test.cpp /link user32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib || goto fail
 echo BUILD OK: out\version.dll, out\TirePressure.asi, out\test\loader_test.exe
 exit /b 0

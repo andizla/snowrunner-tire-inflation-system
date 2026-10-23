@@ -18,6 +18,7 @@
 #include "ng_dx11.h"
 #include "ng_overlay.h"
 #include "ng_reshade.h"
+#include "ng_graphics.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxguid.lib")
@@ -27,10 +28,11 @@ static NgClient g_client = {};
 
 // ---- the block the Next Gen mods in one game share ----
 
-// 2 since 2026-10-23: no Next Gen mod writes a method table DirectX hands out any more. A mod of block version 1
-// still does (its probe's Present hook), which can end the game with the Steam overlay: it is named in the log and
-// keeps a menu of its own.
-static const LONG kNgSharedVersion = 2;
+// 3 since 2026-10-23: the block names the slot of the Graphics tab, which one Next Gen mod draws for Next Gen Graphics
+// (ng_graphics.h). 2 since the same day: no Next Gen mod writes a method table DirectX hands out any more; a mod of block
+// version 1 still does (its probe's Present hook), which can end the game with the Steam overlay. A mod of another
+// version is named in the log and keeps a menu of its own.
+static const LONG kNgSharedVersion = 3;
 // The menu's key when NextGen.ini has none: Delete. Compact keyboards (75 percent) have it, where End is often missing;
 // the game, ReShade (Home, and Page Up for its screenshots here), the Spotter minimap mod (F4 to F9, Insert, Home) and
 // Steam (F12) leave it free. The user's choice, 2026-10-21.
@@ -50,7 +52,7 @@ struct NgShared
     volatile LONG cursorX, cursorY; // where the cursor was when the menu opened: the game sees it there until it closes
     volatile LONG placeTurn; // counts the window's moves and new sizes
     float x, y, w, h;        // the window's place and size, 0 before it was first drawn
-    volatile LONG64 table;   // unused since 2026-10-23 (a probe's method table until then), kept for the block's layout
+    volatile LONG64 graphics; // 1 + the slot of the Graphics tab, 0 while none has it (a probe's method table until block version 2)
     struct Slot
     {
         volatile LONG used, ready;
@@ -82,6 +84,9 @@ static void SharedJoin()
         else if (s->version == 1)
             NG_LOG(L"overlay: an older Next Gen mod is in the game (menu block version 1, from before 2026-10-23): its DirectX hook can end the game with "
                    L"the Steam overlay, so update every Next Gen mod to the same release; this mod's tab is in a menu of its own");
+        else if (s->version == 2)
+            NG_LOG(L"overlay: an older Next Gen mod is in the game (menu block version 2, from before the Graphics tab): update every Next Gen mod to the "
+                   L"same release; this mod's tab is in a menu of its own");
         else NG_LOG(L"overlay: another Next Gen mod shares the menu another way (block version %ld): this mod's tab is in a menu of its own", s->version);
     }
     if (g_shared == &g_private)
@@ -821,6 +826,116 @@ static void ReShadeLine(float s, ULONGLONG now)
     dl->AddText(g_fontText, px, ImVec2(a.x + pad + 6.0f * s, a.y + pad), IM_COL32(240, 240, 240, 255), text);
 }
 
+// ---- the Graphics tab ----
+// Next Gen Graphics (hid.dll beside the exe) has no overlay of its own: it offers its switches and status lines through
+// NgGraphicsGetApi (ng_graphics.h), and one Next Gen mod in the game draws the menu's Graphics tab from them, the first
+// to claim it in the shared block, so the menu has one Graphics tab however many Next Gen mods are in the game. A mod
+// whose overlay fails gives the tab up with its own, and another one takes it at its next look.
+static const NgGraphicsApi *g_graphics = nullptr;
+static int g_gslot = -1;               // the Graphics tab's slot while this mod draws it
+static ULONGLONG g_graphicsLook = 0;   // the last look for it
+static const int kNgGraphicsOrder = 3; // after Gameplay (1) and Tire Inflation (2)
+
+bool NgGraphicsFrom(HMODULE dll)
+{
+    const NgGraphicsGetApiFn get = dll ? (NgGraphicsGetApiFn)GetProcAddress(dll, "NgGraphicsGetApi") : nullptr;
+    const NgGraphicsApi *api = get ? get(kNgGraphicsVersion) : nullptr;
+    if (!api || api->version < kNgGraphicsVersion || api->count < 0 || api->count > 64 || !api->name || !api->get || !api->set) return false;
+    g_graphics = api;
+    g_graphicsLook = 0; // the tab is claimed at the next frame
+    return true;
+}
+
+// Every 2 s while no mod has the Graphics tab: Next Gen Graphics' table, by the full path of hid.dll beside the exe (the
+// game loads Windows' own hid.dll too), then a slot for the tab, claimed in the shared block.
+static void GraphicsLook(ULONGLONG now)
+{
+    NgShared *sh = g_shared;
+    if (g_gslot >= 0 || sh->graphics != 0 || now - g_graphicsLook < 2000) return;
+    g_graphicsLook = now;
+    if (!g_graphics)
+    {
+        wchar_t path[MAX_PATH + 16] = L"";
+        const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+        wchar_t *cut = n && n < MAX_PATH ? wcsrchr(path, L'\\') : nullptr;
+        if (!cut) return;
+        wcscpy_s(cut + 1, path + MAX_PATH + 16 - (cut + 1), L"hid.dll");
+        if (!NgGraphicsFrom(GetModuleHandleW(path))) return;
+    }
+    for (int i = 0; i < kNgSlots; i++)
+        if (InterlockedCompareExchange(&sh->slots[i].used, 1, 0) == 0)
+        {
+            sh->slots[i].order = kNgGraphicsOrder;
+            strncpy_s(sh->slots[i].tab, "Graphics", _TRUNCATE);
+            if (InterlockedCompareExchange64(&sh->graphics, 1 + i, 0) != 0)
+            {
+                InterlockedExchange(&sh->slots[i].used, 0); // another mod has the tab
+                return;
+            }
+            InterlockedExchange(&sh->slots[i].ready, 1);
+            g_gslot = i;
+            NG_LOG(L"overlay: Next Gen Graphics offers %d switches and %d status lines: this mod draws the menu's Graphics tab", g_graphics->count,
+                   g_graphics->statusCount ? g_graphics->statusCount() : 0);
+            return;
+        }
+}
+
+// The Graphics tab's page: the switches, as the DLL's keys flip them, and its status lines.
+static void GraphicsPage()
+{
+    const NgGraphicsApi *api = g_graphics;
+    if (!api) return;
+    ImGui::TextWrapped("Next Gen Graphics: these switch its effects on and off while you play, as its F keys do. What the game starts with is set in "
+                       "its own ini.");
+    ImGui::Spacing();
+    for (int i = 0; i < api->count; i++)
+    {
+        const char *name = api->name(i);
+        if (!name) continue;
+        bool on = api->get(i) != 0;
+        ImGui::PushID(i);
+        if (ImGui::Checkbox(name, &on)) api->set(i, on ? 1 : 0);
+        const char *help = api->help ? api->help(i) : nullptr;
+        if (help && help[0] && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
+        ImGui::PopID();
+    }
+    const int lines = api->statusCount && api->status ? api->statusCount() : 0;
+    if (lines > 0)
+    {
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+    for (int i = 0; i < lines; i++)
+        if (const char *line = api->status(i)) ImGui::TextWrapped("%s", line);
+}
+
+int NgMenuTabCount(const char *tab)
+{
+    int n = 0;
+    for (int i = 0; i < kNgSlots; i++)
+        if (g_shared->slots[i].ready && tab && strcmp(g_shared->slots[i].tab, tab) == 0) n++;
+    return n;
+}
+
+bool NgMenuShowTab(const char *tab)
+{
+    NgShared *sh = g_shared;
+    if (!tab)
+    {
+        MenuClose();
+        return true;
+    }
+    for (int i = 0; i < kNgSlots; i++)
+        if (sh->slots[i].ready && strcmp(sh->slots[i].tab, tab) == 0)
+        {
+            InterlockedExchange(&sh->chosen, i);
+            if (!sh->open) MenuOpen();
+            return true;
+        }
+    return false;
+}
+
 static void MenuDraw(float s)
 {
     NgShared *sh = g_shared;
@@ -886,7 +1001,7 @@ static void MenuDraw(float s)
             if (ImGui::InvisibleButton("##tab", box)) InterlockedExchange(&sh->chosen, i);
             const bool hovered = ImGui::IsItemHovered();
             ImGui::PopID();
-            const bool chosen = i == g_slot;
+            const bool chosen = i == sh->chosen;
             if (hovered && !chosen) dl->AddRectFilled(at, ImVec2(at.x + box.x, at.y + box.y), IM_COL32(255, 255, 255, 16), 5.0f * s);
             const ImU32 col = chosen ? IM_COL32(244, 244, 244, 255) : hovered ? IM_COL32(220, 220, 220, 255) : IM_COL32(150, 150, 155, 255);
             dl->AddText(g_fontBold, tabPx, ImVec2(at.x + 12.0f * s, p.y + (headH - t.y) * 0.5f), col, name);
@@ -932,7 +1047,8 @@ static void MenuDraw(float s)
             dl->AddText(g_fontText, notePx, ImVec2(keyAt.x + 9.0f * s, keyAt.y + (keyBox.y - kt.y) * 0.5f), g_keyCapture || hot ? IM_COL32_WHITE : IM_COL32(190, 190, 195, 255), keyText);
             if (hot && !g_keyCapture) ImGui::SetTooltip("Click, then press the key that opens and closes this menu. It is kept in NextGen.ini.");
             char ver[64];
-            snprintf(ver, sizeof(ver), "%s %s", g_client.tab ? g_client.tab : "", g_client.version ? g_client.version : "");
+            if (g_gslot >= 0 && sh->chosen == g_gslot) snprintf(ver, sizeof(ver), "Next Gen Graphics");
+            else snprintf(ver, sizeof(ver), "%s %s", g_client.tab ? g_client.tab : "", g_client.version ? g_client.version : "");
             const ImVec2 vt = g_fontText->CalcTextSizeA(notePx, FLT_MAX, 0.0f, ver);
             if (keyAt.x - 14.0f * s - vt.x > x) dl->AddText(g_fontText, notePx, ImVec2(keyAt.x - 14.0f * s - vt.x, p.y + (headH - vt.y) * 0.5f), IM_COL32(142, 142, 147, 255), ver);
         }
@@ -956,7 +1072,8 @@ static void MenuDraw(float s)
         const bool body = ImGui::BeginChild("##page", ImVec2(size.x - 2.0f * pad + 6.0f * s, fmaxf(size.y - (top - p.y) - pad, 40.0f * s)),
                                             ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_None);
         ImGui::PopStyleVar();
-        if (body && g_client.page) g_client.page();
+        if (body && g_gslot >= 0 && sh->chosen == g_gslot) GraphicsPage();
+        else if (body && g_client.page) g_client.page();
         ImGui::EndChild();
         // where the window is now, for the other mods' tabs
         const ImVec2 np = ImGui::GetWindowPos(), ns = ImGui::GetWindowSize();
@@ -1212,7 +1329,8 @@ static void Frame(IDXGISwapChain *sc)
     NgShared *sh = g_shared;
     const bool front = GetForegroundWindow() == g_wnd;
     // a new key for it: the next key pressed while the menu waits for one; Esc keeps the old one
-    if (g_keyCapture && (!sh->open || sh->chosen != g_slot || !front)) g_keyCapture = false;
+    const bool mine = sh->chosen == g_slot || (g_gslot >= 0 && sh->chosen == g_gslot); // a tab this mod draws
+    if (g_keyCapture && (!sh->open || !mine || !front)) g_keyCapture = false;
     for (int vk = 8; g_keyCapture && vk < 255; vk++)
     {
         const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0, pressed = down && !g_captureWas[vk];
@@ -1248,7 +1366,8 @@ static void Frame(IDXGISwapChain *sc)
             if (sh->slots[i].ready && (first < 0 || sh->slots[i].order < sh->slots[first].order)) first = i;
         InterlockedCompareExchange(&sh->chosen, first, chosen);
     }
-    const bool menu = sh->open && sh->chosen == g_slot;
+    GraphicsLook(now);
+    const bool menu = sh->open && (sh->chosen == g_slot || (g_gslot >= 0 && sh->chosen == g_gslot));
     RECT rc = {};
     GetClientRect(g_wnd, &rc);
     const float sx = rc.right > 0 ? td.Width / (float)rc.right : 1.0f, sy = rc.bottom > 0 ? td.Height / (float)rc.bottom : 1.0f;
@@ -1372,6 +1491,15 @@ static void MenuLeave()
     if (g_slot < 0) return;
     InterlockedExchange(&sh->slots[g_slot].ready, 0);
     InterlockedCompareExchange(&sh->chosen, -1, g_slot);
+    if (g_gslot >= 0)
+    {
+        // the Graphics tab goes with it, and another mod may take it at its next look
+        InterlockedExchange(&sh->slots[g_gslot].ready, 0);
+        InterlockedCompareExchange(&sh->chosen, -1, g_gslot);
+        InterlockedExchange(&sh->slots[g_gslot].used, 0);
+        InterlockedCompareExchange64(&sh->graphics, 0, 1 + g_gslot);
+        g_gslot = -1;
+    }
     bool other = false;
     for (int i = 0; i < kNgSlots; i++)
         if (sh->slots[i].ready) other = true;

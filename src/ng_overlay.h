@@ -46,6 +46,13 @@ void NgMenuKeySet(int vk);
 // NgOverlayStart calls it; NgReShadeNote() is the notice, empty with ReShade working.
 int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi);
 const char *NgReShadeNote();
+// Next Gen Graphics' switches and status (ng_graphics.h) from that module's NgGraphicsGetApi; one Next Gen mod in the
+// game then draws the menu's Graphics tab from them. The overlay looks for hid.dll beside the exe by itself every 2 s
+// while no mod has the tab; this hands it another module (a test's stand-in). false: no table of a version it takes.
+bool NgGraphicsFrom(HMODULE dll);
+// The ready tabs of that name in the menu; and the menu opened on that tab (true when there is one), or closed for nullptr.
+int NgMenuTabCount(const char *tab);
+bool NgMenuShowTab(const char *tab);
 // The theme's colours, for a mod's own drawing: the logo's orange (top, middle, bottom of its gradient) and the greys.
 static const ImU32 kNgOrangeTop = IM_COL32(255, 203, 57, 255), kNgOrange = IM_COL32(254, 158, 32, 255), kNgOrangeLow = IM_COL32(236, 103, 19, 255);
 static const ImU32 kNgGreyDeep = IM_COL32(20, 20, 22, 255), kNgGrey = IM_COL32(42, 42, 46, 255), kNgGreyLight = IM_COL32(74, 74, 80, 255);

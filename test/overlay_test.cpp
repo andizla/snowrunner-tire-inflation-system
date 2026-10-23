@@ -17,7 +17,11 @@
 //   Steam does before it hooks that function with one pointer to call on to for all. It may only ever see DirectX's own
 //   Present: a second function there is what looped with Steam (the tester's crash of 2026-10-22);
 // - the two mods writing slots on one read-only page at once, as at the game's start: every write lands, none faults,
-//   and the page stays read-only.
+//   and the page stays read-only;
+// - the start's notice for each way ReShade can be missing (no dxgi.dll, a ReShade that took no add-on, another
+//   program's dxgi.dll), and none with ReShade working;
+// - the Graphics tab: with OVERLAY_TEST_GRAPHICS this file is also a stand-in for Next Gen Graphics' NgGraphicsGetApi
+//   (ng_graphics_standin.dll); handed to both mods, one claims the tab, and its page reads the switches.
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_4.h>
@@ -25,7 +29,37 @@
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 
-#ifdef OVERLAY_TEST_MOD
+#if defined(OVERLAY_TEST_GRAPHICS)
+
+// A stand-in for Next Gen Graphics' hid.dll: three switches and two status lines through NgGraphicsGetApi
+// (ng_graphics.h), counting how often the Graphics tab reads its switches.
+#include "ng_graphics.h"
+
+static volatile LONG g_on[3] = { 1, 0, 1 };
+static volatile LONG g_gets = 0;
+static const char *Name(int i)
+{
+    static const char *const n[] = { "Contact shadows", "AO at half size", "Reflections" };
+    return i >= 0 && i < 3 ? n[i] : nullptr;
+}
+static const char *Help(int i) { return i == 0 ? "A stand-in's tip" : nullptr; }
+static int Get(int i)
+{
+    InterlockedIncrement(&g_gets);
+    return i >= 0 && i < 3 ? (int)g_on[i] : 0;
+}
+static void Set(int i, int on)
+{
+    if (i >= 0 && i < 3) InterlockedExchange(&g_on[i], on);
+}
+static int StatusCount() { return 2; }
+static const char *Status(int i) { return i == 0 ? "Stand-in build" : i == 1 ? "ReShade: no" : nullptr; }
+static const NgGraphicsApi g_api = { 1, 3, &Name, &Help, &Get, &Set, &StatusCount, &Status };
+
+extern "C" __declspec(dllexport) const NgGraphicsApi *NgGraphicsGetApi(int version) { return version == 1 ? &g_api : nullptr; }
+extern "C" __declspec(dllexport) LONG TestGraphicsGets() { return g_gets; }
+
+#elif defined(OVERLAY_TEST_MOD)
 
 #include "ng_overlay.h"
 
@@ -59,6 +93,10 @@ extern "C" __declspec(dllexport) int TestReShade(bool registered, HMODULE reshad
     strncpy_s(note, size, NgReShadeNote(), _TRUNCATE);
     return r;
 }
+
+extern "C" __declspec(dllexport) bool TestGraphics(const wchar_t *dll) { return NgGraphicsFrom(LoadLibraryW(dll)); }
+extern "C" __declspec(dllexport) int TestTabCount(const char *tab) { return NgMenuTabCount(tab); }
+extern "C" __declspec(dllexport) bool TestShowTab(const char *tab) { return NgMenuShowTab(tab); }
 
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
@@ -192,6 +230,36 @@ static void TestReShadeCases(HMODULE a, HMODULE b)
     DeleteFileW(edge);
     DeleteFileW(other);
     RemoveDirectoryW(tmp);
+}
+
+static int Presents(IDXGISwapChain *sc, int n);
+
+// The Graphics tab: both mods are handed a stand-in for Next Gen Graphics; one of them claims the tab, so the menu has
+// one, and opened on it the page reads the stand-in's switches.
+static void TestGraphicsTab(HMODULE a, HMODULE b, IDXGISwapChain *sc, const wchar_t *dir)
+{
+    typedef bool (*TakeFn)(const wchar_t *);
+    typedef int (*CountFn)(const char *);
+    typedef bool (*ShowFn)(const char *);
+    typedef LONG (*GetsFn)();
+    const TakeFn takeA = (TakeFn)GetProcAddress(a, "TestGraphics"), takeB = (TakeFn)GetProcAddress(b, "TestGraphics");
+    const CountFn count = (CountFn)GetProcAddress(a, "TestTabCount");
+    const ShowFn show = (ShowFn)GetProcAddress(a, "TestShowTab");
+    wchar_t path[MAX_PATH];
+    swprintf_s(path, L"%sng_graphics_standin.dll", dir);
+    const HMODULE standin = LoadLibraryW(path);
+    const GetsFn gets = standin ? (GetsFn)GetProcAddress(standin, "TestGraphicsGets") : nullptr;
+    Check(takeA && takeB && count && show && gets && takeA(path) && takeB(path), "both mods take the stand-in's NgGraphicsGetApi");
+    if (!takeA || !takeB || !count || !show || !gets) return;
+    Presents(sc, 3);
+    Check(count("Graphics") == 1, "one Graphics tab in the menu, though both mods could draw it");
+    Check(show("Graphics"), "the menu opens on the Graphics tab");
+    const LONG before = gets();
+    Presents(sc, 3);
+    char line[128];
+    sprintf_s(line, "the Graphics page reads the stand-in's switches (%ld reads in 3 frames)", gets() - before);
+    Check(gets() - before >= 3, line);
+    show(nullptr);
 }
 
 static HWND Window(const wchar_t *title)
@@ -338,6 +406,7 @@ int main()
     Check(Presents(sc, 10) == 10, "10 presents");
     sprintf_s(line, "both mods drew on it once for each present (A %ld frames, B %ld)", framesA, framesB);
     Check(framesA == 10 && framesB == 10, line);
+    TestGraphicsTab(a, b, sc, dir);
     IDXGIFactory1 *again = nullptr;
     Check(SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&again)) && again && *(void ***)again == ourFactoryTable,
           "a second factory gets the same method table, made once");

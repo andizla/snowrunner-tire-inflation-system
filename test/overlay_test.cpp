@@ -220,7 +220,8 @@ static void TestReShadeCases(HMODULE a, HMODULE b)
     WriteAll(edge, bytes, sizeof(bytes));
     memset(bytes, 'x', sizeof(bytes));
     WriteAll(other, bytes, sizeof(bytes));
-    Check(rsB(false, nullptr, none, note, sizeof(note)) == 2 && strstr(note, "copy dxgi.dll and ReShade.ini"), "no dxgi.dll: ReShade is missing, and the notice says what to copy");
+    Check(rsB(false, nullptr, none, note, sizeof(note)) == 2 && strstr(note, "Copy dxgi.dll and ReShade.ini from the mod's zip"),
+          "no dxgi.dll: ReShade is missing, and the notice says what to copy");
     Check(rsB(false, nullptr, rs, note, sizeof(note)) == 1 && strstr(note, "takes no add-ons"), "a dxgi.dll that is ReShade but took no add-on: the notice says so");
     Check(rsB(false, nullptr, edge, note, sizeof(note)) == 1, "ReShade's name across the end of the reader's 64 KB is still found");
     Check(rsB(false, nullptr, other, note, sizeof(note)) == 3 && strstr(note, "another program's dxgi.dll"), "another program's dxgi.dll: the notice says so");
@@ -380,8 +381,16 @@ int main()
     Check(startA && startB && a != b, "the two stand-in mods load, each its own copy");
     if (!startA || !startB) return 1;
     static volatile LONG framesA = 0, framesB = 0;
+    // a NextGen.ini beside the exe that still holds the menu's old default key (Delete), never picked in the menu: the
+    // start moves it to Page Down once
+    wchar_t ini[MAX_PATH];
+    swprintf_s(ini, L"%sNextGen.ini", dir);
+    DeleteFileW(ini);
+    WritePrivateProfileStringW(L"Menu", L"Key", L"46", ini);
     Check(startA("A", 1, &framesA), "mod A's overlay starts");
     Check(startB("B", 2, &framesB), "mod B's overlay starts");
+    Check(GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_NEXT && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 1,
+          "NextGen.ini's old default key, Delete, moves to Page Down once");
     TestReShadeCases(a, b);
 
     // the game's way: a factory from CreateDXGIFactory1, a device on one of its adapters, the swap chain from the factory

@@ -33,10 +33,14 @@ static NgClient g_client = {};
 // version 1 still does (its probe's Present hook), which can end the game with the Steam overlay. A mod of another
 // version is named in the log and keeps a menu of its own.
 static const LONG kNgSharedVersion = 3;
-// The menu's key when NextGen.ini has none: Delete. Compact keyboards (75 percent) have it, where End is often missing;
-// the game, ReShade (Home, and Page Up for its screenshots here), the Spotter minimap mod (F4 to F9, Insert, Home) and
-// Steam (F12) leave it free. The user's choice, 2026-10-21.
-static const int kNgKeyDefault = VK_DELETE;
+// The menu's key when NextGen.ini has none: Page Down. Compact keyboards (75 percent) have it, where End is often
+// missing; the game, ReShade (Home, and Page Up for its screenshots here), the Spotter minimap mod (F4 to F9, Insert,
+// Home) and Steam (F12) leave it free. The user's choice, 2026-10-23; Delete until then, which is also the manual
+// transmission mod's menu key by default (SMT.ini SHOW MENU=Kb.211), and with ReShade that mod opens ReShade's window on
+// it, so Delete opened both. A NextGen.ini that still holds the old default (written at a first start, never picked in
+// the menu) moves to the new one once; KeyMoved=1 then keeps a Delete set there by hand.
+static const int kNgKeyDefault = VK_NEXT;
+static const int kNgKeyOld = VK_DELETE;
 static const int kNgSlots = 8;
 struct NgShared
 {
@@ -140,7 +144,8 @@ static bool IniPath(wchar_t *path, size_t size)
     return true;
 }
 
-static void KeySave(int vk)
+// picked: set in the menu (Picked=1), never moved to another default
+static void KeySave(int vk, bool picked)
 {
     wchar_t path[MAX_PATH + 16];
     if (!IniPath(path, MAX_PATH + 16)) return;
@@ -149,7 +154,7 @@ static void KeySave(int vk)
     if (f != INVALID_HANDLE_VALUE)
     {
         static const char help[] = "; NEXT GEN: the in-game menu of the Next Gen mods (Next Gen Gameplay, Next Gen Tire Inflation).\r\n"
-                                   "; Key: the virtual key code that opens and closes it (46 = Delete, 34 = Page Down, 33 = Page Up, 36 = Home, 113 = F2).\r\n"
+                                   "; Key: the virtual key code that opens and closes it (34 = Page Down, the default; 33 = Page Up, 36 = Home, 46 = Delete, 113 = F2).\r\n"
                                    "; The menu sets it too: click the key's name at its top right, then press the new key.\r\n";
         DWORD wrote = 0;
         WriteFile(f, help, sizeof(help) - 1, &wrote, nullptr);
@@ -158,6 +163,7 @@ static void KeySave(int vk)
     wchar_t text[16];
     swprintf_s(text, L"%d", vk);
     WritePrivateProfileStringW(L"Menu", L"Key", text, path);
+    if (picked) WritePrivateProfileStringW(L"Menu", L"Picked", L"1", path);
 }
 
 static int KeyLoad()
@@ -165,8 +171,16 @@ static int KeyLoad()
     wchar_t path[MAX_PATH + 16];
     if (!IniPath(path, MAX_PATH + 16)) return kNgKeyDefault;
     const int vk = (int)GetPrivateProfileIntW(L"Menu", L"Key", 0, path);
+    if (vk == kNgKeyOld && !GetPrivateProfileIntW(L"Menu", L"Picked", 0, path) && !GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, path))
+    {
+        KeySave(kNgKeyDefault, false);
+        WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"1", path);
+        NG_LOG(L"overlay: the menu's key moves from Delete, its old default, to Page Down: the manual transmission mod opens ReShade's window on "
+               L"Delete. Another key can be set in the menu or in NextGen.ini");
+        return kNgKeyDefault;
+    }
     if (vk > 0 && !KeyNotForMenu(vk)) return vk;
-    if (vk == 0) KeySave(kNgKeyDefault); // the first start: the file with its help lines and the default
+    if (vk == 0) KeySave(kNgKeyDefault, false); // the first start: the file with its help lines and the default
     return kNgKeyDefault;
 }
 
@@ -174,7 +188,7 @@ void NgMenuKeySet(int vk)
 {
     if (vk <= 0 || KeyNotForMenu(vk)) return;
     InterlockedExchange(&g_shared->key, vk);
-    KeySave(vk);
+    KeySave(vk, true);
 }
 
 // ---- the game's input while the menu is open ----
@@ -785,18 +799,18 @@ int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi)
     else g_rs = dxgi && GetFileAttributesW(dxgi) != INVALID_FILE_ATTRIBUTES ? kRsOther : kRsMissing;
     static const char *const kNote[] = {
         "",
-        "The ReShade in the game takes no add-ons: it is a build without full add-on support, or one older than 6.8. Next Gen's mods draw "
-        "through ReShade: put the dxgi.dll from the mod's zip in place of its own, keep your ReShade.ini and presets, and start the game "
-        "again. Until then the mods draw on their own, and with RivaTuner or a second screen the game can crash.",
-        "ReShade is not in the game. Next Gen's mods draw through it: copy dxgi.dll and ReShade.ini from the mod's zip into Sources\\Bin, "
-        "next to SnowRunner.exe, and start the game again. That ReShade shows nothing of its own: no effects, no keys, no banner. "
-        "Without it the mods draw on their own, and with RivaTuner or a second screen the game can crash.",
-        "Sources\\Bin holds another program's dxgi.dll, so ReShade cannot go there. The mods draw on their own, and with RivaTuner or a "
-        "second screen the game can crash. If that dxgi.dll is not needed, set it aside and copy in the one from the mod's zip, with "
-        "ReShade.ini.",
+        "The ReShade in the game takes no add-ons. It is a build without full add-on support or one older than 6.8. Next Gen's mods "
+        "draw through ReShade. Put the dxgi.dll from the mod's zip in place of its own and start the game again. Your ReShade.ini and "
+        "presets stay as they are. Until then the game can crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.",
+        "ReShade is not in the game. Next Gen's mods draw through it. Copy dxgi.dll and ReShade.ini from the mod's zip into Sources\\Bin "
+        "next to SnowRunner.exe and start the game again. This ReShade shows no effects and no banner. Without it the game can crash "
+        "with the Steam, Discord or RivaTuner overlay or with multiple monitors.",
+        "Sources\\Bin holds another program's dxgi.dll. ReShade cannot go there while it does. Without ReShade the game can crash with "
+        "the Steam, Discord or RivaTuner overlay or with multiple monitors. Set that dxgi.dll aside if nothing needs it. Then copy in "
+        "dxgi.dll and ReShade.ini from the mod's zip.",
     };
     static const char *const kLine[] = { "", "Next Gen: the ReShade in the game takes no add-ons.", "Next Gen: ReShade is not in the game.",
-                                          "Next Gen: another program's dxgi.dll is in the game's folder." };
+                                          "Next Gen: another program's dxgi.dll is in the game folder." };
     strcpy_s(g_rsNote, kNote[g_rs]);
     g_rsLine = kLine[g_rs];
     return g_rs;
@@ -1341,7 +1355,7 @@ static void Frame(IDXGISwapChain *sc)
         InterlockedExchange(&sh->toggledAt, (LONG)GetTickCount()); // the press that sets it does not also close the menu, here or in another mod
         InterlockedExchange(&sh->key, vk);
         g_keyWas = true;
-        KeySave(vk);
+        KeySave(vk, true);
         char name[32];
         KeyName(vk, name, sizeof(name));
         NG_LOG(L"overlay: the menu's key is now %S (%d), kept in NextGen.ini", name, vk);

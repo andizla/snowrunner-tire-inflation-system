@@ -174,4 +174,6 @@ GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
 The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. ReShade by Patrick Mours (crosire), which the zip brings without its start banner, hands the mod the game's swap chains through its add-on API. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour. The sounds of air let out of a tire and of air going into one (`assets`) were recorded for this mod and are under its licence.
 
+Thanks to the testers: [Milos_Mk6](https://mod.io/u/milos_mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump, the insanity preset and his tire ideas; [Zenosxy](https://mod.io/u/zenosxy) for the first clean run outside the development PC.
+
 SnowRunner and Expeditions are games by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

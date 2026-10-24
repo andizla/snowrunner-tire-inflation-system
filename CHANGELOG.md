@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.0]
+## [1.3.0] 2026-10-24
 
 - The panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay; Next Gen Gameplay draws with the same code. The zip brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window, and the mod takes the game's swap chains from it, drawing after ReShade and Luma's HDR. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.
 - When ReShade is missing, takes no add-ons, or another program's `dxgi.dll` is in its place, the mod says so at the start: in a line at the top for 15 seconds and in the NEXT GEN menu, with what to do, and in its log.

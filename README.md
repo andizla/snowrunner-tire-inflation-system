@@ -32,7 +32,7 @@ With a pad (any pad Windows sees as an Xbox pad):
 - LB + d-pad down opens the panel.
 - LB + d-pad left or right lowers or raises the pressure. With the panel closed, it opens the panel one step lower or higher.
 - While the panel is open the d-pad works without LB, A confirms and B closes the panel unchanged.
-- The triggers can be made gentler at a light pull: the tab's pad throttle and brake curves (see Settings). At 1 they are as the game reads them.
+- The triggers are shaped: at the default of 2, half the trigger gives a quarter of the throttle or brake and the full pull stays full, so a light pull is gentle. The tab's pad throttle and brake curves set it (see Settings); at 1 the game reads them as they are.
 
 With the keyboard, F3 opens the panel and steps the pressure down, from Low round to the highest mode. There is no key to confirm with: leave the choice alone.
 
@@ -119,7 +119,7 @@ The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the grou
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down just far enough that some vanilla tire, of any kind, matches or beats them in all three. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
-- The key, the pad buttons, the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 1 is as it is, at 2 half the trigger gives a quarter and the full pull stays full), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
+- The key, the pad buttons, the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 2 by default, where half the trigger gives a quarter and the full pull stays full; 1 is as it is), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
 Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start.
 
@@ -144,7 +144,6 @@ Delete `TirePressure.asi`, `TirePressure.ini` and `TirePressure.log` from `Sourc
 
 ## Planned
 
-- A throttle and brake curve for pads: a light pull on the trigger gives less, the full pull stays full. Built, in a later version.
 - Game Pass: the fix in 1.3.0 counts as confirmed once a player's log on that build shows it.
 - PS5 controllers: the mod reads XInput pads only today.
 - Clearer names for the settings.

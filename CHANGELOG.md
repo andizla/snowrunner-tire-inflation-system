@@ -1,11 +1,8 @@
 # Changelog
 
-## [1.3.1]
-
-- Pad throttle and brake curves, `PadThrottleCurve` and `PadBrakeCurve` in the ini and the tab's Controls section (1 to 3, 1 is as it is): while a truck is driven each trigger's share is raised to that power before the game reads it, so a light pull gives less and the full pull stays full; at 2 half the trigger gives a quarter. A tenth of the trigger was a lot of throttle for the game's trucks.
-
 ## [1.3.0] 2026-10-24
 
+- Pad throttle and brake curves, `PadThrottleCurve` and `PadBrakeCurve` in the ini and the tab's Controls section (1 to 3, 2 by default): while a truck is driven each trigger's share is raised to that power before the game reads it, so a light pull gives less and the full pull stays full; at 2 half the trigger gives a quarter, at 1 the trigger is as it is. A tenth of the trigger was a lot of throttle for the game's trucks.
 - The panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay; Next Gen Gameplay draws with the same code. The zip brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window, and the mod takes the game's swap chains from it, drawing after ReShade and its add-ons. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.
 - When ReShade is missing, takes no add-ons, or another program's `dxgi.dll` is in its place, the mod says so at the start: in a line at the top for 15 seconds and in the NEXT GEN menu, with what to do, and in its log.
 - The NEXT GEN menu opens on F2. A `NextGen.ini` from a test build that still holds that build's default key (Delete or Page Down) moves to F2 once; a fresh `NextGen.ini` is made so that a Delete or Page Down set in it by hand stays. The panel's key does nothing while the menu is open.

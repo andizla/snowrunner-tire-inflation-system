@@ -295,7 +295,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     PageLabel("Pad throttle curve", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##padthrottle", &s.padCurve[0], 1.0f, 3.0f, s.padCurve[0] > 1.0f ? "%.2f" : "as it is", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("Shapes the right trigger while you drive: its share to this power. Higher makes a light pull gentler. At 2, half the trigger gives a quarter of the throttle, and the full pull stays full.");
+    PageTip("Shapes the right trigger while you drive: its share to this power. Higher makes a light pull gentler. At 2, the default, half the trigger gives a quarter of the throttle, and the full pull stays full.");
     PageLabel("Pad brake curve", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##padbrake", &s.padCurve[1], 1.0f, 3.0f, s.padCurve[1] > 1.0f ? "%.2f" : "as it is", ImGuiSliderFlags_AlwaysClamp));

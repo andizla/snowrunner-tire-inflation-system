@@ -52,7 +52,7 @@ struct TpSettings
     float uiScale;           // UIScale
     float confirmSeconds;    // ConfirmSeconds: the panel's choice confirms itself after this (0 = never)
     char pad[5][32];         // PadOpen, PadLower, PadRaise, PadConfirm, PadCancel ("LB+DPadDown", "None")
-    float padCurve[2];       // PadThrottleCurve, PadBrakeCurve: a trigger's share to this power before the game reads it, 1 (as it is) to 3
+    float padCurve[2];       // PadThrottleCurve, PadBrakeCurve: a trigger's share to this power before the game reads it, 1 (as it is) to 3, 2 by default
     float base[3];           // BaseGround, BaseAsphalt, BaseMud: grip of every mode, Normal too
     bool vanillaBalance;     // VanillaBalance: tires that out-grip every vanilla tire come down to the vanilla envelope
     float balanceStrength;   // VanillaBalanceStrength 0..2 (above 1: below the vanilla envelope)
@@ -105,7 +105,7 @@ inline void SettingsDefaults(TpSettings &s)
     // with LB, as plain d-pad presses open the game's own screens and move through its menus
     static const char *pads[5] = { "LB+DPadDown", "LB+DPadLeft", "LB+DPadRight", "A", "B" };
     for (int i = 0; i < 5; i++) strcpy_s(s.pad[i], pads[i]);
-    s.padCurve[0] = s.padCurve[1] = 1.0f; // the triggers as they are
+    s.padCurve[0] = s.padCurve[1] = 2.0f; // both triggers shaped: half the trigger gives a quarter (the author's choice after a pad drive, 2026-10-24)
     s.base[0] = s.base[1] = s.base[2] = 1.0f;
     s.vanillaBalance = false;
     s.balanceStrength = 1.0f;

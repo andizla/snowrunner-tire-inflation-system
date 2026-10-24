@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.1]
+## [1.3.1] 2026-10-25
 
 - Each truck keeps its own pressure mode, `PerTruck` in the ini and a checkbox in the tab's Realism section (on by default). The mode is saved by the truck kind's name in `TirePressure.trucks.ini` next to the exe and comes back the moment that truck is driven again, without a sound, the compressor or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts at Normal, and two trucks of one kind share it. `PerTruck=0` keeps one mode for every truck, Normal at each game start, as before. The tab's truck section names the truck's kind. Asked for by a player on mod.io.
 

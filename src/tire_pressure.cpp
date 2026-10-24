@@ -33,6 +33,7 @@
 #include "sound.h"
 #include "outside.h"
 #include "tire_state.h"
+#include "truck_modes.h"
 
 // Where the few places lie that are elsewhere in every build of the game's exe (build_find.h has what each is). Run
 // looks for them in the running exe at the start and stands down when it does not find every one.
@@ -93,6 +94,7 @@ static std::unordered_map<uint64_t, Stock> g_wheels; // wheel object -> its stoc
 static float g_deepest = 0.0f; // the largest AdditionalRadiusOffset among the modes
 static bool g_rollingRadius = true; // ini RollingRadius (RollFactor)
 static bool g_standStill = true;    // ini StandStill: a pressure change only goes on while the truck stands still
+static bool g_perTruck = true;      // ini PerTruck: each truck keeps its own pressure mode (truck_modes.h)
 static bool g_temperature = true;   // ini Temperature: the tires feel the outside temperature (outside.h)
 static float g_ambientC = 15.0f;    // ini AmbientC: the outside temperature where no other mod publishes one
 static bool g_hardMode = false;     // ini HardMode: the realistic numbers and options in force (HardSettings)
@@ -148,6 +150,27 @@ template <typename T> static bool Read(uint64_t addr, T &out) { return addr >= 0
 template <typename T> static bool WriteAs(uint64_t addr, const T &v) { return addr >= 0x10000 && WriteProcessMemory(GetCurrentProcess(), (void *)addr, &v, sizeof v, nullptr) != 0; }
 static bool Write(uint64_t addr, float v) { return WriteAs(addr, v); }
 
+// The driven truck's kind as the game's files name it ("western_star_6900xd"; "zetros/176593" for a truck from a mod),
+// the key of TirePressure.trucks.ini. The game holds it as a text at model + 0x588, the model at vehicle + 0x60. A text
+// is 0x20 bytes: its characters while it has room for fewer than 16, else a pointer to them; the length at + 0x10 and
+// the room at + 0x18 (Next Gen Gameplay's TruckText reads it so). False where it is not read, empty or 95 long or more.
+static bool TruckKindName(uint64_t vehicle, char (&out)[96])
+{
+    out[0] = 0;
+    uint64_t model = 0, chars = 0, length = 0, room = 0;
+    uint8_t text[0x20];
+    if (!Read(vehicle + 0x60, model) || !Read(model + 0x588, text)) return false;
+    memcpy(&chars, text, 8);
+    memcpy(&length, text + 0x10, 8);
+    memcpy(&room, text + 0x18, 8);
+    if (!length || length >= 95 || room < length) return false;
+    if (room < 16) memcpy(out, text, (size_t)length);
+    else if (chars < 0x10000 || !ReadProcessMemory(GetCurrentProcess(), (void *)chars, out, (size_t)length, nullptr)) return false;
+    out[length] = 0;
+    TruckKindClean(out);
+    return out[0] != 0;
+}
+
 // A number from the ini; def for a missing key and for anything that is not a finite number ("nan" would pass every
 // range check after it, the min and max macros let it through, and end up in the game's memory).
 static float IniFloat(const wchar_t *section, const std::wstring &key, float def, const std::wstring &ini)
@@ -194,6 +217,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"TireDamage", L"%.0f", s.tireDamage ? 1 : 0);
     put(T, L"RollingRadius", L"%.0f", s.rollingRadius ? 1 : 0);
     put(T, L"StandStill", L"%.0f", s.standStill ? 1 : 0);
+    put(T, L"PerTruck", L"%.0f", s.perTruck ? 1 : 0);
     put(T, L"Temperature", L"%.0f", s.temperature ? 1 : 0);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
@@ -246,6 +270,8 @@ static void ReadIni(TpSettings &s)
                         L"; the outside temperature (AmbientC, or a gauge mod's by map and hour while it runs): cold air is less\n"
                         L"; pressure in them, cold rubber less grip. HardMode=1: the realistic numbers and options in place of the\n"
                         L"; grip, mode and damage keys and Seconds; the keys here keep your own.\n"
+                        L"; PerTruck=1: each truck keeps its own pressure mode, saved by the truck kind's name in TirePressure.trucks.ini and put\n"
+                        L"; back when that truck is driven again. 0 = one mode for all trucks, Normal at every start.\n"
                         L"; DumpImage=1 writes the game's code as the mod sees it into TirePressure_image_<stamp>.bin next to the\n"
                         L"; exe at the next start, for a report when the mod stands down on your build. Take it out again after.\n");
             fclose(f);
@@ -305,6 +331,7 @@ static void ReadIni(TpSettings &s)
     s.tireDamage = GetPrivateProfileIntW(T, L"TireDamage", s.tireDamage ? 1 : 0, ini.c_str()) != 0;
     s.rollingRadius = GetPrivateProfileIntW(T, L"RollingRadius", s.rollingRadius ? 1 : 0, ini.c_str()) != 0;
     s.standStill = GetPrivateProfileIntW(T, L"StandStill", s.standStill ? 1 : 0, ini.c_str()) != 0;
+    s.perTruck = GetPrivateProfileIntW(T, L"PerTruck", s.perTruck ? 1 : 0, ini.c_str()) != 0;
     s.temperature = GetPrivateProfileIntW(T, L"Temperature", s.temperature ? 1 : 0, ini.c_str()) != 0;
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
@@ -395,6 +422,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     if (log) Log(L"rolling radius: %s", s.rollingRadius ? L"the gears make up for the flattened wheels, but for what a real tire loses" : L"off, the smaller wheel as it is");
     if (log) Log(L"modes: Low, Reduced, Normal%s", s.increased ? L", Increased" : L"");
     g_standStill = s.standStill;
+    g_perTruck = s.perTruck;
     g_temperature = s.temperature;
     g_ambientC = s.ambientC;
     g_hardMode = in.hardMode || in.insaneMode;
@@ -403,6 +431,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     if (log)
         Log(L"a pressure change %s; the tires %s the outside temperature (AmbientC %g C where no other mod publishes one)",
             s.standStill ? L"only goes on while the truck stands still" : L"goes on while driving too", s.temperature ? L"feel" : L"do not feel", s.ambientC);
+    if (log) Log(s.perTruck ? L"each truck keeps its own pressure mode (%s)" : L"one pressure mode for every truck (PerTruck=0)", kTruckModesFile);
 }
 
 void SettingsGet(TpSettings &out)
@@ -1684,6 +1713,35 @@ static DWORD WINAPI Run(void *)
                 if (t - probeTime >= (ULONGLONG)g_probeWriters * 1000) { SetWatch(0); LogWriters(false); probeState = 3; }
             }
         }
+        // each truck keeps its own pressure (PerTruck): the driven truck's kind is read when the vehicle object changes
+        // (another truck, or the same one made anew by a map load). A kind with a saved mode gets it at once, and the
+        // pressure with it, so nothing is heard; a kind without one starts at Normal.
+        static uint64_t kindOf = 0; // the vehicle the kind was read from
+        static char kind[96] = "";  // the driven truck's kind, "" = not read
+        static bool kindSaid = false;
+        if (vehicle && vehicle != kindOf)
+        {
+            char name[96];
+            if (TruckKindName(vehicle, name))
+            {
+                kindOf = vehicle;
+                const bool other = strcmp(name, kind) != 0;
+                strcpy_s(kind, name);
+                if (other && g_perTruck)
+                {
+                    int saved = kNormal;
+                    const bool known = TruckModeLoad(g_dir + kTruckModesFile, kind, saved);
+                    if (saved >= g_modeCount) saved = kNormal; // a saved Increased with Increased off
+                    g_mode = saved;
+                    g_pressure = kModePressure[g_mode];
+                    moving = false;
+                    if (known) Log(L"truck %S: %s put back (%s)", kind, g_modes[g_mode].name, kTruckModesFile);
+                    else Log(L"truck %S: not driven before, so %s", kind, g_modes[g_mode].name);
+                }
+            }
+            else if (!kindSaid) { kindSaid = true; Log(L"truck: its kind's name was not read, so this truck shares the mode in force"); }
+        }
+        if (!vehicle) kindOf = 0; // read again when a truck is found
         int chosen = -1; // a mode picked on this pass
         if ((pressed || padOpens) && wheels.empty())
         {
@@ -1740,6 +1798,7 @@ static DWORD WINAPI Run(void *)
         {
             g_mode = chosen;
             Log(L"mode %s, %zu wheels", g_modes[g_mode].name, wheels.size());
+            if (g_perTruck && kind[0] && kindOf == vehicle) TruckModeSave(g_dir + kTruckModesFile, kind, g_mode); // kind is this truck's
             // once for Normal, twice for Reduced, three times for Low, high for Increased
             if (g_beep && g_mode == kIncreased) BeepLater(1320, 120);
             else if (g_beep) for (int i = g_mode; i <= kNormal; i++) BeepLater(880, 70, 60);
@@ -2044,6 +2103,7 @@ static DWORD WINAPI Run(void *)
         {
             TpLive live = {};
             live.wheels = (int)wheels.size();
+            if (!wheels.empty() && kindOf == vehicle) strcpy_s(live.truck, kind);
             live.mode = g_mode;
             live.balance = wheels.empty() ? 1.0f : balance[0];
             live.speed = speedOk ? speed * 3.6f : 0.0f;
@@ -2139,7 +2199,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
 {
     bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
                 a.confirmSeconds == b.confirmSeconds && a.vanillaBalance == b.vanillaBalance && a.balanceStrength == b.balanceStrength &&
-                a.standStill == b.standStill && a.temperature == b.temperature && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
+                a.standStill == b.standStill && a.perTruck == b.perTruck && a.temperature == b.temperature && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
                 a.insaneMode == b.insaneMode;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
@@ -2204,6 +2264,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.tireDamage = false;
     c.rollingRadius = false;
     c.standStill = false;
+    c.perTruck = false;
     c.temperature = false;
     c.ambientC = -3.0f;
     c.hardMode = true;
@@ -2220,7 +2281,7 @@ static bool IniTest(const wchar_t *givenIni)
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
-                 c.rollingRadius == d.rollingRadius || c.standStill == d.standStill || c.temperature == d.temperature || c.ambientC == d.ambientC ||
+                 c.rollingRadius == d.rollingRadius || c.standStill == d.standStill || c.perTruck == d.perTruck || c.temperature == d.temperature || c.ambientC == d.ambientC ||
                  c.hardMode == d.hardMode || c.insaneMode == d.insaneMode;
     WriteIni(c);
     ReadIni(b);
@@ -2414,6 +2475,63 @@ static bool RealismTest()
     g_pressure = kModePressure[kNormal];
     g_now = FactorsAt(g_pressure);
     return at && between && below && above && modes && temps && past && hard && insane;
+}
+
+// Each truck's own pressure (truck_modes.h), in out\test: a kind never saved has no mode, a saved one reads back, a
+// word that is no mode's name counts as none, a saved Increased with Increased off goes Normal (the pass's clamp), the
+// name cleaning, and the kind's name read from a truck laid out in this program's own memory as the game has it.
+static bool TruckModesTest()
+{
+    const std::wstring file = g_dir + L"test_trucks.ini";
+    DeleteFileW(file.c_str());
+    int m = -1;
+    const bool none = !TruckModeLoad(file, "test_kind_a", m);
+    TruckModeSave(file, "test_kind_a", kLow);
+    int low = -1;
+    const bool lowOk = TruckModeLoad(file, "test_kind_a", low) && low == kLow;
+    TruckModeSave(file, "test_kind_a", kIncreased);
+    int up = -1;
+    const bool upOk = TruckModeLoad(file, "test_kind_a", up) && up == kIncreased;
+    const int count = 3; // Increased off
+    const int clamped = up >= count ? kNormal : up;
+    WritePrivateProfileStringW(L"test_kind_b", L"Mode", L"Bogus", file.c_str());
+    int bogus = -1;
+    const bool bogusOk = !TruckModeLoad(file, "test_kind_b", bogus);
+    FILE *f = nullptr;
+    wchar_t first[40] = {};
+    if (_wfopen_s(&f, file.c_str(), L"r, ccs=UTF-16LE") == 0 && f) { fgetws(first, 40, f); fclose(f); }
+    const bool note = !wcsncmp(first, L"; Each truck's pressure mode", 28);
+    char cleaned[16] = "a b[c]";
+    TruckKindClean(cleaned);
+    const bool clean = !strcmp(cleaned, "a_b_c_");
+    // a truck: its model at + 0x60, the kind's text at model + 0x588; inline (room 15), then behind a pointer (room 31)
+    static uint64_t vehicle[0x80] = {};
+    static uint8_t model[0x600] = {};
+    static const char longName[] = "zetros/176593_long_name";
+    vehicle[0x60 / 8] = (uint64_t)model;
+    auto lay = [](const char *chars, uint64_t pointer, uint64_t length, uint64_t room) {
+        uint8_t *t = model + 0x588;
+        memset(t, 0, 0x20);
+        if (chars) memcpy(t, chars, (size_t)length);
+        else memcpy(t, &pointer, 8);
+        memcpy(t + 0x10, &length, 8);
+        memcpy(t + 0x18, &room, 8);
+    };
+    char name[96] = {};
+    lay("scout_a", 0, 7, 15);
+    const bool inlineOk = TruckKindName((uint64_t)vehicle, name) && !strcmp(name, "scout_a");
+    lay(nullptr, (uint64_t)longName, sizeof longName - 1, 31);
+    char named[96] = {};
+    const bool pointerOk = TruckKindName((uint64_t)vehicle, named) && !strcmp(named, longName);
+    lay(nullptr, 0, 0, 15);
+    const bool emptyOk = !TruckKindName((uint64_t)vehicle, name);
+    DeleteFileW(file.c_str());
+    const bool ok = none && lowOk && upOk && clamped == kNormal && bogusOk && note && clean && inlineOk && pointerOk && emptyOk;
+    printf("%s trucks: a mode saved per truck kind reads back (Low, Increased; Increased with it off goes Normal), \"Bogus\" is none, the file's note%s\n",
+           ok ? "ok  " : "FAIL", note ? "" : " MISSING");
+    printf("%s trucks: the kind's name read from a truck (inline \"%s\", behind a pointer \"%s\", an empty one refused), \"a b[c]\" cleaned to \"%s\"\n",
+           inlineOk && pointerOk && emptyOk && clean ? "ok  " : "FAIL", inlineOk ? "scout_a" : "?", named, cleaned);
+    return ok;
 }
 
 // The state published for other mods (tire_state.h): the block is made, written, opened by its name as another mod
@@ -2873,6 +2991,7 @@ int wmain(int argc, wchar_t **argv)
     if (!PadCurveTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;
+    if (!TruckModesTest()) return 1;
     if (!TireStateTest()) return 1;
     if (!SoundTest()) return 1;
     wchar_t imageFile[1024] = {};

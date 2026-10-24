@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1]
+
+- Each truck keeps its own pressure mode, `PerTruck` in the ini and a checkbox in the tab's Realism section (on by default). The mode is saved by the truck kind's name in `TirePressure.trucks.ini` next to the exe and comes back the moment that truck is driven again, without a sound, the compressor or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts at Normal, and two trucks of one kind share it. `PerTruck=0` keeps one mode for every truck, Normal at each game start, as before. The tab's truck section names the truck's kind. Asked for by a player on mod.io.
+
 ## [1.3.0] 2026-10-24
 
 - Pad throttle and brake curves, `PadThrottleCurve` and `PadBrakeCurve` in the ini and the tab's Controls section (1 to 3, 2 by default): while a truck is driven each trigger's share is raised to that power before the game reads it, so a light pull gives less and the full pull stays full; at 2 half the trigger gives a quarter, at 1 the trigger is as it is. A tenth of the trigger was a lot of throttle for the game's trucks.

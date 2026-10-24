@@ -87,6 +87,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::SeparatorText("Truck");
     if (live.wheels > 0)
     {
+        if (live.truck[0]) ImGui::Text("Truck %s.", live.truck);
         ImGui::Text("%d wheels, %s pressure.", live.wheels, modeNames[live.mode < 0 || live.mode >= kModeCount ? kNormal : live.mode]);
         if (live.ground > 0.0f)
         {
@@ -134,6 +135,10 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             "cold rubber grips less, most on asphalt and rock; warm air is a little more pressure, warm rubber a little more "
             "grip on asphalt; in the heat soft tires wear from lower speeds. The modes' numbers are for 15 C.");
     ImGui::EndDisabled();
+    changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
+    PageTip("The mode is saved by the truck kind's name in TirePressure.trucks.ini. It comes back the moment you drive that "
+            "truck again, without a sound or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts "
+            "at Normal. Two trucks of one kind share it. Off: one mode for every truck, Normal at each game start.");
     PageLabel("Outside temperature", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##outside", &s.ambientC, -40.0f, 50.0f, "%.0f C", ImGuiSliderFlags_AlwaysClamp));

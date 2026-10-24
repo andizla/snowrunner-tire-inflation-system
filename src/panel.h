@@ -4,7 +4,7 @@
 #pragma once
 #include <windows.h>
 #include <xinput.h>
-#define TP_VERSION "1.3.0"
+#define TP_VERSION "1.3.1"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -61,7 +61,8 @@ struct TpSettings
     bool tireDamage;         // TireDamage: driving too fast for the pressure wears the tires (the modes' MinVel .. DamageTick)
     bool rollingRadius;      // RollingRadius: the gears make up for the flattened wheels, but for what a real tire loses
     bool standStill;         // StandStill: a pressure change only goes on while the truck stands still
-    bool temperature;        // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
+    bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini); 0 = one mode for all, Normal at every start
+    bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
     bool insaneMode;         // InsaneMode: a hardcore set harder than real tires (InsaneSettings) in the same place; it wins over HardMode
@@ -114,6 +115,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.tireDamage = true;
     s.rollingRadius = true;
     s.standStill = true;
+    s.perTruck = true;
     s.temperature = true;
     s.ambientC = 15.0f;
     s.hardMode = false;
@@ -211,6 +213,7 @@ void SettingsReload();                    // read the ini again (the page's butt
 struct TpLive
 {
     int wheels;                  // 0 = no truck driven
+    char truck[96];              // its kind's name ("western_star_6900xd"), "" = not read
     float ground, asphalt, mud;  // the first wheel's own grip (from its tire file)
     float balance;               // the vanilla balance factor on that wheel (1 = untouched)
     int mode;                    // PressureMode

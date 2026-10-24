@@ -38,7 +38,7 @@ With the keyboard, F3 opens the panel and steps the pressure down, from Low roun
 
 A choice left alone confirms itself after 5 seconds. The tires then take 6 seconds to deflate from Normal to Low, less for a smaller step, and up to 9 from Low to Increased (the pressure moves on one scale: Low is 45% of Normal's, Reduced 65%, Increased 125%). The change only goes on while the truck stands still: a choice made while driving waits, and a hint at the top left says so (`StandStill`, see Realism). With the beep switched on (it is off unless you turn it on), the mod beeps as the change begins: once for Normal, twice for Reduced, three times for Low, one high beep for Increased.
 
-The mode belongs to the truck you drive: another truck takes the current mode when you get in. Every game start begins at Normal.
+Each truck keeps its own mode. The mode is saved by the truck kind's name in `TirePressure.trucks.ini` and comes back the moment you drive that truck again, without a sound or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts at Normal. Two trucks of one kind share it. `PerTruck=0` in the ini (or the tab's checkbox) gives the old way: one mode for every truck, Normal at each game start.
 
 ## Sounds
 
@@ -114,20 +114,20 @@ Airing a tire down to half its pressure lengthens its contact patch by about hal
 The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play. F2 opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. With Next Gen Gameplay installed, its Gameplay tab is in the same window. While the menu is open the game gets no mouse and no keys. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
 
 - Every number in the two tables of the modes, and tire damage on or off.
-- Hard mode, changes only while standing still, the outside temperature and whether the tires feel it.
+- Hard mode, changes only while standing still, whether each truck keeps its own pressure, the outside temperature and whether the tires feel it.
 - Whether flattened tires roll like real ones. On by default. Off, the truck loses about three times as much speed.
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down just far enough that some vanilla tire, of any kind, matches or beats them in all three. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
 - The key, the pad buttons, the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 2 by default, where half the trigger gives a quarter and the full pull stays full; 1 is as it is), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
-Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start.
+Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start. Each truck's mode goes into `TirePressure.trucks.ini` in the same folder, one section per truck kind with a line such as `Mode=Low`. It can be edited by hand as well.
 
 Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` each put another sound in place of the mod's own: the name of a WAV file in `Sources\Bin`, or of a sample in the game's `shared_sound.pak` such as `[sound]\actors\actor_lamp_generator_loop.pcm`. `none` leaves that sound out. The first three play round and round while they last. A WAV file with a loop marked in it plays up to the loop once, then goes round in the loop, and plays what follows the loop as the sound stops.
 
 ## Remove
 
-Delete `TirePressure.asi`, `TirePressure.ini` and `TirePressure.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
+Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini` and `TirePressure.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
 
 ## Notes
 

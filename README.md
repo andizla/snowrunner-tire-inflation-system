@@ -9,7 +9,9 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 ## What you need
 
 - SnowRunner for Windows. The mod was made on the Steam version (the game build of 22 July 2026). At every start it looks for the places it needs in the game's code. Where it does not find the ones it cannot do without, on another build of the game, it writes that into its log and does nothing. The Epic Games Store and Game Pass versions have not been tested.
-- ReShade, which comes in the zip: the mod draws its panel and its settings through it. It is ReShade 6.8.0 with full add-on support, changed in one place: it shows no banner at the start. Its `ReShade.ini` loads no effects, so nothing of ReShade itself shows. Home opens and closes ReShade's own window. A ReShade already in the game, such as the one Luma brings for HDR, works as it is: any ReShade from 6.8.0 on with add-on support. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors. When ReShade is missing or takes no add-ons, the mod says so at the start, in a line at the top, and in the NEXT GEN menu, with what to do.
+- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without it the game can crash with those overlays, and the mod says so at the start.
+
+- The full manual, with every number and formula, as a PDF: [Next Gen Tire Inflation Manual](https://github.com/andizla/snowrunner-tire-inflation-system/blob/main/docs/Next_Gen_Tire_Inflation_Manual.pdf), also [in Russian](https://github.com/andizla/snowrunner-tire-inflation-system/blob/main/docs/Next_Gen_Tire_Inflation_Manual_ru.pdf).
 
 ## Install
 
@@ -17,7 +19,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 2. Copy the files from the zip into the game's `Sources\Bin` folder, next to `SnowRunner.exe`: `version.dll`, `TirePressure.asi`, `dxgi.dll` and `ReShade.ini`.
 3. Start the game. F2 opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
 
-Already using ReShade? If Windows asks whether to replace `dxgi.dll` or `ReShade.ini`, ReShade is already in the game: choose Skip for those two, and your ReShade and its settings stay. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone. Coming from 1.2 with the ReShade it brought: replacing its `dxgi.dll` is fine, the new one only shows no banner at the start; keep your `ReShade.ini` if you changed it.
+Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone. Coming from 1.2 with the ReShade it brought: this zip's `dxgi.dll` can go over it.
 
 `version.dll` is a small loader: it loads every file in that folder whose name ends in `.asi`. If you already use an ASI loader (other `.asi` mods work in that folder), copy only `TirePressure.asi` and leave your loader as it is. If another mod's `version.dll` is there and it is not an ASI loader, rename that one to `version_chain.dll` first, and this loader passes everything on to it.
 

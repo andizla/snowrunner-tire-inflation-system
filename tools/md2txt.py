@@ -6,6 +6,10 @@ import io, re, sys, textwrap
 
 WIDTH = 92
 
+def wrap(text, width, **kw):
+    # an address or a long word stays whole, past the width if it must: a reader copies it as one piece
+    return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False, **kw)
+
 def inline(s):
     s = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', s)       # a picture
     s = re.sub(r'\[([^\]]+)\]\((https?://[^)]*)\)', r'\1 (\2)', s)   # a web link: its text and its address
@@ -25,7 +29,7 @@ def table(rows):
     head, out = cells[0], []
     for r in cells[1:]:
         rest = '; '.join(('%s: %s' % (head[i], r[i])) if head[i] else r[i] for i in range(1, n) if r[i])
-        out.extend(textwrap.wrap(r[0] + (' (' + rest + ')' if rest else ''), WIDTH, initial_indent='  - ', subsequent_indent='    '))
+        out.extend(wrap(r[0] + (' (' + rest + ')' if rest else ''), WIDTH, initial_indent='  - ', subsequent_indent='    '))
     return out
 
 def convert(md, skip, title):
@@ -36,7 +40,7 @@ def convert(md, skip, title):
         nonlocal para, tbl
         if (para or tbl) and out and out[-1] != '': out.append('')   # a blank line after a list or a code block
         if para:
-            out.extend(textwrap.wrap(inline(' '.join(para)), WIDTH) or [''])
+            out.extend(wrap(inline(' '.join(para)), WIDTH) or [''])
             out.append('')
             para = []
         if tbl:
@@ -76,7 +80,7 @@ def convert(md, skip, title):
         if mm:
             flush()
             bullet = '- ' if mm.group(1) in '-*' else mm.group(1) + ' '
-            out.extend(textwrap.wrap(inline(mm.group(2)), WIDTH, initial_indent='  ' + bullet, subsequent_indent='  ' + ' ' * len(bullet)))
+            out.extend(wrap(inline(mm.group(2)), WIDTH, initial_indent='  ' + bullet, subsequent_indent='  ' + ' ' * len(bullet)))
             continue
         para.append(line.strip())
     flush()

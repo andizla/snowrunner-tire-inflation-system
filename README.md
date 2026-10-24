@@ -141,6 +141,13 @@ Delete `TirePressure.asi`, `TirePressure.ini` and `TirePressure.log` from `Sourc
 - If something does not work, `TirePressure.log` in `Sources\Bin` says what the mod found and did. `GrabDumps.bat` from the zip, run in `Sources\Bin` with the game closed, gathers the logs, the ini files and the crash dump into one zip beside itself, for a report.
 - Support, discussion and ideas: the author's channel on Enthusiast Runner's Discord, https://discord.com/invite/MssDb2Pvcj, or an issue on GitHub for a bug report.
 
+## Planned
+
+- A throttle and brake curve for pads: a light pull on the trigger gives less, the full pull stays full. Built, in a later version.
+- Game Pass: the fix in 1.3.0 counts as confirmed once a player's log on that build shows it.
+- PS5 controllers: the mod reads XInput pads only today.
+- Clearer names for the settings.
+
 ## Build
 
 Windows with Visual Studio 2022 (C++ desktop tools).

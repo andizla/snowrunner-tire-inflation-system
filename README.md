@@ -137,7 +137,7 @@ Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll`
 - Without a sound device the sounds stay off and everything else works.
 - After a game update the mod keeps working when the game's code around its places is unchanged. When it is not, the mod does nothing and says so in its log, until a version for the new game is out.
 - The mod publishes its state for other mods in a block of shared memory, `Local\SnowRunnerTirePressure.State.<process id>`: the mode, the pressure and its target, the outside temperature in force, the most worn tire and a few flags. `src\tire_state.h` has the layout. A gauge cluster can show the pressure level from it.
-- If something does not work, `TirePressure.log` in `Sources\Bin` says what the mod found and did.
+- If something does not work, `TirePressure.log` in `Sources\Bin` says what the mod found and did. `GrabDumps.bat` from the zip, run in `Sources\Bin` with the game closed, gathers the logs, the ini files and the crash dump into one zip beside itself, for a report.
 
 ## Build
 

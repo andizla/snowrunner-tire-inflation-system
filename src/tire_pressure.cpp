@@ -821,10 +821,11 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     Read(vehicle + 0x68, action);
     auto it = g_vehicles.find(vehicle);
     // Another truck can be made where a freed one was: it has another truck action, and its values are its own stock, not
-    // what was written for the one before. Its record starts anew then, unless all three values still hold what was
-    // written (the same truck with a new action: its values must not be taken for stock and scaled again).
+    // what was written for the one before. Its record starts anew then, unless one of the three values still holds what
+    // was written (the same truck with a new action, the game having rewritten some of its values: the ones it kept must
+    // not be taken for stock and scaled again; review 5, C2).
     if (it != g_vehicles.end() && it->second.action != action &&
-        !(StillWritten(vehicle + 0xE38, it->second.fuelA) && StillWritten(vehicle + 0xE3C, it->second.fuelB) && StillWritten(vehicle + 0x69C, it->second.steering)))
+        !(StillWritten(vehicle + 0xE38, it->second.fuelA) || StillWritten(vehicle + 0xE3C, it->second.fuelB) || StillWritten(vehicle + 0x69C, it->second.steering)))
     {
         g_vehicles.erase(it);
         it = g_vehicles.end();
@@ -1603,7 +1604,7 @@ static DWORD WINAPI Run(void *)
             if (g_mode >= g_modeCount) { g_mode = kNormal; Log(L"mode Normal (Increased is off now)"); }
         }
         const bool front = GameInFront();
-        const bool now = front && (GetAsyncKeyState(g_key) & 0x8000);
+        const bool now = front && !NgMenuOpen() && (GetAsyncKeyState(g_key) & 0x8000); // not while the NEXT GEN menu has the keys
         const bool pressed = now && !down;
         down = now;
         // The driven truck's wheels, with the vehicle they belong to. Until the first truck is found they are looked

@@ -1,12 +1,12 @@
 // ng_overlay.h: Next Gen's own overlay. A mod draws what it shows over the game (a gauge cluster, a panel) and its tab
-// of the NEXT GEN menu with Dear ImGui, compiled into the mod, on the game's own DirectX 11 device. No ReShade is
-// needed: the overlay takes the game's imports of CreateDXGIFactory1 and D3D11CreateDevice and gives every swap chain
+// of the NEXT GEN menu with Dear ImGui, compiled into the mod, on the game's own DirectX 11 device. Without ReShade
+// the overlay takes the game's imports of CreateDXGIFactory1 and D3D11CreateDevice and gives every swap chain
 // the game makes a method table of its own with the overlay's Present, which calls on to what the table held (DirectX,
 // the Steam overlay's hook on it, ReShade). DirectX's own tables stay as they are (ng_overlay.cpp says why). With
 // ReShade installed the swap chains come from ReShade's presents instead (ng_reshade.cpp).
 // The same two files (ng_overlay.h, ng_overlay.cpp) are in every Next Gen mod (Next Gen Gameplay, Next Gen Tire
 // Inflation). The mods in one game share the menu through a block of named shared memory: one window with a tab per
-// mod, opened and closed with one key (Delete unless NextGen.ini next to the game's exe says otherwise; the menu sets it
+// mod, opened and closed with one key (F2 unless NextGen.ini next to the game's exe says otherwise; the menu sets it
 // too), drawn by the mod whose tab is chosen.
 #pragma once
 #include <windows.h>
@@ -37,8 +37,8 @@ ImTextureID NgTextureMake(const void *rgba, int w, int h);
 void NgTextureFree(ImTextureID tex);
 // Whether the NEXT GEN menu is open, on any tab.
 bool NgMenuOpen();
+int NgMenuKeyFromIni();                   // the key NextGen.ini gives the menu, read as a start reads it (a missing file is made); for tests
 // The menu's key, a virtual key code; 0 leaves it. Saved in NextGen.ini, which every Next Gen mod reads at start.
-void NgMenuKeySet(int vk);
 // What the start found about ReShade, which the release brings for the overlay to take the game's swap chains from:
 // registered (ReShade took the overlay as an add-on), the ReShade module that did not, the dxgi.dll beside the game's
 // exe. Sets the notice the menu shows above the tab's page and the line shown at the top for the first 15 s; returns 0

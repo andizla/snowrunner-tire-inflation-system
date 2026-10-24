@@ -185,16 +185,17 @@ static int KeyLoad()
         return kNgKeyDefault;
     }
     if (vk > 0 && !KeyNotForMenu(vk)) return vk;
-    if (vk == 0) KeySave(kNgKeyDefault, false); // the first start: the file with its help lines and the default
+    if (vk == 0)
+    {
+        // the first start: the file with its help lines and the default, and KeyMoved=2 with it, so a Delete or Page Down
+        // set there by hand later is never taken for a test build's default (review 5, C1)
+        KeySave(kNgKeyDefault, false);
+        WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"2", path);
+    }
     return kNgKeyDefault;
 }
 
-void NgMenuKeySet(int vk)
-{
-    if (vk <= 0 || KeyNotForMenu(vk)) return;
-    InterlockedExchange(&g_shared->key, vk);
-    KeySave(vk, true);
-}
+int NgMenuKeyFromIni() { return KeyLoad(); }
 
 // ---- the game's input while the menu is open ----
 // The game reads the cursor and keys through user32 (GetCursorPos, SetCursorPos, GetAsyncKeyState, GetKeyState; its
@@ -905,7 +906,7 @@ static void GraphicsPage()
     const NgGraphicsApi *api = g_graphics;
     if (!api) return;
     ImGui::TextWrapped("These switch Next Gen Graphics' effects on and off while you play. What the game starts with is set in SnowRunnerShadows.ini. "
-                       "Its F keys are off while this tab is here. KeysWithMenu=1 in that ini brings them back.");
+                       "Its F keys are off while this tab is here, unless KeysWithMenu=1 in that ini.");
     ImGui::Spacing();
     for (int i = 0; i < api->count; i++)
     {

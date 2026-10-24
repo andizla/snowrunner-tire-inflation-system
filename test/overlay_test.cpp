@@ -97,6 +97,7 @@ extern "C" __declspec(dllexport) int TestReShade(bool registered, HMODULE reshad
 extern "C" __declspec(dllexport) bool TestGraphics(const wchar_t *dll) { return NgGraphicsFrom(LoadLibraryW(dll)); }
 extern "C" __declspec(dllexport) int TestTabCount(const char *tab) { return NgMenuTabCount(tab); }
 extern "C" __declspec(dllexport) bool TestShowTab(const char *tab) { return NgMenuShowTab(tab); }
+extern "C" __declspec(dllexport) int TestKeyFromIni() { return NgMenuKeyFromIni(); }
 
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
@@ -395,6 +396,25 @@ int main()
     Check(startB("B", 2, &framesB), "mod B's overlay starts");
     Check(GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_F2 && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 2,
           "NextGen.ini's second default key, Page Down, moves to F2 once");
+    // a fresh NextGen.ini is made with KeyMoved=2, so a Delete or Page Down set in it by hand afterwards stays, and a key
+    // picked in the menu is never moved (review 5, C1)
+    typedef int (*KeyFn)();
+    const KeyFn keyA = (KeyFn)GetProcAddress(a, "TestKeyFromIni");
+    DeleteFileW(ini);
+    const int fresh = keyA ? keyA() : 0;
+    const bool freshFile = fresh == VK_F2 && GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_F2 && GetPrivateProfileIntW(L"Menu", L"KeyMoved", 0, ini) == 2;
+    WritePrivateProfileStringW(L"Menu", L"Key", L"46", ini);
+    const int byHand = keyA ? keyA() : 0;
+    WritePrivateProfileStringW(L"Menu", L"Key", L"34", ini);
+    const int byHand2 = keyA ? keyA() : 0;
+    Check(freshFile && byHand == VK_DELETE && byHand2 == VK_NEXT && GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_NEXT,
+          "a fresh NextGen.ini is made with KeyMoved=2, and a Delete or Page Down set in it by hand stays");
+    WritePrivateProfileStringW(L"Menu", L"KeyMoved", nullptr, ini);
+    WritePrivateProfileStringW(L"Menu", L"Picked", L"1", ini);
+    Check(keyA && keyA() == VK_NEXT && GetPrivateProfileIntW(L"Menu", L"Key", 0, ini) == VK_NEXT, "a key picked in the menu (Picked=1) is never moved");
+    WritePrivateProfileStringW(L"Menu", L"Picked", nullptr, ini);
+    WritePrivateProfileStringW(L"Menu", L"Key", L"113", ini);
+    WritePrivateProfileStringW(L"Menu", L"KeyMoved", L"2", ini);
     TestReShadeCases(a, b);
 
     // the game's way: a factory from CreateDXGIFactory1, a device on one of its adapters, the swap chain from the factory

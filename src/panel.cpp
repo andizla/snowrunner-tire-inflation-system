@@ -145,6 +145,8 @@ typedef DWORD(WINAPI *XInputGetStateFn)(DWORD, XINPUT_STATE *);
 static XInputGetStateFn g_realGetState = nullptr;
 static volatile LONG g_openMask = 0, g_stepMask[2] = {}, g_panelMask = 0;
 static volatile LONG g_padLive = 0; // 1 while a truck is driven: only then are the panel's buttons taken from the game
+static uint8_t g_padMap[2][256];      // each trigger's value through its curve: 0 the right trigger (throttle), 1 the left (brake and reverse)
+static volatile LONG g_padCurved = 0; // 1 while a curve is not 1, so the filter maps the triggers
 
 volatile LONG g_padThread = 0, g_padThreadChanges = 0, g_overlayThread = 0; // which of the game's threads read the pad and present
 
@@ -160,6 +162,11 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
     {
         WORD &b = state->Gamepad.wButtons;
         if (!g_padLive) { InterlockedExchange(&held[index], 0); return r; }
+        if (g_padCurved)
+        {
+            state->Gamepad.bRightTrigger = g_padMap[0][state->Gamepad.bRightTrigger];
+            state->Gamepad.bLeftTrigger = g_padMap[1][state->Gamepad.bLeftTrigger];
+        }
         const LONG still = g_view.open ? g_panelMask : (held[index] & b);
         InterlockedExchange(&held[index], still);
         WORD hide = (WORD)still;
@@ -171,6 +178,25 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
 }
 
 void PadLive(bool live) { InterlockedExchange(&g_padLive, live ? 1 : 0); }
+
+// The curve: the trigger's share raised to the power, so a light pull gives less and the full pull stays full (at 2,
+// half the trigger gives a quarter). A table per trigger, built here on the settings thread; the filter only reads
+// it, and reads none while both curves are 1. A pad's trigger pressed a tenth of the way was a lot of throttle for
+// SnowRunner's trucks (asked for by the author, 2026-10-23).
+void PadCurves(float throttle, float brake)
+{
+    const float p[2] = { throttle, brake };
+    bool any = false;
+    for (int t = 0; t < 2; t++)
+    {
+        const float e = p[t] < 1.0f ? 1.0f : p[t] > 3.0f ? 3.0f : p[t];
+        for (int v = 0; v < 256; v++) g_padMap[t][v] = e == 1.0f ? (uint8_t)v : (uint8_t)(int)(255.0f * powf((float)v / 255.0f, e) + 0.5f);
+        any = any || e != 1.0f;
+    }
+    InterlockedExchange(&g_padCurved, any ? 1 : 0);
+}
+
+uint8_t PadCurved(uint8_t value, int trigger) { return g_padMap[trigger & 1][value]; }
 
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel)
 {

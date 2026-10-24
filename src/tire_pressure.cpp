@@ -185,6 +185,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"UIScale", L"%g", s.uiScale);
     put(T, L"ConfirmSeconds", L"%g", s.confirmSeconds);
     for (int i = 0; i < 5; i++) WritePrivateProfileStringW(T, Wide(kPadKeys[i]).c_str(), Wide(s.pad[i]).c_str(), ini.c_str());
+    for (int i = 0; i < 2; i++) put(T, Wide(kPadCurveKeys[i]), L"%g", s.padCurve[i]);
     for (int i = 0; i < 3; i++) put(T, kBaseKeys[i], L"%g", s.base[i]);
     put(T, L"VanillaBalance", L"%.0f", s.vanillaBalance ? 1 : 0);
     put(T, L"VanillaBalanceStrength", L"%g", s.balanceStrength);
@@ -224,6 +225,8 @@ static void ReadIni(TpSettings &s)
                         L"; UI=1 shows the Tire Inflation System panel, drawn by the mod itself: the key opens it and\n"
                         L"; steps the pressure down, the choice confirms itself after ConfirmSeconds. Pad buttons (XInput): DPadUp,\n"
                         L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None.\n"
+                        L"; PadThrottleCurve and PadBrakeCurve (1 to 3): a trigger\'s share to this power while a truck is driven, so a\n"
+                        L"; light pull gives less and the full pull stays full (1 = as it is; at 2 half the trigger gives a quarter).\n"
                         L"; BaseGround, BaseAsphalt and BaseMud scale the grip of every mode, Normal too.\n"
                         L"; VanillaBalance=1 brings tires that grip better than every vanilla tire on ground, asphalt and mud at once\n"
                         L"; down to the best vanilla tire of their kind; vanilla tires stay as they are. VanillaBalanceStrength 0..2:\n"
@@ -285,6 +288,7 @@ static void ReadIni(TpSettings &s)
     s.ui = GetPrivateProfileIntW(T, L"UI", 1, ini.c_str()) != 0;
     s.uiScale = min(3.0f, max(0.3f, IniFloat(T, L"UIScale", s.uiScale, ini)));
     s.confirmSeconds = min(30.0f, max(0.0f, IniFloat(T, L"ConfirmSeconds", s.confirmSeconds, ini)));
+    for (int i = 0; i < 2; i++) s.padCurve[i] = min(3.0f, max(1.0f, IniFloat(T, Wide(kPadCurveKeys[i]).c_str(), s.padCurve[i], ini)));
     for (int i = 0; i < 5; i++)
     {
         wchar_t buf[64] = {};
@@ -332,6 +336,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     for (int i = 0; i < 5; i++) *pads[i] = PadParse(s.pad[i]);
     if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
     else PadMasks(0, 0, 0, 0, 0);
+    PadCurves(s.padCurve[0], s.padCurve[1]);
     KeyName(g_key, g_panelKeyName, sizeof g_panelKeyName);
     g_balanceOn = s.vanillaBalance;
     g_balanceStrength = s.balanceStrength;
@@ -2158,11 +2163,28 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
                 a.standStill == b.standStill && a.temperature == b.temperature && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
                 a.insaneMode == b.insaneMode;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
+    for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
     same = same && a.asphaltFloor == b.asphaltFloor && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) same = same && a.mode[m][k] == b.mode[m][k];
     return same;
+}
+
+// The pad's trigger curves: at 1 a trigger comes through as it is, at 2 half the trigger gives a quarter and the full
+// pull stays full, at 3 an eighth.
+static bool PadCurveTest()
+{
+    PadCurves(1.0f, 1.0f);
+    bool same = true;
+    for (int v = 0; v < 256; v++) same = same && PadCurved((uint8_t)v, 0) == v && PadCurved((uint8_t)v, 1) == v;
+    PadCurves(2.0f, 3.0f);
+    const int half = PadCurved(128, 0), full = PadCurved(255, 0), none = PadCurved(0, 0), brakeHalf = PadCurved(128, 1);
+    const bool ok = same && half >= 63 && half <= 65 && full == 255 && none == 0 && brakeHalf >= 31 && brakeHalf <= 33;
+    printf("%s pad: the trigger curves (1: as it is; 2: half the trigger gives %d of 255, the full pull %d; 3: half gives %d)\n",
+           ok ? "ok  " : "FAIL", half, full, brakeHalf);
+    PadCurves(1.0f, 1.0f);
+    return ok;
 }
 
 // The settings page's ini round trip, in out\test: a missing ini comes out as the defaults with the help text, every
@@ -2191,6 +2213,8 @@ static bool IniTest(const wchar_t *givenIni)
     c.confirmSeconds = 0.0f;
     static const char *pads[5] = { "RB+DPadUp", "None", "X+Y", "LS", "Back" };
     for (int i = 0; i < 5; i++) strcpy_s(c.pad[i], pads[i]);
+    c.padCurve[0] = 2.2f;
+    c.padCurve[1] = 1.6f;
     c.base[0] = 0.8f;
     c.base[1] = 0.9f;
     c.base[2] = 0.75f;
@@ -2213,6 +2237,7 @@ static bool IniTest(const wchar_t *givenIni)
             unchanged += c.mode[m][k] == d.mode[m][k];
         }
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
+    for (int i = 0; i < 2; i++) unchanged += c.padCurve[i] == d.padCurve[i];
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
@@ -2866,6 +2891,7 @@ int wmain(int argc, wchar_t **argv)
     if (argc > 1 && !wcscmp(argv[1], L"sound")) return SoundPlay(argc, argv);
     if (argc > 2 && !wcscmp(argv[1], L"loops")) return SoundLoops(argc, argv);
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
+    if (!PadCurveTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;
     if (!TireStateTest()) return 1;

@@ -292,6 +292,14 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     changed(ImGui::SliderFloat("##confirm", &s.confirmSeconds, 0.0f, 30.0f, s.confirmSeconds > 0.0f ? "%.0f s" : "never", ImGuiSliderFlags_AlwaysClamp));
     PageTip("Without input for this long the panel's choice applies itself. Never: confirm with the pad.");
     ImGui::EndDisabled();
+    PageLabel("Pad throttle curve", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##padthrottle", &s.padCurve[0], 1.0f, 3.0f, s.padCurve[0] > 1.0f ? "%.2f" : "as it is", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("Shapes the right trigger while you drive: its share to this power. Higher makes a light pull gentler. At 2, half the trigger gives a quarter of the throttle, and the full pull stays full.");
+    PageLabel("Pad brake curve", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##padbrake", &s.padCurve[1], 1.0f, 3.0f, s.padCurve[1] > 1.0f ? "%.2f" : "as it is", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("The same for the left trigger: the brake, and reverse.");
     PageLabel("Change takes", labelX);
     ImGui::SetNextItemWidth(w);
     ImGui::BeginDisabled(preset);

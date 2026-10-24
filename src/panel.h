@@ -52,6 +52,7 @@ struct TpSettings
     float uiScale;           // UIScale
     float confirmSeconds;    // ConfirmSeconds: the panel's choice confirms itself after this (0 = never)
     char pad[5][32];         // PadOpen, PadLower, PadRaise, PadConfirm, PadCancel ("LB+DPadDown", "None")
+    float padCurve[2];       // PadThrottleCurve, PadBrakeCurve: a trigger's share to this power before the game reads it, 1 (as it is) to 3
     float base[3];           // BaseGround, BaseAsphalt, BaseMud: grip of every mode, Normal too
     bool vanillaBalance;     // VanillaBalance: tires that out-grip every vanilla tire come down to the vanilla envelope
     float balanceStrength;   // VanillaBalanceStrength 0..2 (above 1: below the vanilla envelope)
@@ -68,6 +69,7 @@ struct TpSettings
 };
 static const int kSettingsModes[3] = { kReduced, kLow, kIncreased }; // PressureMode of TpSettings::mode[i]
 static const char *const kPadKeys[5] = { "PadOpen", "PadLower", "PadRaise", "PadConfirm", "PadCancel" };
+static const char *const kPadCurveKeys[2] = { "PadThrottleCurve", "PadBrakeCurve" }; // TpSettings::padCurve: the right and the left trigger
 // Per mode: grip multipliers on plain ground (dirt, and whatever is none of the others), on paved ground and in mud,
 // metres off the tire's radius, multipliers for fuel use and steering speed; then the ground grip again where the
 // ground is gravel, sand or rock, and Expeditions' TickDamageParams: above MinVel (m/s) every wheel on the ground takes
@@ -103,6 +105,7 @@ inline void SettingsDefaults(TpSettings &s)
     // with LB, as plain d-pad presses open the game's own screens and move through its menus
     static const char *pads[5] = { "LB+DPadDown", "LB+DPadLeft", "LB+DPadRight", "A", "B" };
     for (int i = 0; i < 5; i++) strcpy_s(s.pad[i], pads[i]);
+    s.padCurve[0] = s.padCurve[1] = 1.0f; // the triggers as they are
     s.base[0] = s.base[1] = s.base[2] = 1.0f;
     s.vanillaBalance = false;
     s.balanceStrength = 1.0f;
@@ -232,6 +235,8 @@ void LiveGet(TpLive &out);
 int PadInit(uint64_t exeBase);            // pointers newly sent through the filter
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel); // the bindings
 void PadLive(bool live);                  // the filter only takes buttons from the game while live (a truck is driven)
+void PadCurves(float throttle, float brake); // the triggers' curves, 1 = as they are: the filter maps each trigger while live
+uint8_t PadCurved(uint8_t value, int trigger); // a trigger's value through its curve: 0 the right trigger, 1 the left
 uint32_t PadButtons();                    // the buttons of all connected pads together, 0 without a pad
 
 // A binding of two or more buttons (a step binding like that also works while the panel is closed).

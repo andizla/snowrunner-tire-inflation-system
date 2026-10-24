@@ -780,8 +780,14 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
 // SteerSpeed at vehicle+0x69C. Each value keeps its own stock: one the game changed gives its new value as stock, the
 // others keep theirs, so nothing scaled can be taken for stock (see ApplyWheel for what that did once).
 struct Scaled { float stock, written; };
-// action, groundAt, gearsAt: the truck action and its two lists the record was made for.
-struct VehicleStock { uint64_t action, groundAt, gearsAt; Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
+// A record per truck object: the stock of each value the mod scales, and what it wrote there last. A value the game
+// rewrites (a truck made where a freed one was, a drive train rebuilt) is taken as stock again on the next pass
+// (ApplyValue), and the record is never restarted on its own: the test builds of 23 October restarted a list that had
+// moved unless every entry still held what was written, and a rebuilt drive train seeded from the mod's own values
+// then had its scaled gear speeds taken for stock and scaled again, so every gear's top climbed with each rebuild
+// until the truck ran away in a high gear (a tester's heavy trucks, 2026-10-24). The 21 October build, without the
+// restart, had none of it.
+struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
 static std::unordered_map<uint64_t, VehicleStock> g_vehicles;
 
 // What a gear's number gets on top of its number x roll, so that the gear's top, 2a + 5 (a + 2 in the high gear),
@@ -803,46 +809,19 @@ static void ApplyValue(uint64_t addr, Scaled &s, float factor, float lowest, flo
     if (want != s.written && Write(addr, want)) s.written = want;
 }
 
-// Whether a value still holds what was written there last.
-static bool StillWritten(uint64_t addr, const Scaled &s)
-{
-    float now;
-    return Read(addr, now) && now == s.written;
-}
-
-static bool AllStillWritten(uint64_t begin, const std::vector<Scaled> &list)
-{
-    for (size_t i = 0; i < list.size(); i++)
-        if (!StillWritten(begin + i * 4, list[i])) return false;
-    return true;
-}
-
 // ground: the ground grip factor of each wheel (ground grip index = wheel index): the mode's factor for the ground
 // under it times its vanilla balance factor. roll: the factor for the gear speeds (RollFactor, the wheels' mean).
 static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, bool announce, const std::vector<float> &ground, float roll)
 {
     if (!vehicle) return;
-    uint64_t action = 0;
-    Read(vehicle + 0x68, action);
     auto it = g_vehicles.find(vehicle);
-    // Another truck can be made where a freed one was: it has another truck action, and its values are its own stock, not
-    // what was written for the one before. Its record starts anew then, unless one of the three values still holds what
-    // was written (the same truck with a new action, the game having rewritten some of its values: the ones it kept must
-    // not be taken for stock and scaled again; review 5, C2).
-    if (it != g_vehicles.end() && it->second.action != action &&
-        !(StillWritten(vehicle + 0xE38, it->second.fuelA) || StillWritten(vehicle + 0xE3C, it->second.fuelB) || StillWritten(vehicle + 0x69C, it->second.steering)))
-    {
-        g_vehicles.erase(it);
-        it = g_vehicles.end();
-    }
     const bool first = it == g_vehicles.end();
     if (first)
     {
         const float none = nanf("");
-        it = g_vehicles.insert({ vehicle, VehicleStock{ action, 0, 0, { none, none }, { none, none }, { none, none } } }).first;
+        it = g_vehicles.insert({ vehicle, VehicleStock{ { none, none }, { none, none }, { none, none } } }).first;
     }
     VehicleStock &v = it->second;
-    v.action = action;
     ApplyValue(vehicle + 0xE38, v.fuelA, m.fuel, 0.0f, 1000.0f);
     ApplyValue(vehicle + 0xE3C, v.fuelB, m.fuel, 0.0f, 1000.0f);
     ApplyValue(vehicle + 0x69C, v.steering, m.steering, 0.0001f, 10.0f);
@@ -850,13 +829,13 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     // body friction from a float per wheel, the tire BodyFriction, in the vector at [vehicle+0x68]+0x98 .. +0xA0 (the
     // truck action). Expeditions keeps its scaled frictions between 0.05 and 10; this takes stock from 0.05 to 10 and
     // writes at most 10.
-    uint64_t begin = 0, end = 0;
+    uint64_t action = 0, begin = 0, end = 0;
+    Read(vehicle + 0x68, action);
     const bool groundOk = wheelCount && Read(action + 0x98, begin) && Read(action + 0xA0, end) && end > begin && end - begin == wheelCount * 4;
     if (groundOk)
     {
-        // a list elsewhere starts anew too, unless it still holds what was written (the same values moved)
-        if (v.ground.size() != wheelCount || (v.groundAt != begin && !AllStillWritten(begin, v.ground))) v.ground.assign(wheelCount, Scaled{ nanf(""), nanf("") });
-        v.groundAt = begin;
+        // a list that moved keeps its stock: an entry the game rewrote is taken as stock again by ApplyValue
+        if (v.ground.size() != wheelCount) v.ground.assign(wheelCount, Scaled{ nanf(""), nanf("") });
         for (size_t i = 0; i < wheelCount; i++) ApplyValue(begin + i * 4, v.ground[i], i < ground.size() ? ground[i] : m.body, 0.05f, 10.0f, 10.0f);
     }
     // Gear speeds: the truck action's list of wheel turning speeds, one per gear (reverse, the gears, the high gear),
@@ -872,8 +851,7 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     if (gearsOk)
     {
         const size_t count = (size_t)(gearEnd - gearBegin) / 4;
-        if (v.gears.size() != count || (v.gearsAt != gearBegin && !AllStillWritten(gearBegin, v.gears))) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
-        v.gearsAt = gearBegin;
+        if (v.gears.size() != count) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
         for (size_t i = 0; i < count; i++) ApplyValue(gearBegin + i * 4, v.gears[i], roll, -1000.0f, 1000.0f, 3.0e38f, GearAdd(roll, i + 1 == count));
     }
     if (first || announce)

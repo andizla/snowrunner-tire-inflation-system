@@ -19,8 +19,8 @@ md "%T%"
 rem the game's crash dump
 if exist "%LOCALAPPDATA%\Saber\CrashDump.dmp" copy /y "%LOCALAPPDATA%\Saber\CrashDump.dmp" "%T%\" >nul
 
-rem the mods' logs and settings, the loader's log, ReShade's and the manual transmission mod's logs
-for %%f in (AsiLoader.log Gauges.log TirePressure.log ReShade.log SMT_LOG.txt Gauges.ini TirePressure.ini NextGen.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
+rem the mods' logs and settings, the loader's log, ReShade's log and other mods' logs named *_LOG.txt
+for %%f in (AsiLoader.log Gauges.log TirePressure.log ReShade.log *_LOG.txt Gauges.ini TirePressure.ini NextGen.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
 
 rem Gauges keeps each earlier start's log in Gauges\logs: the newest 3
 set /a N=0
@@ -54,7 +54,8 @@ echo.
 echo Saved:
 echo "%ZIP%"
 echo.
-echo Send that zip.
+echo Send that zip. The logs carry your Steam account number (the save's folder name):
+echo post the zip where you report, or send it in a message.
 pause
 exit /b 0
 

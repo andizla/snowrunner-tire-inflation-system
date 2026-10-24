@@ -33,6 +33,9 @@ def table(rows):
     return out
 
 def convert(md, skip, title):
+    # the zip holds the licence files as .txt, and the source headers are on GitHub only
+    md = md.replace('`LICENSE`', '`LICENSE.txt`').replace('`THIRD_PARTY_NOTICES.md`', '`THIRD_PARTY_NOTICES.txt`').replace('`SOUND_CREDITS.md`', '`SOUND_CREDITS.txt`')
+    md = re.sub(r'`src\\([A-Za-z_]+\.h)`', r'`src\\\1` in the source on GitHub', md)
     out = [title, '=' * len(title), ''] if title else []
     para, tbl, code, skipping = [], [], False, False
 

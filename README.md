@@ -9,7 +9,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 ## What you need
 
 - SnowRunner for Windows. The mod was made on the Steam version (the game build of 22 July 2026). At every start it looks for the places it needs in the game's code. Where it does not find the ones it cannot do without, on another build of the game, it writes that into its log and does nothing. The Epic Games Store and Game Pass versions have not been tested.
-- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without it the game can crash with those overlays, and the mod says so at the start.
+- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without ReShade the game can crash with the RivaTuner or Discord overlay or with multiple monitors, and the mod says so at the start.
 
 - The full manual, with every number and formula, as a PDF: [Next Gen Tire Inflation Manual](https://github.com/andizla/snowrunner-tire-inflation-system/blob/main/docs/Next_Gen_Tire_Inflation_Manual.pdf), also [in Russian](https://github.com/andizla/snowrunner-tire-inflation-system/blob/main/docs/Next_Gen_Tire_Inflation_Manual_ru.pdf).
 
@@ -126,7 +126,7 @@ Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` a
 
 ## Remove
 
-Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll` and `AsiLoader.log` from `Sources\Bin`. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. `NextGen.ini` goes too when no other Next Gen mod is left. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
+Delete `TirePressure.asi`, `TirePressure.ini` and `TirePressure.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
 
 ## Notes
 
@@ -134,6 +134,7 @@ Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.log`, `version.dll`
 - Trailers keep their tires as they are.
 - The pad's panel buttons are taken from the game only while you drive a truck. In menus they are the game's.
 - Co-op has not been tested.
+- On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - Without a sound device the sounds stay off and everything else works.
 - After a game update the mod keeps working when the game's code around its places is unchanged. When it is not, the mod does nothing and says so in its log, until a version for the new game is out.
 - The mod publishes its state for other mods in a block of shared memory, `Local\SnowRunnerTirePressure.State.<process id>`: the mode, the pressure and its target, the outside temperature in force, the most worn tire and a few flags. `src\tire_state.h` has the layout. A gauge cluster can show the pressure level from it.
@@ -174,6 +175,6 @@ GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
 The tire inflation system, its panel and its numbers are from Expeditions: A MudRunner Game by Saber Interactive. The panel and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. ReShade by Patrick Mours (crosire), which the zip brings without its start banner, hands the mod the game's swap chains through its add-on API. Their notices are in `THIRD_PARTY_NOTICES.md`. The asphalt floor follows an idea by Naybour. The sounds of air let out of a tire and of air going into one (`assets`) were recorded for this mod and are under its licence.
 
-Thanks to the testers: [Milos_Mk6](https://mod.io/u/milos_mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump, the insanity preset and his tire ideas; [Zenosxy](https://mod.io/u/zenosxy) for the first clean run outside the development PC.
+Thanks to the testers: [Milos_Mk6](https://mod.io/g/snowrunner/u/milos-mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump, the insanity preset and his tire ideas; [Zenosxy](https://mod.io/g/snowrunner/u/zenosxy) for the first clean run outside the development PC.
 
 SnowRunner and Expeditions are games by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

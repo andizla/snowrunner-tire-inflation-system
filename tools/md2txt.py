@@ -8,7 +8,8 @@ WIDTH = 92
 
 def inline(s):
     s = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', s)       # a picture
-    s = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', s)    # a link: its text
+    s = re.sub(r'\[([^\]]+)\]\((https?://[^)]*)\)', r'\1 (\2)', s)   # a web link: its text and its address
+    s = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', s)    # a link into the repository: its text
     s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)
     return s.replace('`', '')
 

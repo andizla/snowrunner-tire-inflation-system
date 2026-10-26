@@ -57,7 +57,8 @@ struct TpSettings
     bool vanillaBalance;     // VanillaBalance: tires that out-grip every vanilla tire come down to the vanilla envelope
     float balanceStrength;   // VanillaBalanceStrength 0..2 (above 1: below the vanilla envelope)
     float asphaltFloor;      // AsphaltFloor: every tire grips at least this on paved ground, before the modes (0 = off)
-    bool increased;          // Increased: the Increased pressure mode above Normal
+    float wornGrip;          // WornGrip: the share of its grip a worn out or broken tire keeps, percent, 0 to 30 (0 = none)
+    bool increased;         // Increased: the Increased pressure mode above Normal
     bool tireDamage;         // TireDamage: driving too fast for the pressure wears the tires (the modes' MinVel .. DamageTick)
     bool rollingRadius;      // RollingRadius: the gears make up for the flattened wheels, but for what a real tire loses
     bool standStill;         // StandStill: a pressure change only goes on while the truck stands still
@@ -92,6 +93,8 @@ static const float kSecondsDefault = 6.0f, kSecondsBefore = 3.0f;
 // (15 before), and an ini from before that which still says 15 is taken along the same way.
 static const float kConfirmDefault = 5.0f, kConfirmBefore = 15.0f;
 static const int kIniVersion = 2; // ini IniVersion: 2 since 1.1.0; an ini without the key is from 1.0
+// WornGrip: enough grip that a truck on a worn out tire still moves (the testers asked for 10 to 12 percent).
+static const float kWornGripDefault = 10.0f, kWornGripMost = 30.0f;
 
 inline void SettingsDefaults(TpSettings &s)
 {
@@ -111,6 +114,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.vanillaBalance = false;
     s.balanceStrength = 1.0f;
     s.asphaltFloor = 0.0f;
+    s.wornGrip = kWornGripDefault;
     s.increased = true;
     s.tireDamage = true;
     s.rollingRadius = true;
@@ -165,6 +169,7 @@ inline void HardSettings(TpSettings &s)
     s.vanillaBalance = true;
     s.balanceStrength = 1.0f;
     s.asphaltFloor = 0.0f;
+    s.wornGrip = kWornGripDefault;
     s.increased = true;
     s.tireDamage = true;
     s.rollingRadius = true;
@@ -190,6 +195,7 @@ inline void InsaneSettings(TpSettings &s)
     s.vanillaBalance = true;
     s.balanceStrength = 2.0f;
     s.asphaltFloor = 0.0f;
+    s.wornGrip = kWornGripDefault;
     s.increased = false;
     s.tireDamage = true;
     s.rollingRadius = false;

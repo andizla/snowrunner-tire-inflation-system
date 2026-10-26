@@ -59,6 +59,7 @@ struct Tick { float minVel, maxVel, seconds; int minDamage, maxDamage; };
 static Tick g_ticks[kModeCount] = {};
 static bool g_tireDamage = true; // ini TireDamage
 static float g_asphaltFloor = 0.0f; // ini AsphaltFloor: paved grip every tire gets at least, 0 = off
+static float g_wornGrip = kWornGripDefault / 100.0f; // ini WornGrip as a share: the grip a worn out tire keeps of its own
 static int g_key = VK_F3;
 // the panel (panel.cpp): UI=0 turns it off (F3 then cycles the modes directly, as when the overlay cannot start)
 static bool g_uiWanted = true, g_ui = false, g_padOk = false, g_overlayOk = false;
@@ -213,6 +214,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"VanillaBalance", L"%.0f", s.vanillaBalance ? 1 : 0);
     put(T, L"VanillaBalanceStrength", L"%g", s.balanceStrength);
     put(T, L"AsphaltFloor", L"%g", s.asphaltFloor);
+    put(T, L"WornGrip", L"%g", s.wornGrip);
     put(T, L"Increased", L"%.0f", s.increased ? 1 : 0);
     put(T, L"TireDamage", L"%.0f", s.tireDamage ? 1 : 0);
     put(T, L"RollingRadius", L"%.0f", s.rollingRadius ? 1 : 0);
@@ -256,6 +258,7 @@ static void ReadIni(TpSettings &s)
                         L"; down to the best vanilla tire of their kind; vanilla tires stay as they are. VanillaBalanceStrength 0..2:\n"
                         L"; 1 = to the vanilla tire, above 1 below it (2: the ratio to the vanilla tire counts twice).\n"
                         L"; AsphaltFloor: paved grip every tire gets at least, before the modes (0 = off).\n"
+                        L"; WornGrip: the share of its grip a worn out or broken tire keeps, percent, 0 to 30 (10). 0 is the old behaviour: none.\n"
                         L"; Per mode: multipliers for grip on dirt (OnModelFriction), gravel (GravelFriction), sand (SandFriction),\n"
                         L"; rock (RockFriction), paved ground (BodyFrictionAsphalt) and in mud (SubstanceFriction),\n"
                         L"; AdditionalRadiusOffset in metres off the tire's radius, and multipliers for fuel use while moving\n"
@@ -269,7 +272,7 @@ static void ReadIni(TpSettings &s)
                         L"; StandStill=1: a pressure change only goes on while the truck stands still. Temperature=1: the tires feel\n"
                         L"; the outside temperature (AmbientC, or a gauge mod's by map and hour while it runs): cold air is less\n"
                         L"; pressure in them, cold rubber less grip. HardMode=1: the realistic numbers and options in place of the\n"
-                        L"; grip, mode and damage keys and Seconds; the keys here keep your own.\n"
+                        L"; grip, mode and damage keys and Seconds (WornGrip 10 there); the keys here keep your own.\n"
                         L"; PerTruck=1: each truck keeps its own pressure mode, saved by the truck kind's name in TirePressure.trucks.ini and put\n"
                         L"; back when that truck is driven again. 0 = one mode for all trucks, Normal at every start.\n"
                         L"; DumpImage=1 writes the game's code as the mod sees it into TirePressure_image_<stamp>.bin next to the\n"
@@ -327,6 +330,7 @@ static void ReadIni(TpSettings &s)
     s.vanillaBalance = GetPrivateProfileIntW(T, L"VanillaBalance", 0, ini.c_str()) != 0;
     s.balanceStrength = min(2.0f, max(0.0f, IniFloat(T, L"VanillaBalanceStrength", s.balanceStrength, ini)));
     s.asphaltFloor = min(10.0f, max(0.0f, IniFloat(T, L"AsphaltFloor", s.asphaltFloor, ini)));
+    s.wornGrip = min(kWornGripMost, max(0.0f, IniFloat(T, L"WornGrip", s.wornGrip, ini)));
     s.increased = GetPrivateProfileIntW(T, L"Increased", s.increased ? 1 : 0, ini.c_str()) != 0;
     s.tireDamage = GetPrivateProfileIntW(T, L"TireDamage", s.tireDamage ? 1 : 0, ini.c_str()) != 0;
     s.rollingRadius = GetPrivateProfileIntW(T, L"RollingRadius", s.rollingRadius ? 1 : 0, ini.c_str()) != 0;
@@ -350,6 +354,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_modeCount = s.increased ? 4 : 3;
     g_view.count = g_modeCount;
     g_asphaltFloor = s.asphaltFloor;
+    g_wornGrip = s.wornGrip / 100.0f;
     g_key = s.key;
     g_beep = s.beep;
     g_seconds = s.seconds;
@@ -419,6 +424,7 @@ static void ApplySettings(const TpSettings &in, bool log)
         Log(L"base grip for every mode: ground x%g, asphalt x%g, mud x%g", s.base[0], s.base[1], s.base[2]);
     if (log && s.vanillaBalance) Log(L"vanilla balance on, strength %g", s.balanceStrength);
     if (log && s.asphaltFloor > 0.0f) Log(L"asphalt floor %g", s.asphaltFloor);
+    if (log) Log(L"a worn out tire keeps %g percent of its grip (WornGrip)", s.wornGrip);
     if (log) Log(L"rolling radius: %s", s.rollingRadius ? L"the gears make up for the flattened wheels, but for what a real tire loses" : L"off, the smaller wheel as it is");
     if (log) Log(L"modes: Low, Reduced, Normal%s", s.increased ? L", Increased" : L"");
     g_standStill = s.standStill;
@@ -677,13 +683,16 @@ static float RollFactor(const Stock &s)
     return rolling(s.writtenCylinder) / rolling(s.cylinder) * s.cylinder / s.writtenCylinder;
 }
 
-// A worn out tire has no grip. The game's break (the wheel model's broken flag, +0x328, set when a wheel's damage
-// reaches its capacity) shrinks the wheel to its broken radius and leaves its grip values as they were: here the
-// paved and mud grip go to 0, and ApplyVehicle writes 0 into the ground grip list for the wheel. The cylinder is
+// A worn out tire keeps WornGrip of its grip (10 percent by default, so the truck still moves; 0 = none). The game's
+// break (the wheel model's broken flag, +0x328, set when a wheel's damage reaches its capacity) shrinks the wheel to
+// its broken radius and leaves its grip values as they were: here the paved and mud grip go to that share of the
+// tire's own, and ApplyVehicle writes the share into the ground grip list for the wheel (WornGroundFactor). The cylinder is
 // left as the break made it. A wheel not seen before (a save loaded with a flat tire, a truck changed to) gives its
 // values as stock, with the tire's own radius from +0x98 (+0x94 holds the broken one). A repair gives the grip
 // back: the game builds the shape anew at the stock size and leaves the written frictions on it, and ApplyWheel
 // then writes the mode's.
+static float WornGroundFactor(bool worn, float factor) { return worn ? g_wornGrip : factor; }
+
 static bool ApplyWornWheel(const WheelRef &w)
 {
     float asphalt, substance, cylinder, radius, offset;
@@ -707,18 +716,21 @@ static bool ApplyWornWheel(const WheelRef &w)
     float broken = 0.0f;
     if (!Read(w.wheel + 0x94, broken) || !(broken > 0.03f && broken < 5.0f)) return false;
     const float flat = max(broken * 0.4f, broken - FlattenLimit(broken));
-    if (s.worn && Near(cylinder, s.writtenCylinder)) return false;
+    const bool gripWritten = s.worn && s.written.asphalt == g_wornGrip && s.written.substance == g_wornGrip;
+    if (gripWritten && Near(cylinder, s.writtenCylinder)) return false;
     if (!StillThere(w)) return false;
-    if (!s.worn)
+    if (!gripWritten)
     {
-        if (!Write(w.wheel + 0xA4, 0.0f)) return false;
-        s.written.asphalt = 0.0f;
-        if (!Write(w.wheel + 0xA0, 0.0f)) return false;
-        s.written.substance = 0.0f;
+        if (!Write(w.wheel + 0xA4, s.asphalt * g_wornGrip)) return false;
+        s.written.asphalt = g_wornGrip;
+        if (!Write(w.wheel + 0xA0, s.substance * g_wornGrip)) return false;
+        s.written.substance = g_wornGrip;
     }
     if (!Write(w.shape + 0x28, flat)) return false;
     s.writtenCylinder = flat;
-    if (!s.worn) Log(L"wheel %p worn out: no grip until it is repaired (its own asphalt %.3f, mud %.3f), drawn flat (cylinder %.4f at a radius of %.4f)", (void *)w.wheel, s.asphalt, s.substance, flat, broken);
+    if (!s.worn)
+        Log(L"wheel %p worn out: %.0f percent of its grip until it is repaired (its own asphalt %.3f, mud %.3f), drawn flat (cylinder %.4f at a radius of %.4f)", (void *)w.wheel,
+            g_wornGrip * 100.0f, s.asphalt, s.substance, flat, broken);
     s.worn = true;
     return true;
 }
@@ -1935,12 +1947,12 @@ static DWORD WINAPI Run(void *)
         }
         rolling = speedOk && speed > (rolling ? 0.25f : 0.5f);
         // the ground under each wheel picks its ground grip factor; a worn out tire (the game's broken flag on its
-        // wheel model, see ApplyWornWheel) has none
+        // wheel model, see ApplyWornWheel) keeps WornGrip of its own
         std::vector<float> groundFactor(wheels.size(), 1.0f);
         for (size_t i = 0; i < wheels.size(); i++)
         {
             BYTE broken = 0;
-            groundFactor[i] = Read(wheels[i].model + 0x328, broken) && broken ? 0.0f : GroundFactor(g_now, wheels[i].wheel) * balance[i];
+            groundFactor[i] = WornGroundFactor(Read(wheels[i].model + 0x328, broken) && broken, GroundFactor(g_now, wheels[i].wheel) * balance[i]);
         }
         Mode forVehicle = g_now;
         if (!rolling) forVehicle.fuel = 1.0f;
@@ -2202,7 +2214,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
-    same = same && a.asphaltFloor == b.asphaltFloor && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
+    same = same && a.asphaltFloor == b.asphaltFloor && a.wornGrip == b.wornGrip && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) same = same && a.mode[m][k] == b.mode[m][k];
     return same;
@@ -2210,6 +2222,52 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
 
 // The pad's trigger curves: at 1 a trigger comes through as it is, at 2 half the trigger gives a quarter and the full
 // pull stays full, at 3 an eighth.
+// A worn out tire keeps WornGrip of its own grip: on made up wheel objects in this process, at 10 percent a tenth of
+// its paved and mud grip and of the ground list's factor, at 0 none; the shape drawn flat either way.
+static bool WornGripTest()
+{
+    static uint8_t wheel[0x400], body[0x40], shape[0x40], model[0x400];
+    const Build saved = g_buildFound;
+    g_buildFound.wheelVtable = 0x100;
+    g_buildFound.cylinderVtable = 0x200;
+    const uint64_t wheelVt = g_base + 0x100, shapeVt = g_base + 0x200, at[3] = { (uint64_t)body, (uint64_t)shape, (uint64_t)wheel };
+    memcpy(wheel, &wheelVt, 8);
+    memcpy(shape, &shapeVt, 8);
+    memcpy(wheel + 0x18, &at[0], 8);
+    memcpy(body + 0x20, &at[1], 8);
+    memcpy(model + 0x2C8, &at[2], 8);
+    auto put = [](uint8_t *o, size_t k, float v) { memcpy(o + k, &v, 4); };
+    auto get = [](const uint8_t *o, size_t k) { float v; memcpy(&v, o + k, 4); return v; };
+    const WheelRef w = { (uint64_t)wheel, (uint64_t)body, (uint64_t)shape, (uint64_t)model, 0 };
+    const float savedShare = g_wornGrip;
+    float asphalt[2], mud[2], ground[2], cylinder[2];
+    bool applied = true;
+    for (int run = 0; run < 2; run++)
+    {
+        g_wornGrip = run ? 0.0f : kWornGripDefault / 100.0f;
+        g_wheels.erase(w.wheel);
+        put(wheel, 0xA4, 2.0f);  // asphalt
+        put(wheel, 0xA0, 3.0f);  // mud
+        put(wheel, 0x98, 0.6f);  // the tire's radius
+        put(wheel, 0xB4, 0.05f); // its offset
+        put(wheel, 0x94, 0.5f);  // the broken radius
+        put(shape, 0x28, 0.5f);  // the cylinder as the break left it
+        applied = ApplyWornWheel(w) && applied;
+        asphalt[run] = get(wheel, 0xA4);
+        mud[run] = get(wheel, 0xA0);
+        cylinder[run] = get(shape, 0x28);
+        ground[run] = WornGroundFactor(true, 1.7f);
+    }
+    g_wheels.erase(w.wheel);
+    g_wornGrip = savedShare;
+    g_buildFound = saved;
+    const bool ok = applied && Near(asphalt[0], 0.2f) && Near(mud[0], 0.3f) && Near(ground[0], 0.1f) && asphalt[1] == 0.0f && mud[1] == 0.0f && ground[1] == 0.0f &&
+                    cylinder[0] < 0.5f && cylinder[1] < 0.5f && WornGroundFactor(false, 1.7f) == 1.7f;
+    printf("%s tires: a worn out tire keeps WornGrip of its grip (10 percent: asphalt %.3f of 2, mud %.3f of 3, ground x%.2f; 0: %.3f, %.3f, x%.2f), drawn flat\n",
+           ok ? "ok  " : "FAIL", asphalt[0], mud[0], ground[0], asphalt[1], mud[1], ground[1]);
+    return ok;
+}
+
 static bool PadCurveTest()
 {
     PadCurves(1.0f, 1.0f);
@@ -2258,6 +2316,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.vanillaBalance = true;
     c.balanceStrength = 0.5f;
     c.asphaltFloor = 3.5f;
+    c.wornGrip = 25.0f;
     c.increased = false;
     c.tireDamage = false;
     c.rollingRadius = false;
@@ -2277,7 +2336,7 @@ static bool IniTest(const wchar_t *givenIni)
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
     for (int i = 0; i < 2; i++) unchanged += c.padCurve[i] == d.padCurve[i];
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
-                 c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor ||
+                 c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor || c.wornGrip == d.wornGrip ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
                  c.rollingRadius == d.rollingRadius || c.standStill == d.standStill || c.perTruck == d.perTruck || c.temperature == d.temperature || c.ambientC == d.ambientC ||
                  c.hardMode == d.hardMode || c.insaneMode == d.insaneMode;
@@ -2987,6 +3046,7 @@ int wmain(int argc, wchar_t **argv)
     if (argc > 2 && !wcscmp(argv[1], L"loops")) return SoundLoops(argc, argv);
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
     if (!PadCurveTest()) return 1;
+    if (!WornGripTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;
     if (!TruckModesTest()) return 1;

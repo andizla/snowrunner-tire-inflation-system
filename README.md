@@ -2,7 +2,7 @@
 
 Formerly the SnowRunner Tire Inflation System; its files keep the name `TirePressure`. Tire pressure you change while driving, as in Expeditions: A MudRunner Game.
 
-The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased. Let air out and the tires flatten, grip harder on dirt, sand, rock and in mud, and lose grip on asphalt. The truck also uses more fuel and steers slower. Increased is the road mode: more grip on asphalt, less everywhere else, less fuel. Soft tires driven too fast take damage until they go flat, and a flat tire has no grip. Cold air and cold rubber change how the tires grip, a change of pressure waits for the truck to stand still, and hard mode sets everything to the most realistic numbers. You pick the mode on Expeditions' panel, drawn in SnowRunner's font, with the pad or a key. You hear the air go out and in, and every few fillings the compressor.
+The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased. Let air out and the tires flatten, grip harder on dirt, sand, rock and in mud, and lose grip on asphalt. The truck also uses more fuel and steers slower. Increased is the road mode: more grip on asphalt, less everywhere else, less fuel. Soft tires driven too fast take damage until they go flat, and a flat tire keeps only a slight grip. Cold air and cold rubber change how the tires grip, a change of pressure waits for the truck to stand still, and hard mode sets everything to the most realistic numbers. You pick the mode on Expeditions' panel, drawn in SnowRunner's font, with the pad or a key. You hear the air go out and in, and every few fillings the compressor.
 
 ![The panel in Low, Reduced, Normal and Increased, and as the keyboard shows it](docs/panel.png)
 
@@ -79,7 +79,7 @@ Soft tires wear when the truck is too fast for them:
 | Damage per wheel | 4 to 8 | 2 to 6 |
 | Every | 7 seconds | 10 seconds |
 
-A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning shows at the top left with the most worn tire's damage in percent, and with the beep switched on a low beep marks each hit. A worn out tire goes flat and has no grip at all until it is repaired. This is the game's own wheel damage: the game's wheel icon turns red for a flat tire, the damage stays in the save, and it is repaired like any other damage. The numbers start from those of Expeditions' off-road tires, with twice the damage at lower speeds, as SnowRunner's trucks are slower off the road.
+A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning shows at the top left with the most worn tire's damage in percent, and with the beep switched on a low beep marks each hit. A worn out tire goes flat and keeps only a slight grip until it is repaired: `WornGrip` percent of its own, 10 by default, so the truck still moves. This is the game's own wheel damage: the game's wheel icon turns red for a flat tire, the damage stays in the save, and it is repaired like any other damage. The numbers start from those of Expeditions' off-road tires, with twice the damage at lower speeds, as SnowRunner's trucks are slower off the road.
 
 ## Realism
 
@@ -119,6 +119,7 @@ The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the grou
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down just far enough that some vanilla tire, of any kind, matches or beats them in all three. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
+- Worn tire grip (`WornGrip`): the share of its grip a worn out or broken tire keeps until it is repaired, 0 to 30 percent, 10 by default so the truck still moves. 0 is none.
 - The key, the pad buttons, the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 2 by default, where half the trigger gives a quarter and the full pull stays full; 1 is as it is), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
 Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start. Each truck's mode goes into `TirePressure.trucks.ini` in the same folder, one section per truck kind with a line such as `Mode=Low`. It can be edited by hand as well.
@@ -168,7 +169,7 @@ A thread in the game process reads and writes the game's own values 20 times a s
 
 At its start the mod looks through the exe for the places it needs: two of the game's classes by their names, the global that leads to the driven truck, the game's damage update and the truck update's call into Windows. It also checks six spots of game code that use the same positions inside the game's objects as the mod does. Without the classes, the global or one of the six, the mod stands down and has changed nothing. Without the damage update or the truck update's call it runs, and deals tire damage from its own thread.
 
-- Grip: the asphalt and mud grip of each wheel, and the truck's list of ground grip values, one per wheel. The game marks each wheel every frame with the kind of ground under it (gravel, sand, hard, paved), and the mod picks the factor from that. A worn out tire gets 0 in all three until the game repairs it.
+- Grip: the asphalt and mud grip of each wheel, and the truck's list of ground grip values, one per wheel. The game marks each wheel every frame with the kind of ground under it (gravel, sand, hard, paved), and the mod picks the factor from that. A worn out tire gets `WornGrip` of its own in all three until the game repairs it.
 - Flattening: the radius of the wheel's collision cylinder, held to what the game's wheel shader can draw flat.
 - Speed: in the game the wheel is its collision cylinder, so a flattened tire would lose about three times the speed a real one does, whose belt keeps its length. The mod raises the truck's gear speeds by the difference.
 - Fuel and steering: the truck's fuel consumption values and its steering speed.

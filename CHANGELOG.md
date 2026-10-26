@@ -1,17 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.2]
 
 - The overlay copies a swap chain's method table that another program has put at the start of its memory. Before, it drew nothing there (no panel and no NEXT GEN menu on two players' PCs). When a table still cannot be copied, `TirePressure.log` says in whose code the table and its Present lie, so the program can be named.
 - LB + d-pad left or right works only while the panel is open; the two chords no longer open the panel a step lower or higher on their own, so a chord hit while driving changes nothing.
 - A worn out or broken tire keeps a slight grip, `WornGrip` percent of its own, 10 by default, so the truck still moves; 0 gives the old none (the testers' ask).
 - The pad bindings rest while the NEXT GEN menu is open, as the panel key does.
 
-## [1.3.1] 2026-10-25
+## [1.3.1]
 
 - Each truck keeps its own pressure mode, `PerTruck` in the ini and a checkbox in the tab's Realism section (on by default). The mode is saved by the truck kind's name in `TirePressure.trucks.ini` next to the exe and comes back the moment that truck is driven again, without a sound, the compressor or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts at Normal, and two trucks of one kind share it. `PerTruck=0` keeps one mode for every truck, Normal at each game start, as before. The tab's truck section names the truck's kind. Asked for by a player on mod.io.
 
-## [1.3.0] 2026-10-24
+## [1.3.0]
 
 - Pad throttle and brake curves, `PadThrottleCurve` and `PadBrakeCurve` in the ini and the tab's Controls section (1 to 3, 2 by default): while a truck is driven each trigger's share is raised to that power before the game reads it, so a light pull gives less and the full pull stays full; at 2 half the trigger gives a quarter, at 1 the trigger is as it is. A tenth of the trigger was a lot of throttle for the game's trucks.
 - The panel and the settings are drawn by the mod's own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay; Next Gen Gameplay draws with the same code. The zip brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window, and the mod takes the game's swap chains from it, drawing after ReShade and its add-ons. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.
@@ -37,7 +37,7 @@
 - The global that leads to the driven truck, which the mod cannot do without, is looked for three ways: by the code that uses it as before, by the same code with the stack frame left open, and by the small function that hands out the object it sits in. On the Game Pass build of the game (a player's log of 2026-10-15) the first way found nothing and the mod stood down; the other two are for that build. Every way has to find one place.
 - `DumpImage=1` in the ini writes the game's code as the mod sees it into `TirePressure_image_<stamp>.bin` next to the exe at the next start, for a report when the mod stands down on a build it does not know. The ini's guide says so.
 
-## [1.2.0] 2026-10-15
+## [1.2.0]
 
 - Pressure changes only while the truck stands still, `StandStill`, on by default: a choice made while driving waits, a change under way pauses, and a hint at the top left says so.
 - The tires feel the outside temperature, `Temperature`, on by default. The air in them follows the gas law (Normal taken as 35 psi: 83% of its pressure at 20 below, 110% at 35 above), so cold tires run softer, flatter and with more grip on soft ground; cold rubber grips less, most on asphalt and rock; in the heat soft tires wear from lower speeds. `AmbientC` sets the temperature (15 C); a gauge mod by the same author hands it over by map and hour while it runs. The tab shows the temperature in force and the pressure the tires hold.
@@ -48,7 +48,7 @@
 - A worn out tire has no grip until it is repaired: 0 on the ground, on asphalt and in mud, and it is drawn flat, as flat as the game draws a tire. Before, a flat tire kept its pressure mode's grip and stayed round at its smaller size.
 - The mod runs on a build of the game where it finds everything but the game's damage update or the truck update's call into Windows. Tire damage is then dealt from the mod's own thread, and the log says so. Before, the mod stood down on such a build. The six checks of the game's objects count when found anywhere, not only once.
 
-## [1.1.0] 2026-10-07
+## [1.1.0]
 
 - Sounds. Deflating plays the air being let out, which gets weaker as the tires empty. Filling plays the air going in. Both are recordings of a real tire.
 - A compressor with an air tank. The fillings draw from the tank, and the compressor fills it again at every second to fourth filling. It runs for about 17 seconds and lets its own air go as it stops. The compressor is made by the mod's code. The air it lets go is one of SnowRunner's own sounds, read out of the game's sound file while the game runs.
@@ -58,14 +58,14 @@
 - The beeps are off unless you switch them on (`Beep=1`, or the box in the settings tab). A `TirePressure.ini` from 1.0 has them switched off once.
 - A pressure change takes up to 6 seconds (1.0: 3). A `TirePressure.ini` from 1.0 that still says `Seconds=3` is set to 6 once. Any other number in it stays.
 
-## [1.0.1] 2026-10-05
+## [1.0.1]
 
 - Tire damage starts at higher speeds. Low: wear above 20 km/h, the most from 30 km/h (1.0.0: 15 and 25). Reduced: wear above 35 km/h, the most from 45 km/h (1.0.0: 25 and 35).
 - A `TirePressure.ini` that 1.0.0 wrote keeps its own numbers. To get the new ones, set them in the settings tab or delete the file.
 - The zip brings ReShade 6.8.0 with full add-on support in a `ReShade` folder, for players who have none yet.
 - The mod no longer needs one exact build of the game's exe. At its start it finds its places in the game's code and checks how the game's objects are laid out, and it stands down when anything is missing. That is meant for the Epic Games Store version, which has not been tested, and for game updates that leave that code alone.
 
-## [1.0.0] 2026-10-04
+## [1.0.0]
 
 - Four tire pressure modes for the truck being driven: Low, Reduced, Normal and Increased. A mode scales the grip by the ground under each wheel (dirt, gravel, sand, rock, asphalt, mud), the tire's radius, fuel use while moving and steering speed.
 - A tire flattens as far as the game can draw it, and the truck then rolls as much slower as a real flattened tire would.

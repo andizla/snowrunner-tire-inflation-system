@@ -1645,14 +1645,17 @@ static DWORD WINAPI Run(void *)
         // the settings page waits for buttons to bind
         const LONG capture = g_pageCapturing;
         const bool capturing = capture && GetTickCount() - (DWORD)capture < 500;
-        const uint32_t pad = front && g_ui && !wheels.empty() && !capturing ? PadButtons() : 0;
+        const uint32_t padHeld = front && g_ui && !wheels.empty() && !capturing ? PadButtons() : 0;
+        // not while the NEXT GEN menu has the pad. What is held then still counts as held on the last pass, so a binding
+        // held as the menu opens or closes is no press when it closes
+        const uint32_t pad = NgMenuOpen() ? 0 : padHeld;
         auto edge = [&](uint32_t mask) { return mask && (pad & mask) == mask && (padPrev & mask) != mask; };
         // with the panel open the d-pad is the panel's (the filter hides it from the game then), as in Expeditions:
         // a binding also counts without its shoulder button
         auto bound = [&](uint32_t mask) { return edge(mask) || (panelOpen && edge(mask & ~kPadShoulders)); };
         const bool pOpen = bound(g_padOpen), pLower = bound(g_padLower), pRaise = bound(g_padRaise), pConfirm = bound(g_padConfirm),
                    pCancel = bound(g_padCancel);
-        padPrev = pad;
+        padPrev = padHeld;
         // the open binding alone opens the panel: the step bindings act only while it is open
         const bool padOpens = !panelOpen && pOpen;
         if (g_probeFuel && fuelState < 3 && chainSeen)

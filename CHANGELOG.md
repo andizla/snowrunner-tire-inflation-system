@@ -5,6 +5,7 @@
 - The overlay copies a swap chain's method table that another program has put at the start of its memory. Before, it drew nothing there (no panel and no NEXT GEN menu on two players' PCs). When a table still cannot be copied, `TirePressure.log` says in whose code the table and its Present lie, so the program can be named.
 - LB + d-pad left or right works only while the panel is open; the two chords no longer open the panel a step lower or higher on their own, so a chord hit while driving changes nothing.
 - A worn out or broken tire keeps a slight grip, `WornGrip` percent of its own, 10 by default, so the truck still moves; 0 gives the old none (the testers' ask).
+- The pad bindings rest while the NEXT GEN menu is open, as the panel key does.
 
 ## [1.3.1] 2026-10-25
 

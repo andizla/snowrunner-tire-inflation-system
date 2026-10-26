@@ -376,34 +376,119 @@ static bool TableIsOurs(void **t)
     return ours;
 }
 
-// The overlay's copy of the table from, with hook in slot and hook2 in slot2 (none when slot2 < 0); nullptr when none
-// can be made.
-static void **TableCopyOf(void **from, int slot, void *hook, int slot2, void *hook2)
+// What TableCopyOf found at a table's start, for the log: why no copy was made, or that one was made from there.
+struct TableTry
+{
+    MEMORY_BASIC_INFORMATION mi; // the memory the table starts in
+    size_t words, need;          // the words readable from the table's start in that memory, and the words its slots need
+    bool atStart;                // a new copy made from the table's start, as the word before it was not readable with it
+};
+
+static bool Readable(const MEMORY_BASIC_INFORMATION &mi)
 {
     const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    return mi.State == MEM_COMMIT && (mi.Protect & readable) && !(mi.Protect & PAGE_GUARD);
+}
+
+// The overlay's copy of the table from, with hook in slot and hook2 in slot2 (none when slot2 < 0); nullptr when none
+// can be made. A table another program made can sit at the very start of its memory, where the word before it is not
+// readable with it (two players' games, 2026-10-25): it is copied from its start then, without that word.
+static void **TableCopyOf(void **from, int slot, void *hook, int slot2, void *hook2, TableTry *why = nullptr)
+{
     AcquireSRWLockExclusive(&g_tableLock);
     void **to = nullptr;
     for (int i = 0; i < g_tableCount; i++)
         if (g_tables[i].from == from) to = g_tables[i].to;
-    MEMORY_BASIC_INFORMATION mi = {};
-    if (!to && g_tableCount < (int)(sizeof(g_tables) / sizeof(g_tables[0])) && VirtualQuery(from - 1, &mi, sizeof(mi)) == sizeof(mi) &&
-        mi.State == MEM_COMMIT && (mi.Protect & readable) && !(mi.Protect & PAGE_GUARD))
+    TableTry t = {};
+    t.need = (size_t)(slot > slot2 ? slot : slot2) + 1;
+    if (!to && g_tableCount < (int)(sizeof(g_tables) / sizeof(g_tables[0])))
     {
-        size_t words = (size_t)((BYTE *)mi.BaseAddress + mi.RegionSize - (BYTE *)(from - 1)) / sizeof(void *);
-        if (words > kTableWords + 1) words = kTableWords + 1;
-        const size_t need = (size_t)(slot > slot2 ? slot : slot2) + 2;
-        void **block = words >= need ? (void **)HeapAlloc(GetProcessHeap(), 0, words * sizeof(void *)) : nullptr;
-        if (block)
+        MEMORY_BASIC_INFORMATION mi = {};
+        if (VirtualQuery(from - 1, &mi, sizeof(mi)) == sizeof(mi) && Readable(mi))
         {
-            memcpy(block, from - 1, words * sizeof(void *));
-            to = block + 1; // never freed: an object keeps it to its end
+            size_t words = (size_t)((BYTE *)mi.BaseAddress + mi.RegionSize - (BYTE *)(from - 1)) / sizeof(void *);
+            if (words > kTableWords + 1) words = kTableWords + 1;
+            void **block = words >= t.need + 1 ? (void **)HeapAlloc(GetProcessHeap(), 0, words * sizeof(void *)) : nullptr;
+            if (block)
+            {
+                memcpy(block, from - 1, words * sizeof(void *));
+                to = block + 1; // never freed: an object keeps it to its end
+            }
+        }
+        if (!to && VirtualQuery(from, &t.mi, sizeof(t.mi)) == sizeof(t.mi) && Readable(t.mi))
+        {
+            t.words = (size_t)((BYTE *)t.mi.BaseAddress + t.mi.RegionSize - (BYTE *)from) / sizeof(void *);
+            if (t.words > kTableWords) t.words = kTableWords;
+            void **block = t.words >= t.need ? (void **)HeapAlloc(GetProcessHeap(), 0, t.words * sizeof(void *)) : nullptr;
+            if (block)
+            {
+                memcpy(block, from, t.words * sizeof(void *));
+                to = block;
+                t.atStart = true;
+            }
+        }
+        if (to)
+        {
             to[slot] = hook;
             if (slot2 >= 0) to[slot2] = hook2;
             g_tables[g_tableCount++] = { from, to };
         }
     }
     ReleaseSRWLockExclusive(&g_tableLock);
+    if (why) *why = t;
     return to;
+}
+
+// Whether t has the first eight slots of one of the overlay's own tables: a copy another Next Gen mod made of this
+// mod's, whose Present calls on to this mod's (ReShade hands a swap chain over again after a new size).
+static bool TableFromOurs(void **t)
+{
+    AcquireSRWLockShared(&g_tableLock);
+    bool ours = false;
+    for (int i = 0; i < g_tableCount && !ours; i++)
+        ours = memcmp(g_tables[i].to, t, 8 * sizeof(void *)) == 0;
+    ReleaseSRWLockShared(&g_tableLock);
+    return ours;
+}
+
+// The copy on tables in two pages made for it, the first only reserved: one table at the start of the second page (the
+// word before it not readable) is copied from there with its hooks in their slots; one with the word before it readable
+// is copied with that word; one too short for its slots at the page's end is refused. The pages are kept, as the copies
+// are kept by the address they came from.
+int NgTableCopySelfCheck()
+{
+    SYSTEM_INFO si = {};
+    GetSystemInfo(&si);
+    const size_t page = si.dwPageSize;
+    BYTE *mem = (BYTE *)VirtualAlloc(nullptr, 2 * page, MEM_RESERVE, PAGE_NOACCESS);
+    if (!mem || !VirtualAlloc(mem + page, page, MEM_COMMIT, PAGE_READWRITE)) return 1;
+    void **words = (void **)(mem + page);
+    const size_t n = page / sizeof(void *);
+    for (size_t i = 0; i < n; i++) words[i] = (void *)(0x1000 + i);
+    void *hook = (void *)&NgTableCopySelfCheck, *hook2 = (void *)&TableFromOurs;
+    int failed = 0;
+    TableTry why = {};
+    void **at = words, **to = TableCopyOf(at, 8, hook, 22, hook2, &why);
+    if (!to || to == at || !why.atStart || to[8] != hook || to[22] != hook2 || to[0] != at[0] || to[7] != at[7] || to[9] != at[9]) failed |= 2;
+    at = words + 64;
+    to = TableCopyOf(at, 8, hook, -1, nullptr, &why);
+    if (!to || why.atStart || to[-1] != at[-1] || to[8] != hook || to[0] != at[0] || to[22] != at[22]) failed |= 4;
+    at = words + n - 5;
+    if (TableCopyOf(at, 8, hook, -1, nullptr, &why) || why.words != 5 || why.need != 9) failed |= 8;
+    return failed;
+}
+
+// True the first time a table is asked about, so a line about it is logged once.
+static bool FirstTime(void **t)
+{
+    static void *volatile seen[16] = {};
+    for (int i = 0; i < 16; i++)
+    {
+        void *was = InterlockedCompareExchangePointer(&seen[i], t, nullptr);
+        if (!was) return true;
+        if (was == t) return false;
+    }
+    return false;
 }
 
 // The first table this mod takes sets what its hook calls on to; another one is taken only when it holds the same
@@ -1594,13 +1679,36 @@ static void SwapChainOwn(IDXGISwapChain *sc)
     IDXGISwapChain1 *sc1 = nullptr;
     const bool one = SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), (void **)&sc1)) && sc1;
     if (sc1) sc1->Release();
-    if (!CallsOnTo((void **)&g_present, from[8]) || (one && !CallsOnTo((void **)&g_present1, from[22]))) return;
-    void **to = TableCopyOf(from, 8, (void *)&HookPresent, one ? 22 : -1, (void *)&HookPresent1);
-    if (!to)
+    // whose code a table and its Present lie in, so the log can name the program that made a table the overlay cannot take
+    wchar_t in[MAX_PATH], has[MAX_PATH];
+    if (!CallsOnTo((void **)&g_present, from[8]) || (one && !CallsOnTo((void **)&g_present1, from[22])))
     {
-        NG_LOG(L"overlay: no method table of its own could be made for a swap chain the game made: nothing is drawn on it");
+        if (!TableFromOurs(from) && FirstTime(from))
+        {
+            wchar_t onto[MAX_PATH];
+            ModuleOf(from[8], has, MAX_PATH);
+            ModuleOf((const void *)g_present, onto, MAX_PATH);
+            NG_LOG(L"overlay: a swap chain's Present is %s's, not the one the overlay calls on to (%s): nothing is drawn on it", has, onto);
+        }
         return;
     }
+    TableTry why;
+    void **to = TableCopyOf(from, 8, (void *)&HookPresent, one ? 22 : -1, (void *)&HookPresent1, &why);
+    if (!to || why.atStart)
+    {
+        ModuleOf(from, in, MAX_PATH);
+        if (wcscmp(in, L"?") == 0) wcscpy_s(in, L"memory of no module");
+        ModuleOf(from[8], has, MAX_PATH);
+    }
+    if (!to)
+    {
+        if (FirstTime(from))
+            NG_LOG(L"overlay: the swap chain's method table could not be copied: it lies in %s at %p, %zu of %zu words readable (state %lx, protection %lx); "
+                   L"its Present is %s's: nothing is drawn on it",
+                   in, (void *)from, why.words, why.need, why.mi.State, why.mi.Protect, has);
+        return;
+    }
+    if (why.atStart) NG_LOG(L"overlay: a swap chain's method table lies at the start of its memory (made by %s, Present in %s): copied from there", in, has);
     InterlockedExchangePointer((void **)sc, to);
     InterlockedIncrement(&g_scOwned);
     DXGI_SWAP_CHAIN_DESC sd = {};

@@ -38,6 +38,7 @@ void NgTextureFree(ImTextureID tex);
 // Whether the NEXT GEN menu is open, on any tab.
 bool NgMenuOpen();
 int NgMenuKeyFromIni();                   // the key NextGen.ini gives the menu, read as a start reads it (a missing file is made); for tests
+int NgTableCopySelfCheck();               // the method table copy on tables in memory made for it; 0 when it holds, else the bits that failed; for tests
 // The menu's key, a virtual key code; 0 leaves it. Saved in NextGen.ini, which every Next Gen mod reads at start.
 // What the start found about ReShade, which the release brings for the overlay to take the game's swap chains from:
 // registered (ReShade took the overlay as an add-on), the ReShade module that did not, the dxgi.dll beside the game's

@@ -98,6 +98,7 @@ extern "C" __declspec(dllexport) bool TestGraphics(const wchar_t *dll) { return 
 extern "C" __declspec(dllexport) int TestTabCount(const char *tab) { return NgMenuTabCount(tab); }
 extern "C" __declspec(dllexport) bool TestShowTab(const char *tab) { return NgMenuShowTab(tab); }
 extern "C" __declspec(dllexport) int TestKeyFromIni() { return NgMenuKeyFromIni(); }
+extern "C" __declspec(dllexport) int TestTableCopy() { return NgTableCopySelfCheck(); }
 
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
@@ -399,6 +400,12 @@ int main()
     // a fresh NextGen.ini is made with KeyMoved=2, so a Delete or Page Down set in it by hand afterwards stays, and a key
     // picked in the menu is never moved (review 5, C1)
     typedef int (*KeyFn)();
+    // a method table another program put at the very start of its memory (two players' games, 2026-10-25) is copied
+    // from there with the hooks in their slots, one with a readable word before it as before, one too short is refused
+    const KeyFn tableA = (KeyFn)GetProcAddress(a, "TestTableCopy");
+    const int tableFailed = tableA ? tableA() : -1;
+    if (tableFailed) printf("  table copy check failed: bits %d\n", tableFailed);
+    Check(tableFailed == 0, "a method table at the start of its memory is copied from there, one too short for its slots is refused");
     const KeyFn keyA = (KeyFn)GetProcAddress(a, "TestKeyFromIni");
     DeleteFileW(ini);
     const int fresh = keyA ? keyA() : 0;

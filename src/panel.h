@@ -231,9 +231,8 @@ enum { kSurfaceDirt, kSurfaceGravel, kSurfaceSand, kSurfaceRock, kSurfacePaved }
 void LiveGet(TpLive &out);
 
 // Gamepad. The game loads XInputGetState itself and keeps it in more than one pointer; PadInit points every copy at a
-// filter that hides the panel's buttons from the game: the open binding whenever it is held, a step binding of two or
-// more buttons whenever it is held (it opens the panel too), every panel button while the panel is open, and any of
-// them still held when it closes, until released. Called again it catches copies made since. Without the filter (no
+// filter that hides the panel's buttons from the game: the open binding whenever it is held, every panel button while
+// the panel is open, and any of them still held when it closes, until released. Called again it catches copies made since. Without the filter (no
 // pointer found) the pad still works the panel, but the game sees the presses too.
 int PadInit(uint64_t exeBase);            // pointers newly sent through the filter
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel); // the bindings
@@ -242,8 +241,6 @@ void PadCurves(float throttle, float brake); // the triggers' curves, 1 = as the
 uint8_t PadCurved(uint8_t value, int trigger); // a trigger's value through its curve: 0 the right trigger, 1 the left
 uint32_t PadButtons();                    // the buttons of all connected pads together, 0 without a pad
 
-// A binding of two or more buttons (a step binding like that also works while the panel is closed).
-inline bool PadChord(uint32_t mask) { return (mask & (mask - 1)) != 0; }
 // While the panel is open the d-pad is the panel's, as in Expeditions: a binding also counts without these.
 static const uint32_t kPadShoulders = XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER;
 

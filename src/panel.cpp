@@ -143,7 +143,7 @@ bool PanelInit(HMODULE)
 
 typedef DWORD(WINAPI *XInputGetStateFn)(DWORD, XINPUT_STATE *);
 static XInputGetStateFn g_realGetState = nullptr;
-static volatile LONG g_openMask = 0, g_stepMask[2] = {}, g_panelMask = 0;
+static volatile LONG g_openMask = 0, g_panelMask = 0;
 static volatile LONG g_padLive = 0; // 1 while a truck is driven: only then are the panel's buttons taken from the game
 static uint8_t g_padMap[2][256];      // each trigger's value through its curve: 0 the right trigger (throttle), 1 the left (brake and reverse)
 static volatile LONG g_padCurved = 0; // 1 while a curve is not 1, so the filter maps the triggers
@@ -170,8 +170,8 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
         const LONG still = g_view.open ? g_panelMask : (held[index] & b);
         InterlockedExchange(&held[index], still);
         WORD hide = (WORD)still;
-        for (const LONG m : { g_openMask, g_stepMask[0], g_stepMask[1] })
-            if (m && (b & m) == m) hide |= (WORD)m;
+        const LONG m = g_openMask;
+        if (m && (b & m) == m) hide |= (WORD)m;
         b &= (WORD)~hide;
     }
     return r;
@@ -200,10 +200,8 @@ uint8_t PadCurved(uint8_t value, int trigger) { return g_padMap[trigger & 1][val
 
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel)
 {
-    // a step binding of one button only acts while the panel is open, so the game keeps that button otherwise
+    // the step bindings only act while the panel is open, so the game keeps their buttons otherwise
     g_openMask = (LONG)open;
-    g_stepMask[0] = PadChord(lower) ? (LONG)lower : 0;
-    g_stepMask[1] = PadChord(raise) ? (LONG)raise : 0;
     g_panelMask = (LONG)(open | lower | raise | confirm | cancel);
 }
 

@@ -30,7 +30,7 @@ To update, copy the new files over the old ones (keep your `ReShade.ini` if you 
 With a pad (any pad Windows sees as an Xbox pad):
 
 - LB + d-pad down opens the panel.
-- LB + d-pad left or right lowers or raises the pressure. With the panel closed, it opens the panel one step lower or higher.
+- LB + d-pad left or right lowers or raises the pressure while the panel is open.
 - While the panel is open the d-pad works without LB, A confirms and B closes the panel unchanged.
 - The triggers are shaped: at the default of 2, half the trigger gives a quarter of the throttle or brake and the full pull stays full, so a light pull is gentle. The tab's pad throttle and brake curves set it (see Settings); at 1 the game reads them as they are.
 

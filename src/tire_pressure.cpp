@@ -248,7 +248,7 @@ static void ReadIni(TpSettings &s)
                         L"; round while they last; a WAV file with a loop marked in it plays up to the loop once.\n"
                         L"; UI=1 shows the Tire Inflation System panel, drawn by the mod itself: the key opens it and\n"
                         L"; steps the pressure down, the choice confirms itself after ConfirmSeconds. Pad buttons (XInput): DPadUp,\n"
-                        L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None.\n"
+                        L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None. PadLower and PadRaise act only while the panel is open.\n"
                         L"; PadThrottleCurve and PadBrakeCurve (1 to 3, 2 by default): a trigger's share to this power while a truck is driven,\n"
                         L"; so a light pull gives less and the full pull stays full (at 2 half the trigger gives a quarter; 1 = as it is).\n"
                         L"; BaseGround, BaseAsphalt and BaseMud scale the grip of every mode, Normal too.\n"
@@ -1641,8 +1641,8 @@ static DWORD WINAPI Run(void *)
         const bool pOpen = bound(g_padOpen), pLower = bound(g_padLower), pRaise = bound(g_padRaise), pConfirm = bound(g_padConfirm),
                    pCancel = bound(g_padCancel);
         padPrev = pad;
-        // a step binding of two or more buttons opens the panel and steps at once
-        const bool padOpens = !panelOpen && (pOpen || (pLower && PadChord(g_padLower)) || (pRaise && PadChord(g_padRaise)));
+        // the open binding alone opens the panel: the step bindings act only while it is open
+        const bool padOpens = !panelOpen && pOpen;
         if (g_probeFuel && fuelState < 3 && chainSeen)
         {
             const ULONGLONG t = GetTickCount64();
@@ -1763,8 +1763,8 @@ static DWORD WINAPI Run(void *)
         }
         else
         {
-            // the panel: the key or the pad's open binding opens it at the mode in force, a step binding of two or more
-            // buttons (LB + left / right) opens it one step lower / higher; then the key steps the pressure down (round),
+            // the panel: the key or the pad's open binding opens it at the mode in force, and only those (a step binding
+            // hit while driving changes nothing); then the key steps the pressure down (round),
             // the pad's lower / raise bindings step it; confirm (pad), the open binding again, or no input for
             // ConfirmSeconds applies it; cancel (pad) closes it unchanged. Leaving the truck closes it too.
             const ULONGLONG t = GetTickCount64();
@@ -1776,8 +1776,6 @@ static DWORD WINAPI Run(void *)
                     sel = g_mode;
                     lastInput = t;
                     g_view.viaPad = pressed ? 0 : 1;
-                    if (padOpens && !pOpen && pLower) sel = max((int)kLow, sel - 1);
-                    if (padOpens && !pOpen && pRaise) sel = min(g_modeCount - 1, sel + 1);
                 }
             }
             else

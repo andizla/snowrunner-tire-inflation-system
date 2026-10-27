@@ -250,7 +250,8 @@ static void ReadIni(TpSettings &s)
                         L"; round while they last; a WAV file with a loop marked in it plays up to the loop once.\n"
                         L"; UI=1 shows the Tire Inflation System panel, drawn by the mod itself: the key opens it and\n"
                         L"; steps the pressure down, the choice confirms itself after ConfirmSeconds. Pad buttons (XInput): DPadUp,\n"
-                        L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None. PadLower and PadRaise act only while the panel is open.\n"
+                        L"; DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, joined with + (LB+DPadDown), or None. PadLower and PadRaise (DPadLeft and\n"
+                        L"; DPadRight) act only while the panel is open, without a shoulder button: LB or RB with the d-pad is for gears.\n"
                         L"; PadThrottleCurve and PadBrakeCurve (1 to 3, 2 by default): a trigger's share to this power while a truck is driven,\n"
                         L"; so a light pull gives less and the full pull stays full (at 2 half the trigger gives a quarter; 1 = as it is).\n"
                         L"; BaseGround, BaseAsphalt and BaseMud scale the grip of every mode, Normal too.\n"
@@ -326,6 +327,15 @@ static void ReadIni(TpSettings &s)
         for (const wchar_t *p = buf; *p && n + 1 < sizeof s.pad[i]; p++) s.pad[i][n++] = *p < 128 ? (char)*p : '?';
         s.pad[i][n] = 0;
     }
+    // a step binding with a shoulder (the default of 1.3.1 and 1.3.2, LB+DPadLeft) loses it, once: the file then says so
+    for (int i = 1; i <= 2; i++)
+    {
+        char was[sizeof s.pad[i]];
+        strcpy_s(was, s.pad[i]);
+        if (!PadStepFix(s.pad[i], sizeof s.pad[i], kPadStepDefaults[i - 1])) continue;
+        WritePrivateProfileStringW(T, Wide(kPadKeys[i]).c_str(), Wide(s.pad[i]).c_str(), ini.c_str());
+        Log(L"pad: %hs %hs becomes %hs: LB + d-pad is for gears", kPadKeys[i], was, s.pad[i]);
+    }
     for (int i = 0; i < 3; i++) s.base[i] = min(5.0f, max(0.1f, IniFloat(T, kBaseKeys[i], s.base[i], ini)));
     s.vanillaBalance = GetPrivateProfileIntW(T, L"VanillaBalance", 0, ini.c_str()) != 0;
     s.balanceStrength = min(2.0f, max(0.0f, IniFloat(T, L"VanillaBalanceStrength", s.balanceStrength, ini)));
@@ -366,6 +376,8 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_panelConfirmMs = g_confirmMs;
     uint32_t *pads[5] = { &g_padOpen, &g_padLower, &g_padRaise, &g_padConfirm, &g_padCancel };
     for (int i = 0; i < 5; i++) *pads[i] = PadParse(s.pad[i]);
+    g_padLower = PadStepMask(g_padLower);
+    g_padRaise = PadStepMask(g_padRaise);
     if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
     else PadMasks(0, 0, 0, 0, 0);
     PadCurves(s.padCurve[0], s.padCurve[1]);
@@ -1651,10 +1663,11 @@ static DWORD WINAPI Run(void *)
         const uint32_t pad = NgMenuOpen() ? 0 : padHeld;
         auto edge = [&](uint32_t mask) { return mask && (pad & mask) == mask && (padPrev & mask) != mask; };
         // with the panel open the d-pad is the panel's (the filter hides it from the game then), as in Expeditions:
-        // a binding also counts without its shoulder button
+        // the open, confirm and cancel bindings also count without their shoulder button. A step needs the panel
+        // open and no shoulder held, so LB with the d-pad stays the gears'
         auto bound = [&](uint32_t mask) { return edge(mask) || (panelOpen && edge(mask & ~kPadShoulders)); };
-        const bool pOpen = bound(g_padOpen), pLower = bound(g_padLower), pRaise = bound(g_padRaise), pConfirm = bound(g_padConfirm),
-                   pCancel = bound(g_padCancel);
+        const bool pOpen = bound(g_padOpen), pLower = PadStep(g_padLower, pad, padPrev, panelOpen), pRaise = PadStep(g_padRaise, pad, padPrev, panelOpen),
+                   pConfirm = bound(g_padConfirm), pCancel = bound(g_padCancel);
         padPrev = padHeld;
         // the open binding alone opens the panel: the step bindings act only while it is open
         const bool padOpens = !panelOpen && pOpen;
@@ -2282,6 +2295,55 @@ static bool PadCurveTest()
     printf("%s pad: the trigger curves (1: as it is; 2: half the trigger gives %d of 255, the full pull %d; 3: half gives %d)\n",
            ok ? "ok  " : "FAIL", half, full, brakeHalf);
     PadCurves(1.0f, 1.0f);
+    return ok;
+}
+
+// The pad's rule with the default bindings: what the filter hides from the game (PadHide), when a step counts
+// (PadStep), and a step binding with a shoulder read from an ini.
+static bool PadRuleTest()
+{
+    const uint32_t LB = XINPUT_GAMEPAD_LEFT_SHOULDER, RB = XINPUT_GAMEPAD_RIGHT_SHOULDER, UP = XINPUT_GAMEPAD_DPAD_UP,
+                   DN = XINPUT_GAMEPAD_DPAD_DOWN, LT = XINPUT_GAMEPAD_DPAD_LEFT, RT = XINPUT_GAMEPAD_DPAD_RIGHT, A = XINPUT_GAMEPAD_A,
+                   B = XINPUT_GAMEPAD_B;
+    TpSettings d;
+    SettingsDefaults(d);
+    const uint32_t open = PadParse(d.pad[0]), lower = PadParse(d.pad[1]), raise = PadParse(d.pad[2]);
+    const uint32_t panel = open | lower | raise | PadParse(d.pad[3]) | PadParse(d.pad[4]);
+    auto hide = [&](uint32_t buttons, bool isOpen, uint32_t held = 0) { return PadHide(buttons, isOpen, open, panel, held).hide; };
+    const bool defaults = open == (LB | DN) && lower == LT && raise == RT;
+    const bool chord = hide(LB | DN, false) == (LB | DN) && hide(LB | DN, true) == (LB | DN);
+    const bool shoulder = hide(LB, false) == 0 && hide(LB, true) == 0 && hide(RB, true) == 0;
+    const bool left = hide(LT, false) == 0 && hide(LT, true) == LT && hide(LB | LT, false) == 0 && hide(LB | LT, true) == 0 && hide(RB | RT, true) == 0;
+    const bool up = hide(UP, true) == UP && hide(LB | UP, true) == 0 && hide(UP, false) == 0 && hide(A, true) == A && hide(B, true) == B && hide(A, false) == 0;
+    // d-pad left held as the panel closes stays hidden until let go; another pad's state lets nothing through
+    const PadHidden inside = PadHide(LT, true, open, panel, 0), after = PadHide(LT, false, open, panel, inside.held),
+                    letGo = PadHide(0, false, open, panel, after.held), again = PadHide(LT, false, open, panel, letGo.held);
+    const PadHidden other = PadHide(LT, false, open, panel, 0);
+    const bool held = inside.hide == LT && after.hide == LT && letGo.held == 0 && again.hide == 0 && other.hide == 0;
+    const bool step = PadStep(lower, LT, 0, true) && !PadStep(lower, LB | LT, LB, true) && !PadStep(lower, LB | LT, 0, true) &&
+                      !PadStep(lower, LT, 0, false) && !PadStep(lower, LB | LT, LB, false) && !PadStep(lower, LT, LT, true) && PadStep(raise, RT, 0, true);
+    // an ini of 1.3.2: its LB+DPadLeft and RB+DPadRight come out without the shoulder and are written back so
+    const std::wstring ini = g_dir + L"TirePressure.ini";
+    DeleteFileW(ini.c_str());
+    TpSettings s;
+    ReadIni(s);
+    WritePrivateProfileStringW(L"TirePressure", L"PadLower", L"LB+DPadLeft", ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"PadRaise", L"RB+DPadRight", ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"PadOpen", L"LB+DPadUp", ini.c_str());
+    ReadIni(s);
+    wchar_t lowerFile[32] = {};
+    GetPrivateProfileStringW(L"TirePressure", L"PadLower", L"", lowerFile, 32, ini.c_str());
+    char lone[32] = "LB";
+    const bool fixedLone = PadStepFix(lone, sizeof lone, kPadStepDefaults[0]) && !strcmp(lone, "DPadLeft");
+    char plain[32] = "X+Y";
+    const bool keptPlain = !PadStepFix(plain, sizeof plain, kPadStepDefaults[0]) && !strcmp(plain, "X+Y");
+    const bool fromIni = !strcmp(s.pad[1], "DPadLeft") && !strcmp(s.pad[2], "DPadRight") && !strcmp(s.pad[0], "LB+DPadUp") && !wcscmp(lowerFile, L"DPadLeft") &&
+                         fixedLone && keptPlain;
+    const bool ok = defaults && chord && shoulder && left && up && held && step && fromIni;
+    printf("%s pad: LB+DPadDown opens and is hidden; LB alone and LB with the d-pad reach the game, open or closed; with the panel open the plain d-pad, A and B are hidden "
+           "and d-pad left steps, LB with it does not%s%s%s%s%s%s%s\n", ok ? "ok  " : "FAIL", defaults ? "" : " (defaults WRONG)", chord ? "" : " (open chord WRONG)",
+           shoulder ? "" : " (shoulder WRONG)", left && up ? "" : " (d-pad WRONG)", held ? "" : " (held WRONG)", step ? "" : " (step WRONG)", fromIni ? "" : " (ini WRONG)");
+    printf("%s pad: an ini's PadLower=LB+DPadLeft reads and is written back as %s (PadRaise %s, PadOpen kept as %s)\n", fromIni ? "ok  " : "FAIL", s.pad[1], s.pad[2], s.pad[0]);
     return ok;
 }
 
@@ -3049,6 +3111,7 @@ int wmain(int argc, wchar_t **argv)
     if (argc > 2 && !wcscmp(argv[1], L"loops")) return SoundLoops(argc, argv);
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
     if (!PadCurveTest()) return 1;
+    if (!PadRuleTest()) return 1;
     if (!WornGripTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;

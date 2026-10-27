@@ -152,8 +152,8 @@ volatile LONG g_padThread = 0, g_padThreadChanges = 0, g_overlayThread = 0; // w
 
 static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
 {
-    // panel buttons still down after the panel closed, hidden until released; per pad, as the game asks for each in
-    // turn and another pad's state must not let them through
+    // the buttons hidden on each pad's last read, hidden until released; per pad, as the game asks for each in turn
+    // and another pad's state must not let them through
     static volatile LONG held[XUSER_MAX_COUNT] = {};
     const LONG me = (LONG)GetCurrentThreadId();
     if (g_padThread != me) { InterlockedExchange(&g_padThread, me); InterlockedIncrement(&g_padThreadChanges); }
@@ -167,12 +167,9 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
             state->Gamepad.bRightTrigger = g_padMap[0][state->Gamepad.bRightTrigger];
             state->Gamepad.bLeftTrigger = g_padMap[1][state->Gamepad.bLeftTrigger];
         }
-        const LONG still = g_view.open ? g_panelMask : (held[index] & b);
-        InterlockedExchange(&held[index], still);
-        WORD hide = (WORD)still;
-        const LONG m = g_openMask;
-        if (m && (b & m) == m) hide |= (WORD)m;
-        b &= (WORD)~hide;
+        const PadHidden h = PadHide(b, g_view.open != 0, (uint32_t)g_openMask, (uint32_t)g_panelMask, (uint32_t)held[index]);
+        InterlockedExchange(&held[index], (LONG)h.held);
+        b &= (WORD)~h.hide;
     }
     return r;
 }
@@ -200,7 +197,7 @@ uint8_t PadCurved(uint8_t value, int trigger) { return g_padMap[trigger & 1][val
 
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel)
 {
-    // the step bindings only act while the panel is open, so the game keeps their buttons otherwise
+    // only the open binding is hidden while the panel is closed: the game keeps every other button then (PadHide)
     g_openMask = (LONG)open;
     g_panelMask = (LONG)(open | lower | raise | confirm | cancel);
 }

@@ -337,7 +337,9 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             st.began = now;
             beganNow = true;
         }
-        PageTip("Press it, then hold the button or buttons on the pad and let go.");
+        PageTip(i == 1 || i == 2 ? "Press it, then hold the button or buttons on the pad and let go. Works only while the panel is open and "
+                                   "without LB or RB, which stay for gears."
+                                 : "Press it, then hold the button or buttons on the pad and let go.");
         ImGui::SameLine();
         if (ImGui::SmallButton("None###clear"))
         {
@@ -353,6 +355,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         // popup, so it is opened again each frame it is found closed.
         uint32_t bound = 0;
         const bool done = PageCaptureStep(st, padNow, beganNow, ImGui::IsKeyPressed(ImGuiKey_Escape, false), now, bound);
+        // a step binding is bound without its shoulder button (LB with the d-pad is for gears); a shoulder alone keeps the old one
+        if (st.capture == 2 || st.capture == 3) bound = PadStepMask(bound);
         if (bound)
         {
             PadName(bound, s.pad[st.capture - 1], sizeof s.pad[0]);

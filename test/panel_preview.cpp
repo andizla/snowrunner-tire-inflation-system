@@ -308,13 +308,15 @@ int wmain(int argc, wchar_t **argv)
         // two frames), then LB and d-pad down held and let go one after the other. padbind.png shows the window
         // while both are held. Then a capture nobody answers gives up and keeps the old binding.
         const uint32_t A = XINPUT_GAMEPAD_A, LB = XINPUT_GAMEPAD_LEFT_SHOULDER, DN = XINPUT_GAMEPAD_DPAD_DOWN;
-        const uint32_t script[10] = { A, A, 0, 0, LB, LB | DN, LB | DN, DN, 0, 0 };
+        const uint32_t LT = XINPUT_GAMEPAD_DPAD_LEFT;
+        const uint32_t script[10] = { A, A, 0, 0, LB, LB | DN, LB | DN, DN, 0, 0 }, stepScript[10] = { 0, 0, LB, LB | LT, LB | LT, LT, 0, 0, 0, 0 };
+        const uint32_t *run = script;
         int frame = 0, act = 0;
         auto page = [&](ImDrawList *, ImDrawList *) {
             ImGui::SetNextWindowPos(ImVec2(10, 10));
             ImGui::SetNextWindowSize(ImVec2(1080, 0));
             ImGui::Begin("Tire Inflation System", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-            act |= SettingsPage(s, live, st, script[frame < 10 ? frame : 9]);
+            act |= SettingsPage(s, live, st, run[frame < 10 ? frame : 9]);
             ImGui::End();
             frame++;
         };
@@ -336,8 +338,20 @@ int wmain(int argc, wchar_t **argv)
         frame = 9;
         act = 0;
         RenderPng(path, 1100, 1900, page, 2);
-        const bool gaveUp = st.capture == -1 && !strcmp(s.pad[1], "LB+DPadLeft") && !(act & kPageChanged);
+        const bool gaveUp = st.capture == -1 && !strcmp(s.pad[1], kPadStepDefaults[0]) && !(act & kPageChanged);
         printf("%s pad binding: left alone it gives up and keeps %s\n", gaveUp ? "ok  " : "FAIL", s.pad[1]);
+        // a step binding is bound without its shoulder: LB and d-pad left held for "Lower the pressure" give DPadLeft
+        strcpy_s(s.pad[1], "None");
+        st.capture = 2;
+        st.peak = 0;
+        st.armed = false;
+        st.began = GetTickCount64();
+        run = stepScript;
+        frame = 0;
+        act = 0;
+        RenderPng(path, 1100, 1900, page, 10);
+        const bool stepBound = st.capture == -1 && !strcmp(s.pad[1], "DPadLeft") && (act & kPageChanged);
+        printf("%s pad binding: LB+DPadLeft for a step binding is bound as %s\n", stepBound ? "ok  " : "FAIL", s.pad[1]);
 
         // The frame a capture begins on, which the page run above does not have (it sets the capture by hand): the
         // pad's A pressed the binding's button and is still down. First with the pad read on that frame, then with

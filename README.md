@@ -30,8 +30,8 @@ To update, copy the new files over the old ones (keep your `ReShade.ini` if you 
 With a pad (any pad Windows sees as an Xbox pad):
 
 - LB + d-pad down opens the panel.
-- LB + d-pad left or right lowers or raises the pressure while the panel is open.
-- While the panel is open the d-pad works without LB, A confirms and B closes the panel unchanged.
+- D-pad left or right lowers or raises the pressure while the panel is open. D-pad down, A or the open chord confirms, and B closes the panel unchanged. The game sees none of the plain d-pad while the panel is open, so nothing shifts from inside it.
+- LB + d-pad left or right is never the panel's, open or closed, so a gear on that chord keeps working.
 - The triggers are shaped: at the default of 2, half the trigger gives a quarter of the throttle or brake and the full pull stays full, so a light pull is gentle. The tab's pad throttle and brake curves set it (see Settings); at 1 the game reads them as they are.
 
 With the keyboard, F3 opens the panel and steps the pressure down, from Low round to the highest mode. There is no key to confirm with: leave the choice alone.
@@ -120,7 +120,7 @@ The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the grou
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.
 - Asphalt floor: every tire grips at least this much on paved ground. Off by default.
 - Worn tire grip (`WornGrip`): the share of its grip a worn out or broken tire keeps until it is repaired, 0 to 30 percent, 10 by default so the truck still moves. 0 is none.
-- The key, the pad buttons, the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 2 by default, where half the trigger gives a quarter and the full pull stays full; 1 is as it is), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
+- The key, the pad buttons (`PadOpen` LB+DPadDown, `PadLower` DPadLeft, `PadRaise` DPadRight, `PadConfirm` A, `PadCancel` B; the two steps take no LB or RB), the pad's throttle and brake curves (`PadThrottleCurve`, `PadBrakeCurve`: a trigger's share to this power while you drive, 2 by default, where half the trigger gives a quarter and the full pull stays full; 1 is as it is), the panel's size, the time until a choice confirms itself, how long a pressure change takes, the sound volume (0 turns the sounds off), and the beep.
 
 Changes count at once and are saved to `TirePressure.ini` in the same folder. The file can be edited by hand too: the game writes it with the defaults and a short guide on its first start. Each truck's mode goes into `TirePressure.trucks.ini` in the same folder, one section per truck kind with a line such as `Mode=Low`. It can be edited by hand as well.
 

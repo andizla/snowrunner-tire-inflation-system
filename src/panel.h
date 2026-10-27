@@ -71,6 +71,7 @@ struct TpSettings
 };
 static const int kSettingsModes[3] = { kReduced, kLow, kIncreased }; // PressureMode of TpSettings::mode[i]
 static const char *const kPadKeys[5] = { "PadOpen", "PadLower", "PadRaise", "PadConfirm", "PadCancel" };
+static const char *const kPadStepDefaults[2] = { "DPadLeft", "DPadRight" }; // PadLower, PadRaise
 static const char *const kPadCurveKeys[2] = { "PadThrottleCurve", "PadBrakeCurve" }; // TpSettings::padCurve: the right and the left trigger
 // Per mode: grip multipliers on plain ground (dirt, and whatever is none of the others), on paved ground and in mud,
 // metres off the tire's radius, multipliers for fuel use and steering speed; then the ground grip again where the
@@ -106,8 +107,9 @@ inline void SettingsDefaults(TpSettings &s)
     s.ui = true;
     s.uiScale = 1.0f;
     s.confirmSeconds = kConfirmDefault;
-    // with LB, as plain d-pad presses open the game's own screens and move through its menus
-    static const char *pads[5] = { "LB+DPadDown", "LB+DPadLeft", "LB+DPadRight", "A", "B" };
+    // the open binding with LB, as plain d-pad presses open the game's own screens and move through its menus; the
+    // step bindings act only while the panel is open, and LB with the d-pad is for gears
+    static const char *pads[5] = { "LB+DPadDown", kPadStepDefaults[0], kPadStepDefaults[1], "A", "B" };
     for (int i = 0; i < 5; i++) strcpy_s(s.pad[i], pads[i]);
     s.padCurve[0] = s.padCurve[1] = 2.0f; // both triggers shaped: half the trigger gives a quarter (the author's choice after a pad drive, 2026-10-24)
     s.base[0] = s.base[1] = s.base[2] = 1.0f;
@@ -237,9 +239,8 @@ enum { kSurfaceDirt, kSurfaceGravel, kSurfaceSand, kSurfaceRock, kSurfacePaved }
 void LiveGet(TpLive &out);
 
 // Gamepad. The game loads XInputGetState itself and keeps it in more than one pointer; PadInit points every copy at a
-// filter that hides the panel's buttons from the game: the open binding whenever it is held, every panel button while
-// the panel is open, and any of them still held when it closes, until released. Called again it catches copies made since. Without the filter (no
-// pointer found) the pad still works the panel, but the game sees the presses too.
+// filter that hides the panel's buttons from the game (PadHide has the rule). Called again it catches copies made
+// since. Without the filter (no pointer found) the pad still works the panel, but the game sees the presses too.
 int PadInit(uint64_t exeBase);            // pointers newly sent through the filter
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel); // the bindings
 void PadLive(bool live);                  // the filter only takes buttons from the game while live (a truck is driven)
@@ -247,8 +248,39 @@ void PadCurves(float throttle, float brake); // the triggers' curves, 1 = as the
 uint8_t PadCurved(uint8_t value, int trigger); // a trigger's value through its curve: 0 the right trigger, 1 the left
 uint32_t PadButtons();                    // the buttons of all connected pads together, 0 without a pad
 
-// While the panel is open the d-pad is the panel's, as in Expeditions: a binding also counts without these.
+// While the panel is open the d-pad is the panel's, as in Expeditions: the open, confirm and cancel bindings also
+// count without these. LB or RB with the d-pad is for gears (the game's or another mod's), never the panel's.
 static const uint32_t kPadShoulders = XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER;
+static const uint32_t kPadDPad = XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
+
+// A step binding (PadLower, PadRaise) holds no shoulder button: one read or bound with it loses it.
+inline uint32_t PadStepMask(uint32_t mask) { return mask & ~kPadShoulders; }
+
+// A step: the panel open, no shoulder held, and the binding's buttons all down now and not all down on the last pass.
+inline bool PadStep(uint32_t mask, uint32_t pad, uint32_t prev, bool open)
+{
+    return open && mask && !(pad & kPadShoulders) && (pad & mask) == mask && (prev & mask) != mask;
+}
+
+// The filter's rule for one pad. buttons: held now; held: what this pad had hidden on its last read. Hidden: the open
+// binding while all its buttons are down; while the panel is open the plain d-pad (no shoulder reaching the game) and
+// the panel's bindings without their shoulders; and a button hidden once, until it is let go, so it never comes back
+// as a fresh press. Nothing else, so LB with the d-pad reaches the game, the panel open or closed. panel: the open,
+// step, confirm and cancel bindings together. The result's held is the next read's held.
+struct PadHidden { uint32_t hide, held; };
+inline PadHidden PadHide(uint32_t buttons, bool open, uint32_t openMask, uint32_t panel, uint32_t held)
+{
+    uint32_t hide = held & buttons;
+    if (openMask && (buttons & openMask) == openMask) hide |= openMask;
+    if (open)
+    {
+        uint32_t own = panel & ~kPadShoulders;
+        if (buttons & kPadShoulders & ~hide) own &= ~kPadDPad;
+        else own |= kPadDPad;
+        hide |= buttons & own;
+    }
+    return { hide, hide };
+}
 
 static const struct { const char *name; uint32_t mask; } kPadButtons[14] = {
     { "DPadUp", XINPUT_GAMEPAD_DPAD_UP }, { "DPadDown", XINPUT_GAMEPAD_DPAD_DOWN }, { "DPadLeft", XINPUT_GAMEPAD_DPAD_LEFT },
@@ -286,6 +318,17 @@ inline void PadName(uint32_t mask, char *out, size_t size)
             strcat_s(out, size, kPadButtons[i].name);
         }
     if (!out[0]) strcpy_s(out, size, "None");
+}
+
+// A step binding's text without its shoulder button ("LB+DPadLeft" -> "DPadLeft"; shoulders alone -> fallback).
+// True when it changed.
+inline bool PadStepFix(char *text, size_t size, const char *fallback)
+{
+    const uint32_t m = PadParse(text);
+    if (!(m & kPadShoulders)) return false;
+    if (PadStepMask(m)) PadName(PadStepMask(m), text, size);
+    else strcpy_s(text, size, fallback);
+    return true;
 }
 
 // A virtual key's name as the panel and the settings page show it.

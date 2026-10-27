@@ -4,7 +4,7 @@
 #pragma once
 #include <windows.h>
 #include <xinput.h>
-#define TP_VERSION "1.3.2"
+#define TP_VERSION "1.3.3"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

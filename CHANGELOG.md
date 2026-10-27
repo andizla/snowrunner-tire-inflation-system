@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.3]
 
 - The step bindings are the plain d-pad left and right, `DPadLeft` and `DPadRight` by default (an ini's `LB+DPadLeft` becomes `DPadLeft`). They act only while the panel is open and no shoulder button is held. LB + d-pad is for gears and never the panel's, open or closed. While the panel is open the game sees none of the plain d-pad, so nothing shifts from inside it (two testers' reports, 27 October).
 

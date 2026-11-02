@@ -47,6 +47,10 @@ int NgTableCopySelfCheck();               // the method table copy on tables in 
 // it, so a notice is never seen); NgReShadeRoute() is the start's log line, which route the overlay takes and why.
 int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi);
 const char *NgReShadeRoute();
+// Spotter's frame hook (spotter_api.h): for tests, the look started over as at a start on the own route (NextGen.ini's
+// [Overlay] Spotter read again), and its state: 0 still looking, 1 done without it, 2 drawing through it.
+void NgSpotterReset();
+int NgSpotterState();
 // Next Gen Graphics' switches and status (ng_graphics.h) from that module's NgGraphicsGetApi; one Next Gen mod in the
 // game then draws the menu's Graphics tab from them. The overlay looks for hid.dll beside the exe by itself every 2 s
 // while no mod has the tab; this hands it another module (a test's stand-in). false: no table of a version it takes.

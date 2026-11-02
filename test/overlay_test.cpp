@@ -21,7 +21,11 @@
 // - the start's notice for each way ReShade can be missing (no dxgi.dll, a ReShade that took no add-on, another
 //   program's dxgi.dll), and none with ReShade working;
 // - the Graphics tab: with OVERLAY_TEST_GRAPHICS this file is also a stand-in for Next Gen Graphics' NgGraphicsGetApi
-//   (ng_graphics_standin.dll); handed to both mods, one claims the tab, and its page reads the switches.
+//   (ng_graphics_standin.dll); handed to both mods, one claims the tab, and its page reads the switches;
+// - Spotter's frame hook: with OVERLAY_TEST_SPOTTER this file is also a stand-in for Spotter.asi's draw API
+//   (spotter_api.h). Both mods register with it and draw only when it calls them, take their own route back after 120
+//   presents without its call, register nothing with it not drawing, with API version 0 or with NextGen.ini [Overlay]
+//   Spotter=0, and claim the input through it while the menu is open.
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_4.h>
@@ -29,7 +33,64 @@
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 
-#if defined(OVERLAY_TEST_GRAPHICS)
+#if defined(OVERLAY_TEST_SPOTTER)
+
+// A stand-in for Spotter.asi's draw API: the callbacks registered, called when the test fires a frame, and what was
+// asked of it.
+#include "spotter_api.h"
+static uint32_t g_version = 1;
+static int32_t g_available = 2;
+struct Reg { SpotterPresentFn fn; void *user; int32_t mask; bool live; };
+static Reg g_regs[8] = {};
+static int g_regCount = 0, g_unregs = 0, g_inputs = 0;
+extern "C" __declspec(dllexport) uint32_t SPOTTER_CDECL SpotterApiVersion(void) { return g_version; }
+extern "C" __declspec(dllexport) int32_t SPOTTER_CDECL SpotterPresentAvailable(void) { return g_available; }
+extern "C" __declspec(dllexport) uint64_t SPOTTER_CDECL SpotterRegisterPresent(SpotterPresentFn fn, void *user, int32_t)
+{
+    if (!fn || g_regCount >= 8) return 0;
+    g_regs[g_regCount] = { fn, user, 0, true };
+    return (uint64_t)++g_regCount;
+}
+extern "C" __declspec(dllexport) void SPOTTER_CDECL SpotterUnregisterPresent(uint64_t h)
+{
+    if (h && h <= (uint64_t)g_regCount && g_regs[h - 1].live) g_regs[h - 1].live = false, g_unregs++;
+}
+extern "C" __declspec(dllexport) int32_t SPOTTER_CDECL SpotterInputOwner(void) { return 0; }
+extern "C" __declspec(dllexport) int32_t SPOTTER_CDECL SpotterRequestInput(uint64_t h, int32_t mask)
+{
+    if (!h || h > (uint64_t)g_regCount) return -1;
+    g_regs[h - 1].mask = mask;
+    g_inputs++;
+    return mask ? SPOTTER_INPUT_MOD : SPOTTER_INPUT_GAME;
+}
+extern "C" __declspec(dllexport) void StubSet(uint32_t version, int32_t available)
+{
+    g_version = version;
+    g_available = available;
+}
+// One frame: every live callback called with the swap chain, as Spotter's Present hook would.
+extern "C" __declspec(dllexport) void StubFire(void *swapChain)
+{
+    SpotterPresentInfo info = {};
+    info.size = sizeof(info);
+    info.apiVersion = 1;
+    info.swapChain = swapChain;
+    info.backbufferRtv = (void *)1; // only checked for null
+    info.width = 640, info.height = 480, info.rtvFormat = 28;
+    for (int i = 0; i < g_regCount; i++)
+        if (g_regs[i].live) g_regs[i].fn(&info, g_regs[i].user);
+}
+// The live callbacks, the unregistrations, and the input masks of the live ones or-ed together.
+extern "C" __declspec(dllexport) void StubState(int *live, int *unregs, int *mask, int *inputs)
+{
+    *live = 0, *mask = 0;
+    for (int i = 0; i < g_regCount; i++)
+        if (g_regs[i].live) (*live)++, *mask |= g_regs[i].mask;
+    *unregs = g_unregs;
+    *inputs = g_inputs;
+}
+
+#elif defined(OVERLAY_TEST_GRAPHICS)
 
 // A stand-in for Next Gen Graphics' hid.dll: three switches and two status lines through NgGraphicsGetApi
 // (ng_graphics.h), counting how often the Graphics tab reads its switches.
@@ -99,6 +160,8 @@ extern "C" __declspec(dllexport) int TestTabCount(const char *tab) { return NgMe
 extern "C" __declspec(dllexport) bool TestShowTab(const char *tab) { return NgMenuShowTab(tab); }
 extern "C" __declspec(dllexport) int TestKeyFromIni() { return NgMenuKeyFromIni(); }
 extern "C" __declspec(dllexport) int TestTableCopy() { return NgTableCopySelfCheck(); }
+extern "C" __declspec(dllexport) void TestSpotterReset() { NgSpotterReset(); }
+extern "C" __declspec(dllexport) int TestSpotterState() { return NgSpotterState(); }
 
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
@@ -319,6 +382,90 @@ static int Presents(IDXGISwapChain *sc, int n)
     return ok;
 }
 
+// Spotter's frame hook (BRIEF_spotter_draw_route.md): a stand-in Spotter.asi loaded in the program; each case starts
+// the mods' look over as at a start on their own route.
+static void TestSpotter(HMODULE a, HMODULE b, IDXGISwapChain *sc, const wchar_t *dir, const wchar_t *ini, volatile LONG *framesA, volatile LONG *framesB)
+{
+    typedef void (*VoidFn)();
+    typedef int (*IntFn)();
+    typedef bool (*ShowFn)(const char *);
+    typedef void (*SetFn)(unsigned, int);
+    typedef void (*FireFn)(void *);
+    typedef void (*StateFn)(int *, int *, int *, int *);
+    const VoidFn resetA = (VoidFn)GetProcAddress(a, "TestSpotterReset"), resetB = (VoidFn)GetProcAddress(b, "TestSpotterReset");
+    const IntFn stateA = (IntFn)GetProcAddress(a, "TestSpotterState"), stateB = (IntFn)GetProcAddress(b, "TestSpotterState");
+    const ShowFn show = (ShowFn)GetProcAddress(a, "TestShowTab");
+    wchar_t path[MAX_PATH];
+    swprintf_s(path, L"%sSpotter.asi", dir);
+    const HMODULE spotter = LoadLibraryW(path);
+    const SetFn set = spotter ? (SetFn)GetProcAddress(spotter, "StubSet") : nullptr;
+    const FireFn fire = spotter ? (FireFn)GetProcAddress(spotter, "StubFire") : nullptr;
+    const StateFn state = spotter ? (StateFn)GetProcAddress(spotter, "StubState") : nullptr;
+    Check(resetA && resetB && stateA && stateB && show && set && fire && state, "the stand-in Spotter.asi loads, and the mods' look can start over");
+    if (!resetA || !resetB || !stateA || !stateB || !show || !set || !fire || !state) return;
+    int live = 0, unregs = 0, mask = 0, inputs = 0;
+    const auto again = [&]() { resetA(); resetB(); };
+    // Spotter not drawing (its hook failed): nothing registered, the mods draw on their own
+    set(1, 0);
+    again();
+    LONG wasA = *framesA, wasB = *framesB;
+    Presents(sc, 5);
+    state(&live, &unregs, &mask, &inputs);
+    Check(live == 0 && *framesA - wasA == 5 && *framesB - wasB == 5, "SpotterPresentAvailable 0: no registration, the own route draws");
+    // API version 0: none, and the look ends
+    set(0, 2);
+    again();
+    wasA = *framesA;
+    Presents(sc, 5);
+    state(&live, &unregs, &mask, &inputs);
+    Check(live == 0 && *framesA - wasA == 5 && stateA() == 1, "API version 0: no registration, the own route draws");
+    // NextGen.ini [Overlay] Spotter=0: none
+    set(1, 2);
+    WritePrivateProfileStringW(L"Overlay", L"Spotter", L"0", ini);
+    again();
+    wasA = *framesA;
+    Presents(sc, 5);
+    state(&live, &unregs, &mask, &inputs);
+    Check(live == 0 && *framesA - wasA == 5, "NextGen.ini [Overlay] Spotter=0: no registration, the own route draws");
+    WritePrivateProfileStringW(L"Overlay", L"Spotter", nullptr, ini);
+    // Spotter drawing: both mods register at their next present, their own Present then draws nothing, and each frame
+    // Spotter calls draws once
+    again();
+    wasA = *framesA, wasB = *framesB;
+    Presents(sc, 5);
+    state(&live, &unregs, &mask, &inputs);
+    const bool silent = *framesA == wasA && *framesB == wasB;
+    Check(live == 2 && stateA() == 2 && stateB() == 2 && silent, "Spotter drawing: both mods register, and their own Present draws nothing");
+    for (int i = 0; i < 5; i++)
+    {
+        fire(sc);
+        Presents(sc, 1);
+    }
+    char line[160];
+    sprintf_s(line, "each frame Spotter calls draws once in both mods (A %ld, B %ld of 5)", *framesA - wasA, *framesB - wasB);
+    Check(*framesA - wasA == 5 && *framesB - wasB == 5, line);
+    // the menu open: the mouse and keys claimed through Spotter; closed, given back
+    show("A");
+    fire(sc);
+    state(&live, &unregs, &mask, &inputs);
+    const bool claimed = mask == 3; // SPOTTER_WANT_MOUSE | SPOTTER_WANT_KEYS
+    const int asked = inputs;
+    fire(sc);
+    state(&live, &unregs, &mask, &inputs);
+    const bool once = inputs == asked;
+    show(nullptr);
+    fire(sc);
+    state(&live, &unregs, &mask, &inputs);
+    Check(claimed && once && mask == 0, "the menu open claims the mouse and keys through Spotter once, and closed gives them back");
+    // 120 presents without Spotter's call: both take their own route back and unregister
+    wasA = *framesA, wasB = *framesB;
+    Presents(sc, 125);
+    state(&live, &unregs, &mask, &inputs);
+    sprintf_s(line, "120 presents without Spotter's call: both take their own route back and unregister (A drew %ld of the last 5)", *framesA - wasA);
+    Check(live == 0 && unregs == 2 && stateA() == 1 && stateB() == 1 && *framesA - wasA >= 4 && *framesA - wasA <= 5 && *framesB - wasB >= 4, line);
+    FreeLibrary(spotter);
+}
+
 int main()
 {
     char line[256];
@@ -450,6 +597,7 @@ int main()
     sprintf_s(line, "both mods drew on it once for each present (A %ld frames, B %ld)", framesA, framesB);
     Check(framesA == 10 && framesB == 10, line);
     TestGraphicsTab(a, b, sc, dir);
+    TestSpotter(a, b, sc, dir, ini, &framesA, &framesB);
     IDXGIFactory1 *again = nullptr;
     Check(SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&again)) && again && *(void ***)again == ourFactoryTable,
           "a second factory gets the same method table, made once");

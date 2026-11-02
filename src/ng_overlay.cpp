@@ -19,6 +19,9 @@
 #include "ng_overlay.h"
 #include "ng_reshade.h"
 #include "ng_graphics.h"
+#include "spotter_api.h"
+#include <stddef.h>
+#include <stdlib.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxguid.lib")
@@ -1330,6 +1333,39 @@ static void InputFeed(bool menu, bool front, float scaleX, float scaleY)
     io.AddKeyEvent(ImGuiMod_Alt, (GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
 }
 
+// ---- Spotter's frame hook (BRIEF_spotter_draw_route.md) ----
+// Spotter (the minimap mod by SnowPothos) exports a plain C API (spotter_api.h, CC0) that calls a mod back once a frame
+// from its own Present hook, with the D3D11 state saved and put back around the call. On the overlay's own route (no
+// ReShade taking it as an add-on) and with NextGen.ini [Overlay] Spotter=1 (the default), the overlay draws through it,
+// so one hook draws per frame: its own Present then calls on and draws nothing. Spotter starts after this mod (the
+// loader goes A to Z), so the overlay looks for it at each frame for the first 60 s. A callback that has not run for
+// 120 of the overlay's own presents is taken back: the overlay draws on its own route again.
+struct SpotterLink
+{
+    bool allowed;                 // the own route, and [Overlay] Spotter=1
+    bool done;                    // no more looking: registered, taken back, or 60 s without it
+    ULONGLONG lookFrom;           // the first frame looked at
+    SpotterPresentAvailableFn available;
+    SpotterRegisterPresentFn add;
+    SpotterUnregisterPresentFn remove;
+    SpotterRequestInputFn input;
+    SpotterInputOwnerFn owner;
+    uint64_t handle;              // registered, 0 not
+    volatile LONG missed;         // the overlay's own presents since the callback last ran
+    bool drawn;                   // the first frame through it is logged
+    int claimed;                  // the input mask last asked for
+};
+static SpotterLink g_spot = {};
+
+// Spotter's menu or big map has the mouse and keys: the menu's key then does not open the menu.
+static bool SpotterHasInput() { return g_spot.owner && g_spot.owner() == SPOTTER_INPUT_SPOTTER; }
+
+static bool SpotterIniOn()
+{
+    wchar_t path[MAX_PATH + 16];
+    return !IniPath(path, MAX_PATH + 16) || GetPrivateProfileIntW(L"Overlay", L"Spotter", 1, path) != 0;
+}
+
 static void Frame(IDXGISwapChain *sc)
 {
     const ULONGLONG now = GetTickCount64();
@@ -1414,7 +1450,7 @@ static void Frame(IDXGISwapChain *sc)
         if ((DWORD)(at - was) > 300 && InterlockedCompareExchange(&sh->toggledAt, at, was) == was)
         {
             if (sh->open) MenuClose();
-            else MenuOpen();
+            else if (!SpotterHasInput()) MenuOpen();
         }
     }
     g_keyWas = keyDown;
@@ -1583,13 +1619,131 @@ static void FrameGuarded(IDXGISwapChain *sc)
     }
 }
 
+// The menu open in any Next Gen mod: the mouse and keys claimed from the game through Spotter, and its hotkeys silenced;
+// closed, given back. Said once each way.
+static void SpotterInputFollow()
+{
+    const int want = NgMenuOpen() ? SPOTTER_WANT_MOUSE | SPOTTER_WANT_KEYS : 0;
+    if (want == g_spot.claimed || !g_spot.handle) return;
+    g_spot.claimed = want;
+    const int owner = g_spot.input(g_spot.handle, want);
+    NG_LOG(want ? L"overlay: the menu is open: the mouse and keys claimed through Spotter (the input's owner now %d)"
+                : L"overlay: the menu is closed: the mouse and keys given back through Spotter (the input's owner now %d)", owner);
+}
+
+// Spotter's call, once a frame on the game's render thread. Its pointers are borrowed for the call; the overlay makes
+// its own target from the swap chain as on its own route, and only logs Spotter's view's size and format once.
+static void SPOTTER_CDECL SpotterFrame(const SpotterPresentInfo *info, void *)
+{
+    InterlockedExchange(&g_spot.missed, 0);
+    if (!info || !info->swapChain || !info->backbufferRtv || g_broken) return;
+    if (!g_spot.drawn)
+    {
+        g_spot.drawn = true;
+        NG_LOG(L"overlay: the first frame drawn through Spotter's frame hook (%u x %u, format %u)", info->width, info->height,
+               info->size >= offsetof(SpotterPresentInfo, flags) ? info->rtvFormat : 0u);
+    }
+    FrameGuarded((IDXGISwapChain *)info->swapChain);
+    SpotterInputFollow();
+}
+
+// The overlay draws on its own route again, and why.
+static void SpotterTakeBack(const wchar_t *why)
+{
+    // Spotter unloaded: none of its functions is called
+    const bool there = GetModuleHandleW(L"Spotter.asi") != nullptr;
+    const int available = there && g_spot.available ? g_spot.available() : -1;
+    if (there && g_spot.handle && g_spot.remove) g_spot.remove(g_spot.handle);
+    g_spot.handle = 0;
+    g_spot.done = true;
+    g_spot.claimed = 0;
+    NG_LOG(L"overlay: Spotter's frame hook taken back (%s; it says %d): the overlay draws on its own route again", why, available);
+}
+
+// At the mod's unload (atexit, in the mod's own runtime): the callback unregistered while Spotter is still there.
+static void SpotterLeave()
+{
+    if (g_spot.handle && g_spot.remove && GetModuleHandleW(L"Spotter.asi")) g_spot.remove(g_spot.handle);
+    g_spot.handle = 0;
+}
+
+void NgSpotterReset()
+{
+    SpotterLeave();
+    g_spot = SpotterLink{};
+    g_spot.allowed = SpotterIniOn();
+}
+
+int NgSpotterState() { return g_spot.handle ? 2 : g_spot.done ? 1 : 0; }
+
+// At each of the overlay's own presents in its first 60 s: Spotter found with its six functions, API version 1 or
+// later and drawing (or about to), and the overlay's callback registered.
+static void SpotterLook(ULONGLONG now)
+{
+    if (g_spot.done || !g_spot.allowed) return;
+    if (!g_spot.lookFrom) g_spot.lookFrom = now;
+    const HMODULE m = GetModuleHandleW(L"Spotter.asi");
+    if (now - g_spot.lookFrom > 60000)
+    {
+        g_spot.done = true;
+        if (m) NG_LOG(L"overlay: Spotter is in the game but did not offer its frame hook in the first 60 s: the overlay draws on its own route");
+        return;
+    }
+    if (!m) return;
+    const SpotterApiVersionFn version = (SpotterApiVersionFn)GetProcAddress(m, "SpotterApiVersion");
+    g_spot.available = (SpotterPresentAvailableFn)GetProcAddress(m, "SpotterPresentAvailable");
+    g_spot.add = (SpotterRegisterPresentFn)GetProcAddress(m, "SpotterRegisterPresent");
+    g_spot.remove = (SpotterUnregisterPresentFn)GetProcAddress(m, "SpotterUnregisterPresent");
+    g_spot.input = (SpotterRequestInputFn)GetProcAddress(m, "SpotterRequestInput");
+    g_spot.owner = (SpotterInputOwnerFn)GetProcAddress(m, "SpotterInputOwner");
+    if (!version || !g_spot.available || !g_spot.add || !g_spot.remove || !g_spot.input || !g_spot.owner)
+    {
+        g_spot = SpotterLink{ g_spot.allowed, true };
+        NG_LOG(L"overlay: Spotter is in the game without its draw API (an older Spotter): the overlay draws on its own route");
+        return;
+    }
+    const uint32_t v = version();
+    if (v < 1)
+    {
+        g_spot.done = true;
+        NG_LOG(L"overlay: Spotter's draw API is version %u: the overlay draws on its own route", v);
+        return;
+    }
+    const int available = g_spot.available();
+    if (!available) return; // it may still come up within the 60 s
+    g_spot.handle = g_spot.add(&SpotterFrame, nullptr, 0);
+    g_spot.done = true;
+    if (!g_spot.handle)
+    {
+        NG_LOG(L"overlay: Spotter (API version %u) did not take the overlay's callback: the overlay draws on its own route", v);
+        return;
+    }
+    InterlockedExchange(&g_spot.missed, 0);
+    g_spot.claimed = 0;
+    NG_LOG(L"overlay: Spotter found (API version %u, available %d): the overlay draws through its frame hook from now on; NextGen.ini [Overlay] Spotter=0 turns it off", v,
+           available);
+}
+
+// Whether this present is Spotter's to draw: false draws on the overlay's own route.
+static bool SpotterDraws()
+{
+    SpotterLook(GetTickCount64());
+    if (!g_spot.handle) return false;
+    if (InterlockedIncrement(&g_spot.missed) > 120)
+    {
+        SpotterTakeBack(L"its callback did not run for 120 frames");
+        return false;
+    }
+    return true;
+}
+
 // One present draws once, also where Present and Present1 lead into each other: the count of the overlay's presents
 // on this thread's stack (each Next Gen mod has its own).
 static thread_local int t_presenting = 0;
 
 static HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain *sc, UINT sync, UINT flags)
 {
-    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST)) FrameGuarded(sc);
+    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST) && !SpotterDraws()) FrameGuarded(sc);
     const HRESULT hr = g_present(sc, sync, flags);
     t_presenting--;
     return hr;
@@ -1597,7 +1751,7 @@ static HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain *sc, UINT sync, UINT
 
 static HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1 *sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS *params)
 {
-    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST)) FrameGuarded(sc);
+    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST) && !SpotterDraws()) FrameGuarded(sc);
     const HRESULT hr = g_present1(sc, sync, flags, params);
     t_presenting--;
     return hr;
@@ -1814,6 +1968,10 @@ bool NgOverlayStart(const NgClient &client)
                name);
     }
     NG_LOG(L"overlay: %S", g_rsRoute);
+    // on the own route the overlay draws through Spotter's frame hook where Spotter offers it
+    g_spot.allowed = SpotterIniOn();
+    if (!g_spot.allowed) NG_LOG(L"overlay: NextGen.ini [Overlay] Spotter=0: the overlay keeps its own route even with Spotter in the game");
+    atexit(&SpotterLeave);
     const HMODULE exe = GetModuleHandleW(nullptr);
     const bool factory = NgSlotSwap(ImportSlot(exe, "dxgi.dll", "CreateDXGIFactory1"), (void *)&HookCreateFactory, (void **)&g_gameCreateFactory);
     const bool device = NgSlotSwap(ImportSlot(exe, "d3d11.dll", "D3D11CreateDevice"), (void *)&HookCreateDevice, (void **)&g_gameCreateDevice);

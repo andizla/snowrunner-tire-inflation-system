@@ -90,7 +90,7 @@ extern "C" __declspec(dllexport) bool TestSlotSwap(void **slot, void *value)
 extern "C" __declspec(dllexport) int TestReShade(bool registered, HMODULE reshade, const wchar_t *dxgi, char *note, int size)
 {
     const int r = reshade || dxgi || registered ? NgReShadeCheck(registered, reshade, dxgi) : -1;
-    strncpy_s(note, size, NgReShadeNote(), _TRUNCATE);
+    strncpy_s(note, size, NgReShadeRoute(), _TRUNCATE);
     return r;
 }
 
@@ -194,15 +194,17 @@ static void WriteAll(const wchar_t *path, const void *data, DWORD n)
     CloseHandle(f);
 }
 
-// What the start makes of ReShade in each case, and what the menu's notice then says: the start of the two mods found no
-// ReShade and no dxgi.dll beside this exe; the other cases are read from files made for them.
+// What the start makes of ReShade in each case, and the log line that says which route the overlay takes: nothing is
+// shown on screen about ReShade any more (the author, 2 November), and no line says the game can crash. The start of
+// the two mods found no ReShade and no dxgi.dll beside this exe; the other cases are read from files made for them.
 static void TestReShadeCases(HMODULE a, HMODULE b)
 {
     typedef int (*RsFn)(bool, HMODULE, const wchar_t *, char *, int);
     const RsFn rsA = a ? (RsFn)GetProcAddress(a, "TestReShade") : nullptr, rsB = b ? (RsFn)GetProcAddress(b, "TestReShade") : nullptr;
     char note[1024] = "";
-    Check(rsA && rsA(false, nullptr, nullptr, note, sizeof(note)) == -1 && strncmp(note, "ReShade is not in the game.", 27) == 0,
-          "no ReShade and no dxgi.dll beside the exe: the start's notice says ReShade is not in the game");
+    const auto ownRoute = [&]() { return strstr(note, "the overlay draws on its own route") && !strstr(note, "crash"); };
+    Check(rsA && rsA(false, nullptr, nullptr, note, sizeof(note)) == -1 && strncmp(note, "no ReShade in the game", 22) == 0 && ownRoute(),
+          "no ReShade and no dxgi.dll beside the exe: the start's log line says the overlay draws on its own route");
     if (!rsB) return;
     wchar_t tmp[MAX_PATH], none[MAX_PATH], rs[MAX_PATH], edge[MAX_PATH], other[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
@@ -222,13 +224,14 @@ static void TestReShadeCases(HMODULE a, HMODULE b)
     WriteAll(edge, bytes, sizeof(bytes));
     memset(bytes, 'x', sizeof(bytes));
     WriteAll(other, bytes, sizeof(bytes));
-    Check(rsB(false, nullptr, none, note, sizeof(note)) == 2 && strstr(note, "Copy dxgi.dll and ReShade.ini from the mod's zip"),
-          "no dxgi.dll: ReShade is missing, and the notice says what to copy");
-    Check(rsB(false, nullptr, rs, note, sizeof(note)) == 1 && strstr(note, "takes no add-ons"), "a dxgi.dll that is ReShade but took no add-on: the notice says so");
+    Check(rsB(false, nullptr, none, note, sizeof(note)) == 2 && ownRoute(), "no dxgi.dll: ReShade is missing, and the log line names the own route");
+    Check(rsB(false, nullptr, rs, note, sizeof(note)) == 1 && strstr(note, "takes no add-ons") && ownRoute(),
+          "a dxgi.dll that is ReShade but took no add-on: the log line says so and names the own route");
     Check(rsB(false, nullptr, edge, note, sizeof(note)) == 1, "ReShade's name across the end of the reader's 64 KB is still found");
-    Check(rsB(false, nullptr, other, note, sizeof(note)) == 3 && strstr(note, "another program's dxgi.dll"), "another program's dxgi.dll: the notice says so");
+    Check(rsB(false, nullptr, other, note, sizeof(note)) == 3 && strstr(note, "another program's dxgi.dll") && ownRoute(),
+          "another program's dxgi.dll: the log line says so and names the own route");
     Check(rsB(false, GetModuleHandleW(L"kernel32.dll"), nullptr, note, sizeof(note)) == 1, "a ReShade module that did not take the add-on: no add-ons");
-    Check(rsB(true, nullptr, nullptr, note, sizeof(note)) == 0 && !note[0], "ReShade took the add-on: no notice");
+    Check(rsB(true, nullptr, nullptr, note, sizeof(note)) == 0 && strstr(note, "ReShade's presents"), "ReShade took the add-on: the log line names ReShade's route");
     DeleteFileW(rs);
     DeleteFileW(edge);
     DeleteFileW(other);

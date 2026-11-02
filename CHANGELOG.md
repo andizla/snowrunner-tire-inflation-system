@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone. The log says which route the overlay takes. ReShade's `dxgi.dll` and `ReShade.ini` stay in the zip for RivaTuner users, whose game does not boot without it. The mods draw without it.
+
 ## [1.3.3]
 
 - The step bindings are the plain d-pad left and right, `DPadLeft` and `DPadRight` by default (an ini's `LB+DPadLeft` becomes `DPadLeft`). They act only while the panel is open and no shoulder button is held. LB + d-pad is for gears and never the panel's, open or closed. While the panel is open the game sees none of the plain d-pad, so nothing shifts from inside it (two testers' reports, 27 October).

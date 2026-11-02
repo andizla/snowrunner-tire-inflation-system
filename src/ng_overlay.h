@@ -42,11 +42,11 @@ int NgTableCopySelfCheck();               // the method table copy on tables in 
 // The menu's key, a virtual key code; 0 leaves it. Saved in NextGen.ini, which every Next Gen mod reads at start.
 // What the start found about ReShade, which the release brings for the overlay to take the game's swap chains from:
 // registered (ReShade took the overlay as an add-on), the ReShade module that did not, the dxgi.dll beside the game's
-// exe. Sets the notice the menu shows above the tab's page and the line shown at the top for the first 15 s; returns 0
-// with ReShade working, 1 for a ReShade that takes no add-ons, 2 for no ReShade, 3 for another program's dxgi.dll.
-// NgOverlayStart calls it; NgReShadeNote() is the notice, empty with ReShade working.
+// exe. Returns 0 with ReShade working, 1 for a ReShade that takes no add-ons, 2 for no ReShade, 3 for another program's
+// dxgi.dll. Nothing about it is shown on screen (the author, 2 November: a setup that needs ReShade does not boot without
+// it, so a notice is never seen); NgReShadeRoute() is the start's log line, which route the overlay takes and why.
 int NgReShadeCheck(bool registered, HMODULE reshade, const wchar_t *dxgi);
-const char *NgReShadeNote();
+const char *NgReShadeRoute();
 // Next Gen Graphics' switches and status (ng_graphics.h) from that module's NgGraphicsGetApi; one Next Gen mod in the
 // game then draws the menu's Graphics tab from them. The overlay looks for hid.dll beside the exe by itself every 2 s
 // while no mod has the tab; this hands it another module (a test's stand-in). false: no table of a version it takes.

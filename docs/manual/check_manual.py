@@ -51,12 +51,15 @@ def changed_lines(spec):
     else:
         args = ['git', 'show', spec, '-U0', '--format=']
     out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True).stdout
-    added, removed, keep = [], [], False
+    added, removed, keep, old = [], [], False, ''
     for line in out.splitlines():
-        if line.startswith('+++ ') or line.startswith('--- '):
-            if line.startswith('+++ '):
-                path = line[6:] if line.startswith('+++ b/') else ''
-                keep = bool(path) and not path.startswith(SKIP)
+        if line.startswith('--- '):
+            old = line[6:] if line.startswith('--- a/') else ''
+            continue
+        if line.startswith('+++ '):
+            # a deleted file has only its old path
+            path = line[6:] if line.startswith('+++ b/') else old
+            keep = bool(path) and not path.startswith(SKIP)
             continue
         if keep and line[:1] == '+': added.append(line[1:])
         elif keep and line[:1] == '-': removed.append(line[1:])
@@ -81,12 +84,13 @@ def found_in(lines):
     return names
 
 
-# The names the change adds or takes away: a name as often on the removed lines as on the added ones only stands
-# beside what changed (a log line that gained a field keeps its others), and is told apart.
+# The names on the changed lines. A key or a tab label counts whenever it is there: a rewritten help line changes what
+# its key does. A log line's start as often on the removed lines as on the added ones only stands beside what changed
+# (a log line that gained a field), and is told apart.
 def names_of(added, removed):
     plus, minus = found_in(added), found_in(removed)
-    changed = sorted(n for n in set(plus) | set(minus) if plus.get(n, 0) != minus.get(n, 0))
-    beside = sorted(n for n in set(plus) | set(minus) if plus.get(n, 0) == minus.get(n, 0))
+    beside = sorted(n for n in set(plus) | set(minus) if n[1] == 'log' and plus.get(n, 0) == minus.get(n, 0))
+    changed = sorted(n for n in set(plus) | set(minus) if n not in beside)
     return changed, beside
 
 
@@ -125,19 +129,19 @@ def main():
         print('nothing a player meets changed: manual: checked, unchanged')
         return
     paras = list(paragraphs())
-    hits, missing = {}, []
+    seen, missing = set(), []
+    # each name with its paragraphs under it
     for name, kind in names:
-        found = False
-        for file, line, text in paras:
-            if kind == 'key' and re.search(r'(?<![A-Za-z0-9])' + re.escape(name) + r'(?![A-Za-z0-9])', text) or \
-               kind != 'key' and name.lower() in text.lower():
-                hits.setdefault((file, line), (text, []))[1].append(name)
-                found = True
+        found = [(file, line, text) for file, line, text in paras
+                 if (re.search(r'(?<![A-Za-z0-9])' + re.escape(name) + r'(?![A-Za-z0-9])', text) if kind == 'key' else name.lower() in text.lower())]
         if not found:
             missing.append('%s (%s)' % (name, kind))
-    for (file, line), (text, which) in sorted(hits.items()):
-        print('%s:%d [%s] %s' % (file, line, ', '.join(which), text[:160] + ('...' if len(text) > 160 else '')))
-    print('%d paragraphs to check' % len(hits))
+            continue
+        print('%s (%s), %d paragraph%s:' % (name, kind, len(found), '' if len(found) == 1 else 's'))
+        for file, line, text in found:
+            print('  %s:%d %s' % (file, line, text[:150] + ('...' if len(text) > 150 else '')))
+            seen.add((file, line))
+    print('%d paragraphs to check' % len(seen))
     if missing:
         print('in no paragraph: ' + ', '.join(missing))
 

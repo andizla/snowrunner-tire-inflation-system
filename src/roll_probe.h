@@ -19,7 +19,8 @@ inline float HalfToFloat(uint16_t half)
 
 // The axle among a body's three axes, from the inverse inertia Havok keeps for each (body+0x220): the axis whose
 // inertia stands apart from the other two, as a wheel is a cylinder (½mr² about its axle, the two across it alike).
-// The two closest to each other are across it. -1 where one is no inverse (zero, negative or not a number).
+// The two closest to each other are across it. -1 where one is no inverse (zero, negative or not a number), and where
+// the largest and the smallest lie within 2 % (a sphere's inertia, as Havok setups often give a wheel: no axle shows).
 inline int RollAxle(const float inv[3])
 {
     float in[3];
@@ -28,6 +29,8 @@ inline int RollAxle(const float inv[3])
         if (!(inv[i] > 0.0f && inv[i] < 1.0e30f)) return -1;
         in[i] = 1.0f / inv[i];
     }
+    const float most = fmaxf(in[0], fmaxf(in[1], in[2])), least = fminf(in[0], fminf(in[1], in[2]));
+    if (most - least <= 0.02f * most) return -1;
     const float d01 = fabsf(in[0] - in[1]), d02 = fabsf(in[0] - in[2]), d12 = fabsf(in[1] - in[2]);
     return d01 <= d02 && d01 <= d12 ? 2 : d02 <= d12 ? 1 : 0;
 }
@@ -80,3 +83,18 @@ inline int RollParseValues(const wchar_t *text, float (&out)[kRollMostValues])
 
 // The mud layer's weight search: a float of the wheel that could be a blend weight lies in 0..1 (a NaN does not).
 inline bool RollUnit(float v) { return v >= 0.0f && v <= 1.0f; }
+
+// At a flip of the mud flag: the floats that are candidates for the weight, between the pass before and now. A
+// candidate crossed 0.5 (in 0..1 both times, one under 0.5 and one at or over it) or moved by more than 0.05 within
+// 0..1. Zeros, denormals and other still values are left out, wherever they lie. Their indexes into out, the count.
+inline int RollCandidates(const float *before, const float *now, int count, int *out)
+{
+    int n = 0;
+    for (int i = 0; i < count; i++)
+    {
+        if (!RollUnit(before[i]) || !RollUnit(now[i])) continue;
+        const bool crossed = (before[i] < 0.5f) != (now[i] < 0.5f);
+        if (crossed || fabsf(now[i] - before[i]) > 0.05f) out[n++] = i;
+    }
+    return n;
+}

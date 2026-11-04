@@ -1303,25 +1303,31 @@ static void LogDamage(uint64_t vehicle, size_t wheelCount, const TickResult &r, 
 
 // ---- diagnostics: the rolling drag probe (ini ProbeRoll=1, by hand only; BRIEF_rolling_drag.md part 1) ----
 // Each body is a Havok rigid body: the rotation's columns at body+0x170, +0x180, +0x190 (the body's x, y and z in the
-// world), the position +0x1A0, the linear damping +0x214 and the angular +0x216 (half floats), a float at +0x218, the
+// world), the position +0x1A0, the linear damping +0x214 and the angular +0x216 (half floats), the time factor +0x218
+// (a half, 1.0 if this layout holds) and two bytes at +0x21A and +0x21B, the
 // inverse of the inertia's diagonal in the body's own axes and the inverse mass at +0x220 (four floats), the linear
 // velocity +0x230 and the angular +0x240 (both in the world's axes). A wheel's stock angular damping is wheel+0xAC,
 // a broken one's wheel+0xA8.
 // Once a second it logs, for each wheel: the contact, the broken flag, +0xAC, +0xA8, what body+0x216 holds (and
-// +0x218), the spin along the axle against the speed over the radius. The masses and inertias (each wheel's, the
-// chassis's, the files' mass at model+0x784) at each truck and whenever one changes by more than 1 %.
+// +0x218 to +0x21B), the spin along each of the body's three axes and along the axle picked by the inertia, against the
+// speed over the radius. The masses and inertias (each wheel's, the chassis's, the files' mass at model+0x784) at each
+// truck and whenever one changes by more than 1 %.
 // The coast-downs (roll_probe.h): at the stock damping, then ProbeRollDamping's first value written once, its hold
-// counted each second, then each value written every frame by the truck update (RollFrameWrite). A step moves on once
-// the truck has gone faster than 5 m/s and stood 3 s; the speed is logged every 0.1 s while it moves.
+// counted each second over the wheels written, then each value written every frame by the truck update
+// (RollFrameWrite). A step moves on once the truck has gone faster than 5 m/s and stood 3 s; the speed and the
+// chassis's height (a grade of 0.1° is as large as the whole drag at stock) are logged every 0.1 s while it moves.
+// Each body's word from before the mod's first write to it is what goes back.
 // The mud layer's weight: the first wheel's floats in 0..1 from +0x100 to +0x260 that changed since the second before,
-// each second, and all of them on the pass before and at a flip of its mud flag (+0x1CE): the weight the game's
-// ground check (RVA 0xc22f40, through 0xbcd720) compares with 0.5 crosses 0.5 at the flip.
+// each second, and at a flip of its mud flag (+0x1CE) those that crossed 0.5 or moved by more than 0.05 since the pass
+// before (RollCandidates): the weight the game's ground check (RVA 0xc22f40, through 0xbcd720) compares with 0.5
+// crosses 0.5 at the flip.
 static const int kRollScanFrom = 0x100, kRollScanFloats = (0x260 - 0x100) / 4;
-struct RollBody { float inv[4], cols[3][4], angular[3], after; WORD damping; bool ok; };
+struct RollBody { float inv[4], cols[3][4], angular[3]; WORD damping, time; BYTE bytes[2]; bool ok; };
 static RollBody ReadRollBody(uint64_t body)
 {
     RollBody b = {};
-    b.ok = Read(body + 0x220, b.inv) && Read(body + 0x170, b.cols) && Read(body + 0x240, b.angular) && Read(body + 0x216, b.damping) && Read(body + 0x218, b.after);
+    b.ok = Read(body + 0x220, b.inv) && Read(body + 0x170, b.cols) && Read(body + 0x240, b.angular) && Read(body + 0x216, b.damping) && Read(body + 0x218, b.time) &&
+           Read(body + 0x21A, b.bytes);
     return b;
 }
 static float RollSpin(const RollBody &b, int axle)
@@ -1330,7 +1336,19 @@ static float RollSpin(const RollBody &b, int axle)
 }
 static float Inverse(float v) { return v > 0.0f ? 1.0f / v : 0.0f; }
 
-// Back to each wheel's stock damping (+0xAC), where it is still that wheel and not broken.
+// Each body's damping word from before the mod's first write to it (for the stock back), by body.
+static std::unordered_map<uint64_t, WORD> g_rollOriginal;
+static void RollKeepOriginal(const std::vector<WheelRef> &wheels)
+{
+    for (const WheelRef &w : wheels)
+    {
+        WORD word = 0;
+        if (!g_rollOriginal.count(w.body) && Read(w.body + 0x216, word)) g_rollOriginal[w.body] = word;
+    }
+}
+
+// Back to each wheel's own damping, where it is still that wheel and not broken: the word its body held before the
+// mod's first write, else the stock (+0xAC).
 static int RollStockBack(const std::vector<WheelRef> &wheels)
 {
     int n = 0;
@@ -1338,30 +1356,49 @@ static int RollStockBack(const std::vector<WheelRef> &wheels)
     {
         float stock = 0;
         BYTE broken = 0;
-        if (Read(w.model + 0x328, broken) && !broken && Read(w.wheel + 0xAC, stock) && stock >= 0.0f && stock < 1000.0f && StillThere(w) && WriteAs(w.body + 0x216, HavokHalf(stock))) n++;
+        const auto kept = g_rollOriginal.find(w.body);
+        if (!Read(w.model + 0x328, broken) || broken || !StillThere(w)) continue;
+        if (kept != g_rollOriginal.end()) { if (WriteAs(w.body + 0x216, kept->second)) n++; }
+        else if (Read(w.wheel + 0xAC, stock) && stock >= 0.0f && stock < 1000.0f && WriteAs(w.body + 0x216, HavokHalf(stock))) n++;
     }
     return n;
 }
 
-static void RollScanLine(const wchar_t *what, BYTE flag, const float *now, const float *before)
+// The first wheel's floats in 0..1 that moved since the second before (no cap: the weight may lie anywhere in the window)
+static void RollScanSecond(BYTE flag, const float *now, const float *before)
 {
     std::wstring list;
-    int n = 0;
-    for (int i = 0; i < kRollScanFloats && n < 24; i++)
+    for (int i = 0; i < kRollScanFloats; i++)
     {
-        if (!RollUnit(now[i]) || (before && (!RollUnit(before[i]) || fabsf(now[i] - before[i]) < 0.005f))) continue;
-        wchar_t one[40];
+        if (!RollUnit(now[i]) || !RollUnit(before[i]) || fabsf(now[i] - before[i]) < 0.005f) continue;
+        wchar_t one[48];
         swprintf_s(one, L" +0x%X %.3f", kRollScanFrom + i * 4, now[i]);
         list += one;
-        n++;
     }
-    Log(L"probe roll: mud %s, flag %u:%s", what, flag, n ? list.c_str() : L" none");
+    Log(L"probe roll: mud flag %u, floats changed in the second:%s", flag, list.empty() ? L" none" : list.c_str());
 }
 
-static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, float dt, ULONGLONG passAt)
+// At a flip of the mud flag: the candidates for the weight (RollCandidates), each as before and now
+static void RollScanFlip(BYTE was, BYTE flag, const float *before, const float *now)
+{
+    int idx[kRollScanFloats] = {};
+    const int n = RollCandidates(before, now, kRollScanFloats, idx);
+    std::wstring list;
+    for (int k = 0; k < n; k++)
+    {
+        const int i = idx[k];
+        wchar_t one[64];
+        swprintf_s(one, L" +0x%X %.3f>%.3f%s", kRollScanFrom + i * 4, before[i], now[i], (before[i] < 0.5f) != (now[i] < 0.5f) ? L" (crossed 0.5)" : L"");
+        list += one;
+    }
+    Log(L"probe roll: mud flag flips %u to %u, the candidates (crossed 0.5 or moved over 0.05 since the pass before):%s", was, flag, list.empty() ? L" none" : list.c_str());
+}
+
+static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, float height, float dt, ULONGLONG passAt)
 {
     static uint64_t rollVehicle = 0;
     static std::vector<WheelRef> rolled; // the wheels a value went into, for the stock back
+    static std::vector<uint64_t> onceBodies; // the bodies the once step wrote, whose hold is counted
     static RollRun run;
     static WORD onceWord = 0;
     static bool onceOn = false;
@@ -1399,11 +1436,14 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             if (d.how == kRollOnce)
             {
                 onceWord = HavokHalf(d.damping);
+                RollKeepOriginal(wheels);
+                onceBodies.clear();
                 int n = 0;
                 for (const WheelRef &w : wheels)
                 {
                     BYTE contact = 0, broken = 0;
-                    if (Read(w.wheel + 0x1A4, contact) && contact && Read(w.model + 0x328, broken) && !broken && StillThere(w) && WriteAs(w.body + 0x216, onceWord)) n++;
+                    if (Read(w.wheel + 0x1A4, contact) && contact && Read(w.model + 0x328, broken) && !broken && StillThere(w) && WriteAs(w.body + 0x216, onceWord))
+                        n++, onceBodies.push_back(w.body);
                 }
                 onceOn = true;
                 rolled = wheels;
@@ -1413,6 +1453,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             else if (d.how == kRollEveryFrame)
             {
                 rolled = wheels;
+                RollKeepOriginal(wheels);
                 InterlockedExchange(&g_rollFrames, 0);
                 InterlockedExchange(&g_rollFrameWrites, 0);
                 InterlockedExchange64(&g_rollFrameVehicle, (LONG64)vehicle);
@@ -1431,7 +1472,12 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
     if (againAt && passAt >= againAt)
     {
         againAt = 0;
-        if (g_rollFrameWord < 0 && !onceOn && !rolled.empty()) { RollStockBack(rolled); rolled.clear(); }
+        if (g_rollFrameWord < 0 && !onceOn && !rolled.empty())
+        {
+            RollStockBack(rolled);
+            for (const WheelRef &w : rolled) g_rollOriginal.erase(w.body); // back as they were: a body made anew later is read anew
+            rolled.clear();
+        }
     }
     if (!vehicle || wheels.empty()) return;
     if (vehicle != rollVehicle)
@@ -1444,16 +1490,16 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
         enter();
     }
     if (RollRunPass(run, steps, speed, dt)) enter();
-    // the coast's speed every 0.1 s, ten to a line
+    // the coast's speed and the chassis's height every 0.1 s, ten to a line (GetTickCount64 steps in 16 ms)
     if (run.step < steps && passAt >= sampleAt && (speed > 0.05f || sampleCount))
     {
         sampleAt = passAt + 100;
-        wchar_t one[32];
-        swprintf_s(one, L" %.1f %.2f", (float)(passAt - stepAt) / 1000.0f, speed);
+        wchar_t one[48];
+        swprintf_s(one, L" %.2f %.2f %.3f", (float)(passAt - stepAt) / 1000.0f, speed, height);
         samples += one;
         if (++sampleCount >= 10 || speed <= 0.05f)
         {
-            Log(L"probe roll: coast, step %d, s and m/s:%s", run.step + 1, samples.c_str());
+            Log(L"probe roll: coast, step %d, s, m/s and the chassis's height in m:%s", run.step + 1, samples.c_str());
             samples.clear();
             sampleCount = 0;
         }
@@ -1463,18 +1509,14 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
     BYTE flag = 0;
     if (Read(wheels[0].wheel + kRollScanFrom, scan) && Read(wheels[0].wheel + 0x1CE, flag))
     {
-        if (scanHad && flag != flagBefore)
-        {
-            RollScanLine(L"flag flips, the pass before", flagBefore, scanBefore, nullptr);
-            RollScanLine(L"flag flips, now", flag, scan, nullptr);
-        }
+        if (scanHad && flag != flagBefore) RollScanFlip(flagBefore, flag, scanBefore, scan);
         memcpy(scanBefore, scan, sizeof scan);
         flagBefore = flag;
         scanHad = true;
     }
     if (passAt < nextSecond) return;
     nextSecond = passAt + 1000;
-    if (secondHad && scanHad) RollScanLine(L"floats changed in the second", flag, scan, scanSecond);
+    if (secondHad && scanHad) RollScanSecond(flag, scan, scanSecond);
     memcpy(scanSecond, scan, sizeof scan);
     secondHad = scanHad;
     // the masses, at a truck and when one changes
@@ -1510,7 +1552,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
     }
     // each wheel's damping and spin
     std::wstring list;
-    int held = 0, grounded = 0;
+    int held = 0, written = 0;
     for (const WheelRef &w : wheels)
     {
         const RollBody b = ReadRollBody(w.body);
@@ -1521,16 +1563,23 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
         Read(w.wheel + 0x94, r);
         Read(w.wheel + 0x1A4, contact);
         Read(w.model + 0x328, flat);
-        if (contact && !flat) grounded++;
-        if (onceOn && contact && !flat && b.damping == onceWord) held++;
-        const float spin = RollSpin(b, RollAxle(b.inv));
-        wchar_t one[200];
-        swprintf_s(one, L"; w%d c%u b%u AC %.4f A8 %.4f body %.4f (%04X%s) +218 %.4f spin %.2f v/r %.2f", w.index, contact, flat, stock, broken, HalfToFloat(b.damping),
-                   b.damping, b.damping == HavokHalf(stock) ? L" =AC" : b.damping == HavokHalf(broken) ? L" =A8" : L"", b.after, spin, r > 0.0f ? speed / r : 0.0f);
+        bool once = false;
+        for (uint64_t body : onceBodies) once = once || body == w.body;
+        if (onceOn && once)
+        {
+            written++;
+            if (b.damping == onceWord) held++;
+        }
+        const int axle = RollAxle(b.inv);
+        wchar_t one[320];
+        swprintf_s(one, L"; w%d c%u b%u AC %.4f A8 %.4f body %.4f (%04X%s) time %.4f (%04X) bytes %02X %02X, spin x y z %.2f %.2f %.2f, axle %c %.2f, v/r %.2f", w.index, contact,
+                   flat, stock, broken, HalfToFloat(b.damping), b.damping, b.damping == HavokHalf(stock) ? L" =AC" : b.damping == HavokHalf(broken) ? L" =A8" : L"",
+                   HalfToFloat(b.time), b.time, b.bytes[0], b.bytes[1], RollSpin(b, 0), RollSpin(b, 1), RollSpin(b, 2), axle < 0 ? L'?' : (wchar_t)(L'x' + axle),
+                   RollSpin(b, axle), r > 0.0f ? speed / r : 0.0f);
         list += one;
     }
     wchar_t head[160];
-    if (onceOn) swprintf_s(head, L", held %d of %d grounded", held, grounded);
+    if (onceOn) swprintf_s(head, L", held %d of the %d written once", held, written);
     else if (g_rollFrameWord >= 0) swprintf_s(head, L", %ld frames, %ld wheel writes", (long)g_rollFrames, (long)g_rollFrameWrites);
     else head[0] = 0;
     Log(L"probe roll: step %d of %d, %.2f m/s%s%s", min(run.step + 1, steps), steps, speed, head, list.c_str());
@@ -2386,7 +2435,7 @@ static DWORD WINAPI Run(void *)
             updatesLogged = updates;
         }
         // diagnostics: ProbeRoll=1, the rolling drag probe and its coast-downs
-        RollProbePass(vehicle, wheels, speedOk ? speed : 0.0f, dt, passAt);
+        RollProbePass(vehicle, wheels, speedOk ? speed : 0.0f, speedOk ? pos[1] : 0.0f, dt, passAt);
         // which of the game's threads read the pad and present, once (diagnostics)
         static bool threadsLogged = false;
         static ULONGLONG threadsAt = 0;
@@ -2980,10 +3029,8 @@ static bool TireStateTest()
     return made && same && offsets;
 }
 
-// An exe from a file, as the loader lays it out: a copy of the image from a running game is that already (file offset
-// = RVA), an exe as it lies on disk gets its sections put in place. base: what its stored pointers are relative to.
-// The rolling drag probe's reckoning (roll_probe.h): the half floats written and read back, the axle by the inertia,
-// the steps, the run's moving on, and ProbeRollDamping's text.
+// The rolling drag probe's reckoning (roll_probe.h): the half floats written and read back, the axle by the inertia
+// (none for a sphere's), the steps, the run's moving on, ProbeRollDamping's text and the mud weight's candidates.
 static bool RollProbeTest()
 {
     bool halves = true;
@@ -2996,8 +3043,22 @@ static bool RollProbeTest()
     // a wheel as a cylinder of 60 kg, r 0.55 m, 0.4 m wide: 9.08 kg m2 about its axle, 5.34 across
     const float axleI = 0.5f * 60.0f * 0.55f * 0.55f, acrossI = 0.25f * 60.0f * 0.55f * 0.55f + 60.0f * 0.4f * 0.4f / 12.0f;
     const float onY[3] = { 1.0f / acrossI, 1.0f / axleI, 1.0f / acrossI }, onX[3] = { 1.0f / axleI, 1.0f / acrossI, 1.0f / acrossI },
-                onZ[3] = { 1.0f / acrossI, 1.0f / acrossI, 1.0f / axleI }, none[3] = { 1.0f / acrossI, 0.0f, 1.0f / axleI };
-    const bool axles = RollAxle(onY) == 1 && RollAxle(onX) == 0 && RollAxle(onZ) == 2 && RollAxle(none) == -1;
+                onZ[3] = { 1.0f / acrossI, 1.0f / acrossI, 1.0f / axleI }, none[3] = { 1.0f / acrossI, 0.0f, 1.0f / axleI },
+                sphere[3] = { 1.0f / 7.0f, 1.0f / 7.0f, 1.0f / 7.0f }, nearly[3] = { 1.0f / 7.0f, 1.0f / 7.1f, 1.0f / 7.05f };
+    const bool axles = RollAxle(onY) == 1 && RollAxle(onX) == 0 && RollAxle(onZ) == 2 && RollAxle(none) == -1 && RollAxle(sphere) == -1 && RollAxle(nearly) == -1;
+    // the weight behind 30 zeros and denormals: it crossed 0.5 and is found; a value moved 0.1 is found too, one moved
+    // 0.01 and a still one are not
+    float before[40] = {}, now[40] = {};
+    const uint32_t tiny = 0x00000123;
+    for (int i = 0; i < 30; i++) memcpy(i % 2 ? &before[i] : &now[i], &tiny, sizeof tiny);
+    before[33] = 0.42f, now[33] = 0.58f;
+    before[35] = 0.10f, now[35] = 0.20f;
+    before[36] = 0.30f, now[36] = 0.31f;
+    before[37] = now[37] = 0.75f;
+    before[38] = 0.40f, now[38] = 7.0f; // out of 0..1 now
+    int found[40] = {};
+    const int candidates = RollCandidates(before, now, 40, found);
+    const bool mud = candidates == 2 && found[0] == 33 && found[1] == 35;
     float values[kRollMostValues] = {};
     const int n = RollParseValues(L"0.5, 2,8", values);
     float bad[kRollMostValues] = {};
@@ -3020,13 +3081,16 @@ static bool RollProbeTest()
     end.step = 5;
     const bool stays = r.step == 1 && !RollRunPass(end, 5, 9.0f, 0.05f) && end.step == 5;
     const bool unit = RollUnit(0.0f) && RollUnit(1.0f) && !RollUnit(1.01f) && !RollUnit(-0.01f) && !RollUnit(nanf(""));
-    const bool ok = halves && axles && parsed && stepsOk && notYet && once && stays && unit;
-    printf("%s rolling drag probe: dampings back from their halves within 0.4 %%, the axle by the inertia that stands apart, five steps for 0.5,2,8 (stock, once, three every frame), "
-           "a step on after a coast and 3 s standing only, the text read to its first bad value\n", ok ? "ok  " : "FAIL");
-    if (!ok) printf("     halves %d axles %d parsed %d steps %d notYet %d once %d stays %d unit %d\n", halves, axles, parsed, stepsOk, notYet, once, stays, unit);
+    const bool ok = halves && axles && parsed && stepsOk && notYet && once && stays && unit && mud;
+    printf("%s rolling drag probe: dampings back from their halves within 0.4 %%, the axle by the inertia that stands apart (none for a sphere's), five steps for 0.5,2,8 "
+           "(stock, once, three every frame), a step on after a coast and 3 s standing only, the text read to its first bad value, the mud weight's crosser found behind 30 zeros\n",
+           ok ? "ok  " : "FAIL");
+    if (!ok) printf("     halves %d axles %d parsed %d steps %d notYet %d once %d stays %d unit %d mud %d (%d)\n", halves, axles, parsed, stepsOk, notYet, once, stays, unit, mud, candidates);
     return ok;
 }
 
+// An exe from a file, as the loader lays it out: a copy of the image from a running game is that already (file offset
+// = RVA), an exe as it lies on disk gets its sections put in place. base: what its stored pointers are relative to.
 static bool LoadImageFile(const wchar_t *file, std::vector<uint8_t> &image, uint64_t &base)
 {
     FILE *f = nullptr;

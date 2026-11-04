@@ -3,7 +3,7 @@
 From the lines a change adds or removes (outside docs/manual and test/) it takes the names a player meets: ini keys
 ("BackToA", RequireClutch=1, `IgnoreShifter`), the tab's labels (Checkbox, Button and PageLabel texts) and the log's
 lines (the literal start of an "area: what happened" string). It then lists every paragraph of the manual sources
-(docs/manual/*.py, English and Russian) that names one of them, and the names no paragraph has.
+(docs/manual/*.py, English and Russian, and README.md) that names one of them, and the names no paragraph has.
 
 The commit then changes those paragraphs or says "manual: checked, unchanged". A name with no paragraph is either new
 to the manual or never meant for it; the list says which names those are.
@@ -100,6 +100,12 @@ def plain(text):
 
 
 def paragraphs():
+    # the README too, a line a paragraph: it names the same keys and lags when nothing lists it (review N2)
+    readme = os.path.join(ROOT, 'README.md')
+    if os.path.exists(readme):
+        for number, line in enumerate(open(readme, encoding='utf-8').read().split('\n'), 1):
+            if line.strip():
+                yield 'README.md', number, plain(line)
     for name in sorted(os.listdir(HERE)):
         if not name.endswith('.py') or name == os.path.basename(__file__):
             continue

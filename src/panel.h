@@ -189,11 +189,11 @@ inline void HardSettings(TpSettings &s)
 // Globalhacker insanity mode: harder than real tires, built from the player Globalhacker's own hardcore set (2026-10). Low grips x2 on dirt and x0.4 on
 // asphalt; soft tires wear from 15 km/h (Low) and 20 km/h (Reduced) and are worn out within seconds a little faster;
 // flattened tires lose the speed the smaller wheel loses; no Increased mode; the vanilla balance at 2 puts tires that
-// out-grip every vanilla tire below it.
+// out-grip every vanilla tire below it. Rolling drag is on, so the fuel is 1, as in hard mode.
 static const float kInsaneModes[3][kModeKeyCount] = {
-    { 1.5f, 0.45f, 1.25f, 0.06f, 1.5f, 0.75f, 1.3f, 1.7f, 1.5f, 20.0f / 3.6f, 25.0f / 3.6f, 4.0f, 12.0f, 2.0f },  // Reduced
-    { 2.0f, 0.4f, 1.5f, 0.12f, 1.75f, 0.6f, 1.6f, 2.3f, 2.0f, 15.0f / 3.6f, 20.0f / 3.6f, 8.0f, 16.0f, 2.0f },     // Low
-    { 0.92f, 0.97f, 0.9f, 0.0f, 0.96f, 1.05f, 0.95f, 0.85f, 0.92f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f } };             // Increased (off)
+    { 1.5f, 0.45f, 1.25f, 0.06f, 1.0f, 0.75f, 1.3f, 1.7f, 1.5f, 20.0f / 3.6f, 25.0f / 3.6f, 4.0f, 12.0f, 2.0f },  // Reduced
+    { 2.0f, 0.4f, 1.5f, 0.12f, 1.0f, 0.6f, 1.6f, 2.3f, 2.0f, 15.0f / 3.6f, 20.0f / 3.6f, 8.0f, 16.0f, 2.0f },     // Low
+    { 0.92f, 0.97f, 0.9f, 0.0f, 1.0f, 1.05f, 0.95f, 0.85f, 0.92f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f } };              // Increased (off)
 static const float kInsaneSeconds = 25.0f;
 
 inline void InsaneSettings(TpSettings &s)

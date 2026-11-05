@@ -1460,7 +1460,7 @@ struct DragKept { WheelRef w; RdRecord rec; };
 static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
 struct DragWheelStat { int index; RdGround ground; float crr, r, inertia, spin, stock, c, mass; bool grounded, broken, written; };
-struct DragStats { uint64_t vehicle, extraOf; float mass, chassis, factor, n, files; int count, grounded, extras; LONG frames, writes; DragWheelStat w[kRollWheelsMost];
+struct DragStats { uint64_t vehicle, extraOf; float mass, chassis, factor, n, files; int count, grounded, extras, capped; LONG frames, writes, cappedFrames; DragWheelStat w[kRollWheelsMost];
                    uint64_t extraBody[kDragExtraMost]; int extraWheel[kDragExtraMost]; float extraMass[kDragExtraMost]; };
 
 // A Havok body's mass, 1 over its inverse mass (body + 0x22C); 0 where it is not a mass a truck's body can have.
@@ -1662,8 +1662,10 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
             if (stats) stats->w[i] = st;
             continue;
         }
-        const float c = RdDamping(stock, st.crr, factor, n, r, st.inertia, st.spin);
+        bool capped = false;
+        const float c = RdDamping(stock, st.crr, factor, n, r, st.inertia, st.spin, &capped);
         st.c = c;
+        if (capped && stats) stats->capped++;
         RdRecord rec = was ? was->rec : RdRecord{ w.wheel, 0, 0.0f };
         if (RdWrite(was ? &was->rec : nullptr, w.wheel, word, c))
         {
@@ -1689,6 +1691,7 @@ static void RollingDragTruckUpdate(uint64_t vehicle)
     const bool probeHolds = g_rollFrameWord >= 0 || g_rollOnceOn;
     if (probeHolds) { g_dragKept.clear(); return; } // the probe's damping is in the wheels: the drag waits, and writes anew after
     if (!g_dragOn && g_dragKept.empty()) return;
+    if (CurrentVehicle() != vehicle) return; // another truck's update: two reads, not the wheels'
     uint64_t driven = 0;
     const std::vector<WheelRef> wheels = CurrentWheels(&driven);
     if (driven != vehicle) return;
@@ -1704,6 +1707,7 @@ static void RollingDragTruckUpdate(uint64_t vehicle)
     if (!TryAcquireSRWLockExclusive(&g_dragLock)) return; // the mod's thread is reading: next frame
     stats.frames = g_dragStats.vehicle == vehicle ? g_dragStats.frames + 1 : 1;
     stats.writes = (g_dragStats.vehicle == vehicle ? g_dragStats.writes : 0) + writes;
+    stats.cappedFrames = (g_dragStats.vehicle == vehicle ? g_dragStats.cappedFrames : 0) + (stats.capped ? 1 : 0);
     g_dragStats = stats;
     ReleaseSRWLockExclusive(&g_dragLock);
 }
@@ -2086,7 +2090,8 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
                        w.c, w.stock, w.spin, w.inertia * (w.c - w.stock) * fabsf(w.spin), w.crr * s.factor * s.n * w.r);
         list += one;
     }
-    Log(L"rolling drag: %.2f m/s, x%.2f at %s, N %.0f N, %ld frames, %ld writes%s", speed, s.factor, g_modes[g_mode].name, s.n, (long)s.frames, (long)s.writes, list.c_str());
+    Log(L"rolling drag: %.2f m/s, x%.2f at %s, N %.0f N, %ld frames, %ld writes, %ld frames with a wheel held at %g%s", speed, s.factor, g_modes[g_mode].name, s.n,
+        (long)s.frames, (long)s.writes, (long)s.cappedFrames, kRdMost, list.c_str());
 }
 
 // ---- diagnostics (ini ProbeFriction, ProbeWriters; both 0 unless set by hand) ----
@@ -3536,8 +3541,8 @@ static bool RealismTest()
     TpSettings none = d;
     PresetSettings(none);
     const bool insane = x.seconds == kInsaneSeconds && !x.increased && !x.rollingRadius && x.balanceStrength == 2.0f && x.key == 'K' &&
-                        x.mode[1][kModeAsphalt] == kInsaneModes[1][kModeAsphalt] && x.mode[1][kModeDamageTick] == 2.0f && SameSettings(none, d) && x.rollingDrag;
-    printf("%s realism: insane mode wins over hard mode (Low asphalt x%.2f, wear every %.0f s, balance %.1f), and no preset leaves the settings as they are\n",
+                        x.mode[1][kModeAsphalt] == kInsaneModes[1][kModeAsphalt] && x.mode[1][kModeDamageTick] == 2.0f && SameSettings(none, d) && x.rollingDrag && x.mode[0][kModeFuel] == 1.0f && x.mode[1][kModeFuel] == 1.0f;
+    printf("%s realism: insane mode wins over hard mode (Low asphalt x%.2f, wear every %.0f s, balance %.1f; rolling drag on, fuel x1), and no preset leaves the settings as they are\n",
            insane ? "ok  " : "FAIL", x.mode[1][kModeAsphalt], x.mode[1][kModeDamageTick], x.balanceStrength);
     g_mode = kNormal;
     g_pressure = kModePressure[kNormal];
@@ -3899,6 +3904,11 @@ static bool RollingDragTest()
                          RdGroundOf(rock, 0) == kRdRock && RdGroundOf(none, 0) == kRdDirt && kRdCrr[kRdDirt] == 0.030f && fabsf(low - 1.4907f) < 0.001f &&
                          fabsf(kRdCrr[kRdSand] * low - 0.0894f) < 0.0005f && fabsf(RdPressureFactor(kModePressure[kReduced]) - 1.240f) < 0.001f &&
                          RdPressureFactor(1.0f) == 1.0f && fabsf(RdPressureFactor(kModePressure[kIncreased]) - 0.894f) < 0.001f;
+    // c held at 20, and said so
+    bool capHit = false, capNot = true;
+    const float capC = RdDamping(stock, 0.06f, 1.5f, 50000.0f, 0.5f, 0.1f, 0.0f, &capHit);
+    RdDamping(stock, 0.010f, 1.0f, n, r, inertia, 10.0f / r, &capNot);
+    const bool capOk = kRdMost == 20.0f && capHit && capC == kRdMost && !capNot;
     a.w[1].wheel[0x1C0] = 1; // ice under the second wheel
     RollingDragFrame((uint64_t)a.vehicle, wa, true, 1.0f, nullptr);
     const bool iceStock = FakeWord(a.w[1]) == HavokHalf(stock);
@@ -4041,7 +4051,7 @@ static bool RollingDragTest()
     g_dragKept.clear();
     g_dragVehicle = 0;
     g_buildFound = saved;
-    const bool ok = atTen && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed;
+    const bool ok = atTen && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed && capOk;
     printf("%s rolling drag: at 10 m/s on paved at Normal the word's torque %.2f N m against Crr N r %.2f (N %.0f N by the Havok mass %.0f kg, not the files' 2149), "
            "%.2f at three times the spin, under the floor falling to nothing; ice none, sand at Low x%.3f, no flag dirt; broken kept, airborne and off and another truck "
            "stock; a write over 2 %% and on the game's word only; no climb over 10 lost records; none while the probe holds; the probe's stock back in the truck update; no hook off; "

@@ -24,8 +24,8 @@ SETS = {
              M(0.9, 1.3, 0.85, 0.0, 0.85, 1.1, 0.95, 0.85, 0.9, 0, 0, 0, 0, 7)],
  'hard':    [M(1.6, 0.8, 1.35, 0.05, 1.0, 0.8, 1.3, 1.9, 1.6, 30, 55, 2, 10, 8), M(1.3, 0.9, 1.18, 0.025, 1.0, 0.9, 1.15, 1.45, 1.3, 50, 75, 1, 6, 10), NORMAL,
              M(0.92, 0.97, 0.9, 0.0, 1.0, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
- 'insane':  [M(2.0, 0.4, 1.5, 0.12, 1.75, 0.6, 1.6, 2.3, 2.0, 15, 20, 8, 16, 2), M(1.5, 0.45, 1.25, 0.06, 1.5, 0.75, 1.3, 1.7, 1.5, 20, 25, 4, 12, 2), NORMAL,
-             M(0.92, 0.97, 0.9, 0.0, 0.96, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
+ 'insane':  [M(2.0, 0.4, 1.5, 0.12, 1.0, 0.6, 1.6, 2.3, 2.0, 15, 20, 8, 16, 2), M(1.5, 0.45, 1.25, 0.06, 1.0, 0.75, 1.3, 1.7, 1.5, 20, 25, 4, 12, 2), NORMAL,
+             M(0.92, 0.97, 0.9, 0.0, 1.0, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
 }
 ENVELOPE = [(0.9, 3.2, 0.4), (1.0, 3.2, 0.2), (1.5, 1.5, 2.0), (1.6, 1.5, 1.9), (2.0, 3.0, 1.2), (2.2, 2.6, 1.3), (2.8, 1.2, 1.8), (2.85, 1.2, 1.78),
             (3.0, 0.5, 8.0), (3.0, 0.8, 3.5), (3.0, 1.2, 1.3), (3.1, 0.8, 3.4), (3.1, 1.0, 1.9), (3.2, 0.8, 1.5), (3.2, 1.0, 1.3), (3.3, 0.6, 2.2)]
@@ -218,7 +218,7 @@ TIRE = f'''
 <li>The weight is the truck's as the game's physics has it: the chassis, the wheels and any body a wheel hangs on (a cab, a bed or an axle of its own). Cargo and a trailer are not counted.</li>
 <li>The drag goes in through each wheel's own damping, the way the game drags a flat tire. It acts with the foot off too. A broken wheel keeps the game's own.</li>
 <li>It needs the game's truck update, as tire damage on the game's thread does. On a build where the mod does not find it, rolling drag stays off and the log says so.</li>
-<li>Fuel: the engine works harder against the drag and burns more by itself. So hard mode's fuel factors are 1. The default modes keep theirs for now.</li></ul>
+<li>Fuel: the engine works harder against the drag and burns more by itself. So the fuel factors of hard mode and the insanity mode are 1. The default modes keep theirs for now.</li></ul>
 
 <h2>12. Tire damage</h2>
 <p>While the truck is faster than the mode's first speed, a timer runs. Each time it passes the mode's interval, every wheel on the ground takes damage: the least at the first speed, rising to the most at the second speed and above. Below the first speed for a full second, the timer starts over. Increased and Normal never wear.</p>
@@ -246,7 +246,7 @@ TIRE = f'''
 <p>Airing a tire down to half its pressure lengthens its contact patch by about half: that much more grip on sand and soft ground, a little less on hard ground. Over-inflating does the reverse and gains nothing on asphalt. A soft tire's sidewalls flex and heat at speed, so its wear starts higher up than the defaults but ends a tire faster.</p>
 
 <h2>15. Globalhacker insanity mode</h2>
-<p>One checkbox under hard mode, or <code>InsaneMode=1</code>; it excludes hard mode and greys out the same settings. It is built from the own settings of the player Globalhacker and is harder than real tires: a change takes 25 seconds and only while the truck stands, the tires feel the temperature, flattened tires lose the speed the smaller wheel loses, there is no Increased mode, the vanilla balance runs at strength 2, and rolling drag is on.</p>
+<p>One checkbox under hard mode, or <code>InsaneMode=1</code>; it excludes hard mode and greys out the same settings. It is built from the own settings of the player Globalhacker and is harder than real tires: a change takes 25 seconds and only while the truck stands, the tires feel the temperature, flattened tires lose the speed the smaller wheel loses, there is no Increased mode, the vanilla balance runs at strength 2, and rolling drag is on. The fuel factors are 1, as in hard mode.</p>
 {modes_table('insane', 'Table 4. Globalhacker insanity mode', with_increased=False)}
 <div class="warn">These numbers were made for tire files already cut by 45% on the ground and in mud. On vanilla tires they are milder than they look: Low ends near vanilla grip, not far above it. The next version also sets the base grip on the ground and in mud to ×0.55 in this mode, so it plays as its author plays it.</div>
 

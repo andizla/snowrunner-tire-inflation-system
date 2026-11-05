@@ -373,7 +373,7 @@ chassis. That body is looked for two pointer levels behind the wheel object, amo
 in its frame lies at the wheel's centre (+0x13C), within 0.5 m along and 1 m across, as Gauges' <code>suspension_step.h</code> finds
 it. The search runs on the mod's thread at each truck and when its wheel objects change. Until a truck shows such a body, the
 chassis and the wheels are the sum. <i>n</i> is the wheels with
-contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is held at 100 at most.</p>
+contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is held at 20 at most (the probe measured up to 8; at 60 frames a second <i>c</i>·dt reaches 1 at <i>c</i> = 60); the line a second counts the frames where it bites.</p>
 <p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
 floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never
 pushes a wheel. Over all the wheels the drag slows the truck by Crr · <i>f</i> · <i>g</i>, whatever its mass.</p>
@@ -391,7 +391,7 @@ Crr and the pressure factor. With <code>ProbeRoll=1</code> also one a second whi
 Crr × <i>f</i>, the <i>c</i> in its body, its spin, and the torque <i>I</i>·(<i>c</i> − <i>c</i><sub>stock</sub>)·ω against
 Crr·<i>f</i>·<i>N</i>·<i>r</i>.</p>
 <p>The probe's coast-downs showed that body +0x216 reaches the truck as <i>I</i>·<i>c</i>·ω, for torques well above any rolling
-drag writes. Fuel: hard mode's fuel factors are 1, as the engine burns more against the drag by itself. The default modes keep
+drag writes. Fuel: the fuel factors of hard mode and the insanity mode are 1, as the engine burns more against the drag by itself. The default modes keep
 theirs until a drive says otherwise.</p>
 '''
 
@@ -863,7 +863,7 @@ def s_tests():
              'The scale: each mode\'s pressure gives the mode\'s numbers; half way gives the mean; half a step past each end, then flat.',
              'The temperature: 15 °C changes nothing; Normal holds 0.827 at −20 °C and 1.098 at 35 °C; every effect goes the right way.',
              'The balance: <i>f</i> at strength 1, <i>f</i>² at 2, in between at 1.5; a vanilla tire stays at 1.',
-             'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, hard with fuel ×1.',
+             'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, with fuel ×1.',
              'Rolling drag: at 10 m/s on paved at Normal the written word\'s torque within 1 % of Crr·N·r, with N by the Havok mass and not the files\'; the same at three times the spin; under the floor the torque falls to nothing; ice none, sand at Low ×1.49, no flag dirt; a broken wheel left alone; airborne, off and another truck get the stock back; a write over 2 % and on the game\'s word; no climb over 10 lost records; none while the probe holds; the probe\'s stock back in the truck update; no hook, off.',
              'Shared state: the block is created, written and read back by name, every field at its offset.',
              'Sounds: WAV and ADPCM decoding, pak reading (zip and zip64), loop and ending cuts, made loops that join without a click and stay within level, the compressor starting on the right filling and stopping once, change times matching the passes.',

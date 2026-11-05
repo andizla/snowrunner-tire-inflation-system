@@ -26,7 +26,7 @@ enum RdGround { kRdIce, kRdPaved, kRdSand, kRdGravel, kRdRock, kRdDirt, kRdGroun
 static const float kRdCrr[kRdGroundCount] = { 0.0f, 0.010f, 0.060f, 0.020f, 0.015f, 0.030f };
 static const char *const kRdGroundNames[kRdGroundCount] = { "ice", "paved", "sand", "gravel", "rock", "dirt" };
 static const float kRdFloor = 2.0f;    // m/s: the spin is held at least at this ground speed's worth
-static const float kRdMost = 100.0f;   // the most damping written: a bad read can not put a wall into the wheel
+static const float kRdMost = 20.0f;    // the most damping written: part 1 measured up to 8, and c·dt passes 1 at 60 a second
 static const float kRdChange = 0.02f;  // a new c is written when it moves by more than this share of the last one
 static const float kRdG = 9.81f;
 
@@ -45,13 +45,17 @@ inline RdGround RdGroundOf(const uint8_t flags[6], uint8_t ice)
 // Reduced 0.65 x1.24, Normal x1, Increased 1.25 x0.89).
 inline float RdPressureFactor(float pressure) { return pressure > 0.05f ? 1.0f / sqrtf(pressure) : 1.0f / sqrtf(0.05f); }
 
-// The wheel's damping, c above. Where any of N, r or I is not a usable number the stock.
-inline float RdDamping(float stock, float crr, float factor, float n, float r, float inertia, float spin)
+// The wheel's damping, c above, held at kRdMost (capped, where given, says it was). Where any of N, r or I is not a
+// usable number the stock.
+inline float RdDamping(float stock, float crr, float factor, float n, float r, float inertia, float spin, bool *capped = nullptr)
 {
+    if (capped) *capped = false;
     if (!(n > 0.0f && n < 1.0e7f) || !(r > 0.03f && r < 5.0f) || !(inertia > 0.0f && inertia < 1.0e5f) || !(crr > 0.0f)) return stock;
     const float omega = fmaxf(fabsf(spin), kRdFloor / r);
     const float c = stock + crr * factor * n * r / (inertia * omega);
-    return c < kRdMost ? c : kRdMost;
+    if (c < kRdMost) return c;
+    if (capped) *capped = true;
+    return kRdMost;
 }
 
 // The mod's own record of a wheel: the wheel it was written for, the word written last and the c it stood for.

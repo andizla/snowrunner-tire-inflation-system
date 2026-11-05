@@ -293,7 +293,7 @@ static const struct { const char *name; uint32_t mask; } kPadButtons[14] = {
     { "RB", XINPUT_GAMEPAD_RIGHT_SHOULDER }, { "A", XINPUT_GAMEPAD_A }, { "B", XINPUT_GAMEPAD_B }, { "X", XINPUT_GAMEPAD_X },
     { "Y", XINPUT_GAMEPAD_Y } };
 
-// The game's function menu (Recover, the winch, the map) is worked with the d-pad and A, the panel's own buttons:
+// The game's function menu (where Recover is) is worked with the d-pad and A, the panel's own buttons:
 // while it or the game's menu input is up, and for kGameMenuHoldMs after both read 0, the panel's pad and key controls
 // wait. The A that picks an entry closes the menu within a game frame. A button held over the menu gives no press until
 // it is let go and pressed again (the caller keeps the last pass's buttons as they were). The same gate as Gauges'.

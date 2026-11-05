@@ -33,6 +33,7 @@ With a pad (any pad Windows sees as an Xbox pad):
 
 - LB + d-pad down opens the panel.
 - D-pad left or right lowers or raises the pressure while the panel is open. D-pad down, A or the open chord confirms, and B closes the panel unchanged. The game sees none of the plain d-pad while the panel is open, so nothing shifts from inside it.
+- While the game's function menu is up, and for a quarter second after it closes, the panel's buttons and key wait and the game sees every button, so the d-pad and A work the menu.
 - LB + d-pad left or right is never the panel's, open or closed, so a gear on that chord keeps working.
 - The triggers are shaped: at the default of 2, half the trigger gives a quarter of the throttle or brake and the full pull stays full, so a light pull is gentle. The tab's pad throttle and brake curves set it (see Settings); at 1 the game reads them as they are.
 
@@ -130,7 +131,7 @@ Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` a
 
 ## Remove
 
-Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini` and `TirePressure.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
+Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini`, `TirePressure.log` and `TirePressure.prev.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
 
 ## Notes
 

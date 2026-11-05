@@ -10,6 +10,7 @@
 //   states.png    pad Low / Reduced / Normal / Increased and keyboard Reduced at the 1080p size
 //   placed.png    the panel at its place on a 1080p screen
 //   warning.png   the tire damage warning
+//   probebox.png  the rolling drag probe's box (ProbeRoll=1) at its place, the truck card's place and the warning
 //   fallback.png  Reduced with the ImGui font standing in (no game font files)
 //   settings.png  the Tire Inflation System tab of ReShade's overlay (settings_page.h) with a too grippy modded tire, at
 //                 ReShade FontScale 2
@@ -242,6 +243,43 @@ int wmain(int argc, wchar_t **argv)
         bg->AddRect(ImVec2((1920 - ow) * 0.5f, (1080 - oh) * 0.5f), ImVec2((1920 + ow) * 0.5f, (1080 + oh) * 0.5f), IM_COL32(255, 255, 255, 110), 0.0f, 0, 2.0f);
         PanelDraw(fg, fonts, PanelOrigin(1920.0f, 1080.0f), u, 1.0f, (float)kReduced, states[1], modes, "F3", 2000);
     });
+
+    // the rolling drag probe's box at its place on a 1080p screen, beside the truck card's place (outlined) and the
+    // tire warning
+    {
+        RollBoxState st = {};
+        st.steps = 5;
+        st.step = 2;
+        st.def = { 0.5f, kRollEveryFrame };
+        st.now.gearKnown = true;
+        st.now.speed = 9.4f;
+        st.now.wheels = 1;
+        st.now.ground[0] = { 1, 0, 0, 1 };
+        RollCoastResult c = {};
+        c.numbers = c.counted = true;
+        c.step = 0, c.v0 = 11.2f, c.v1 = 0.95f, c.flat = 1.03f;
+        RollBoxAdd(st, c);
+        RollCoastResult no = {};
+        no.step = 1;
+        strcpy_s(no.reason, "in gear 3");
+        RollBoxAdd(st, no);
+        c.step = 1, c.flat = 1.19f, c.counted = true;
+        RollBoxAdd(st, c);
+        c.step = 2, c.counted = false, c.soil = 0.62f, c.flat = 1.31f;
+        strcpy_s(c.reason, "on soil 0.62 of it");
+        RollBoxAdd(st, c);
+        st.coasting = true;
+        st.coastFrom = 11.0f;
+        RollBox box;
+        RollBoxText(st, box);
+        swprintf_s(path, L"%s\\probebox.png", out);
+        RenderPng(path, 1920, 1080, [&](ImDrawList *fg, ImDrawList *bg) {
+            bg->AddRectFilled(ImVec2(0, 0), ImVec2(1920, 1080), IM_COL32(74, 80, 70, 255));
+            bg->AddRect(ImVec2(0, 0), ImVec2(400, 191), IM_COL32(255, 255, 255, 110), 0.0f, 0, 2.0f); // the truck card's place
+            PanelWarning(fg, fonts, PanelWarnOrigin(1920.0f, 1080.0f), u, 1.0f, 54);
+            PanelProbeBox(fg, fonts, 1920.0f, u, box);
+        });
+    }
 
     // the tire damage warning
     swprintf_s(path, L"%s\\warning.png", out);

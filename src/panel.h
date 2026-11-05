@@ -39,6 +39,8 @@ extern volatile LONG g_modOff;        // 1 = the mod stood down (a game version 
 extern volatile LONG g_padThread, g_padThreadChanges, g_overlayThread; // thread ids, for the log (0 = not seen yet)
 
 bool PanelInit(HMODULE self);     // starts the overlay (panel + the menu's tab); false = it cannot start
+struct RollBox;
+void ProbeBoxSet(const RollBox *box); // the rolling drag probe's box (roll_probe.h), drawn top centre; nullptr hides it
 void PanelLog(const wchar_t *fmt, ...); // a line in TirePressure.log (tire_pressure.cpp)
 
 // Everything in TirePressure.ini that the settings page edits ([TirePressure], [Reduced], [Low], [Increased]).

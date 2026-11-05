@@ -14,6 +14,7 @@
 #include <string.h>
 #include <string>
 #include "panel.h"
+#include "roll_probe.h"
 
 #pragma warning(push, 0)
 #define STBRP_STATIC
@@ -480,4 +481,33 @@ static void PanelHold(ImDrawList *dl, const PanelFonts &f, ImVec2 at, float u, f
     dl->AddRectFilled(P(0, 0), P(12, kPanelHoldH), PanelCol(236, 182, 48, a), 3.0f * u, ImDrawFlags_RoundCornersLeft);
     PanelText(dl, f, kMode, P(44, 50), PanelCol(255, 255, 255, a), "TIRE PRESSURE", -1, u);
     PanelText(dl, f, kLabel, P(44, 101), PanelCol(142, 150, 152, a), "Stop the truck to change the pressure", -1, u);
+}
+
+// The rolling drag probe's box (ProbeRoll=1, roll_probe.h): top centre, clear of the game's truck card (stage y 0 to
+// 191) and the tire warning and hold hint (from y 205), which sit at the left; the panel's font and colours.
+static const float kBoxW = 1150.0f, kBoxLine = 44.0f, kBoxPad = 24.0f;
+static void PanelProbeBox(ImDrawList *dl, const PanelFonts &f, float w, float u, const RollBox &b)
+{
+    if (b.lines <= 0) return;
+    const float x0 = floorf((w - kBoxW * u) * 0.5f), y0 = floorf(12.0f * u);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    dl->AddRectFilled(P(0, 0), P(kBoxW, 2 * kBoxPad + b.lines * kBoxLine), PanelCol(5, 5, 5, 0.85f), 3.0f * u);
+    static const int rgb[4][3] = { { 255, 255, 255 }, { 142, 150, 152 }, { 110, 200, 90 }, { 230, 80, 70 } };
+    auto col = [&](int c) { c = c < 0 || c > 3 ? 0 : c; return PanelCol(rgb[c][0], rgb[c][1], rgb[c][2], 1.0f); };
+    for (int i = 0; i < b.lines && i < kRollBoxLines; i++)
+    {
+        const RollBoxLine &l = b.line[i];
+        const float y = kBoxPad + 30.0f + i * kBoxLine;
+        if (l.segs <= 0)
+        {
+            PanelText(dl, f, kLabel, P(kBoxPad, y), col(l.color), l.text, -1, u);
+            continue;
+        }
+        float x = kBoxPad;
+        for (int k = 0; k < l.segs && k < 4; k++)
+        {
+            PanelText(dl, f, kLabel, P(x, y), col(l.seg[k].color), l.seg[k].text, -1, u);
+            x += PanelTextWidth(f, kLabel, l.seg[k].text, u) / u + 40.0f;
+        }
+    }
 }

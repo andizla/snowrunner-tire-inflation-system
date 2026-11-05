@@ -20,6 +20,7 @@
 #include "panel.h"
 #include "panel_draw.h"
 #include "settings_page.h"
+#include "roll_probe.h"
 
 PanelView g_view = { 0, kNormal, kNormal, -1, 0, kModeCount };
 PanelMode g_panelModes[kModeCount] = { { "LOW PRESSURE", 1, 1, 1, 1 }, { "REDUCED PRESSURE", 1, 1, 1, 1 }, { "NORMAL PRESSURE", 1, 1, 1, 1 },
@@ -67,6 +68,24 @@ static void UpdateFontTexture(float u)
     }
 }
 
+// The rolling drag probe's box (ProbeRoll=1): its text is made on the mod's thread (RollBoxText) and read here in
+// Present. Two copies and an atomic index: the mod's thread writes the one not shown and then points at it, 20 times a
+// second, so a frame never reads a copy being written.
+static RollBox g_box[2];
+static volatile LONG g_boxShown = 0, g_boxOn = 0;
+void ProbeBoxSet(const RollBox *box)
+{
+    if (!box)
+    {
+        InterlockedExchange(&g_boxOn, 0);
+        return;
+    }
+    const LONG next = 1 - g_boxShown;
+    g_box[next] = *box;
+    InterlockedExchange(&g_boxShown, next);
+    InterlockedExchange(&g_boxOn, 1);
+}
+
 static void OnFrame()
 {
     static float alpha = 0.0f, needle = 0.0f, warn = 0.0f, hold = 0.0f;
@@ -76,6 +95,12 @@ static void OnFrame()
     const float u = PanelUnit(io.DisplaySize.x, io.DisplaySize.y, g_panelScale);
     // baked on the first frames (the game's loading screen) rather than when the panel first opens, so that never waits
     if (io.DisplaySize.y >= 240.0f) UpdateFontTexture(u);
+    // the rolling drag probe's box, while ProbeRoll=1 (the panel's keys do not hide it)
+    if (g_boxOn)
+    {
+        const RollBox shown = g_box[g_boxShown];
+        PanelProbeBox(ImGui::GetForegroundDrawList(), g_fonts, io.DisplaySize.x, u, shown);
+    }
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     const bool open = g_view.open != 0;
     alpha = fminf(fmaxf(alpha + (open ? dt : -dt) / 0.15f, 0.0f), 1.0f);

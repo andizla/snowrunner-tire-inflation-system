@@ -50,16 +50,18 @@ inline RollStepDef RollStepAt(const float *values, int count, int step)
 }
 
 // The coast-down a step counts (BRIEF_roll_probe_n_only.md): in N, with no pedal, no brake and no handbrake, from
-// 7 m/s or more (25 km/h) down to 1 m/s, on ground the game does not call soil. Every run from 7 m/s or more down to
+// 7 m/s or more (25 km/h) down to 1 m/s. The ground does not refuse a coast: + 0x1CE (flag 1CE) is on over paved road
+// too, 99 % of the passes of the 23:51 drive, so its meaning is not known; the line keeps each wheel's shares to read
+// the ground by. Every run from 7 m/s or more down to
 // 1 m/s gives one result, counted or not, with the reason when not; only a counted one moves the step on.
 static const float kRollFrom = 7.0f;        // m/s a coast starts from (25.2 km/h)
 static const float kRollTo = 1.0f;          // m/s it is measured to: the last crawl to the stand is the game's rest friction
 static const float kRollNoPedal = 0.02f;    // |throttle| under this is no pedal and no brake (below 0 is the pedal)
-static const float kRollSoilMost = 0.1f;    // the share of the coast a wheel may stand on soil
 static const float kRollG = 9.81f;
 static const int kRollWheelsMost = 16;
 
-// A wheel's ground as the game's ground check left it (wheel + 0x1C8 paved, + 0x1C9 gravel, + 0x1CA sand, + 0x1CE soil).
+// A wheel's ground as the game's ground check left it (wheel + 0x1C8 paved, + 0x1C9 gravel, + 0x1CA sand, + 0x1CE flag 1CE,
+// meaning not known).
 struct RollGround { uint8_t paved, gravel, sand, soil; };
 // One pass as RollProbePass reads it. gear: the game's engaged gear (action + 0x70), 0 is N; throttle: action + 0x44.
 struct RollPass
@@ -108,9 +110,9 @@ struct RollCoastResult
     char reason[64];    // why it did not count, "" when it did
     float v0, v1, t, d, h0, h1;
     float decel, slope, flat; // (v0 - v1) / t; g (h0 - h1) / d; (v0² - v1²) / (2d) + g (h0 - h1) / d
-    float soil;               // the share of the coast with soil under any wheel
+    float soil;               // the share of the coast with flag 1CE on under any wheel
     int wheels;
-    float share[4][kRollWheelsMost]; // each wheel's share with paved, gravel, sand and soil on
+    float share[4][kRollWheelsMost]; // each wheel's share with paved, gravel, sand and flag 1CE on
     bool once;
     int onceHeld, onceWritten;       // at the coast's end, in the once step
 };
@@ -222,7 +224,6 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
         RollCoastEnd(r, p);
     }
     RollCoastResult &c = r.c;
-    if (c.reason[0] == 0 && c.soil > kRollSoilMost) sprintf_s(c.reason, "on soil %.2f of it", c.soil);
     c.counted = c.reason[0] == 0 && c.step < steps;
     out = c;
     r.phase = 0;
@@ -247,8 +248,8 @@ inline void RollCoastText(const RollCoastResult &c, int steps, char *out, size_t
         sprintf_s(out, size, "%s, the coast did not count: %s", name, c.reason);
         return;
     }
-    int n = sprintf_s(out, size, "%s, coast in N %.2f to %.2f m/s in %.2f s over %.1f m, height %+.2f m, decel %.3f m/s2, slope part %+.3f m/s2, flat decel %.3f m/s2; "
-                      "soil under a wheel %.2f of it; by wheel paved/gravel/sand/soil", name, c.v0, c.v1, c.t, c.d, c.h1 - c.h0, c.decel, c.slope, c.flat, c.soil);
+    int n = sprintf_s(out, size, "%s, coast in N %.2f to %.2f m/s in %.2f s over %.1f m, height %+.2f m, decel by time %.3f m/s2, slope part %+.3f m/s2, flat decel by distance %.3f m/s2; "
+                      "flag 1CE under a wheel %.2f of it; by wheel paved/gravel/sand/1CE", name, c.v0, c.v1, c.t, c.d, c.h1 - c.h0, c.decel, c.slope, c.flat, c.soil);
     for (int w = 0; w < c.wheels && n > 0 && n + 40 < (int)size; w++)
         n += sprintf_s(out + n, size - n, " w%d %.2f/%.2f/%.2f/%.2f", w, c.share[0][w], c.share[1][w], c.share[2][w], c.share[3][w]);
     if (c.once && n > 0 && n + 60 < (int)size) n += sprintf_s(out + n, size - n, "; the once word held in %d of %d wheels at its end", c.onceHeld, c.onceWritten);
@@ -323,14 +324,14 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
         strcpy_s(rules.seg[i].text, r[i].text);
         rules.seg[i].color = (uint8_t)(r[i].ok ? kBoxGreen : kBoxRed);
     }
-    // the ground under the first wheel, soil in red while it is on (it keeps a coast from counting)
+    // the ground under the first wheel, flag 1CE in white (it keeps no coast from counting)
     RollBoxLine &ground = RollBoxNext(b, kBoxWhite);
     const RollGround g = s.now.wheels > 0 ? s.now.ground[0] : RollGround{};
     ground.segs = 2;
     strcpy_s(ground.seg[0].text, "Ground:");
     ground.seg[0].color = kBoxWhite;
-    sprintf_s(ground.seg[1].text, "soil %u", g.soil ? 1u : 0u);
-    ground.seg[1].color = (uint8_t)(g.soil ? kBoxRed : kBoxWhite);
+    sprintf_s(ground.seg[1].text, "flag 1CE %u", g.soil ? 1u : 0u);
+    ground.seg[1].color = kBoxWhite;
     if (g.paved || g.gravel || g.sand)
     {
         ground.segs = 3;
@@ -358,7 +359,7 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
             else if (c.counted) strcpy_s(end, "counted, no stock coast yet");
             else if (c.step >= s.steps) strcpy_s(end, c.reason[0] ? c.reason : "after the run");
             else sprintf_s(end, "not counted: %s", c.reason);
-            sprintf_s(l.text, "%s: %.0f to %.0f km/h, flat %.2f m/s2, soil %.2f, %s", name, c.v0 * 3.6f, c.v1 * 3.6f, c.flat, c.soil, end);
+            sprintf_s(l.text, "%s: %.0f to %.0f km/h, flat %.2f m/s2, flag 1CE %.2f, %s", name, c.v0 * 3.6f, c.v1 * 3.6f, c.flat, c.soil, end);
         }
     }
 }
@@ -382,10 +383,10 @@ inline int RollParseValues(const wchar_t *text, float (&out)[kRollMostValues])
     return n;
 }
 
-// The soil layer's weight search: a float of the wheel that could be a blend weight lies in 0..1 (a NaN does not).
+// The weight search behind flag 1CE (+0x1CE): a float of the wheel that could be a blend weight lies in 0..1 (a NaN does not).
 inline bool RollUnit(float v) { return v >= 0.0f && v <= 1.0f; }
 
-// At a flip of the soil flag (+0x1CE): the floats that are candidates for the weight, between the pass before and now. A
+// At a flip of flag 1CE (+0x1CE): the floats that are candidates for the weight, between the pass before and now. A
 // candidate crossed 0.5 (in 0..1 both times, one under 0.5 and one at or over it) or moved by more than 0.05 within
 // 0..1. Zeros, denormals and other still values are left out, wherever they lie. Their indexes into out, the count.
 inline int RollCandidates(const float *before, const float *now, int count, int *out)

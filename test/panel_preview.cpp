@@ -265,8 +265,8 @@ int wmain(int argc, wchar_t **argv)
         RollBoxAdd(st, no);
         c.step = 1, c.flat = 1.19f, c.counted = true;
         RollBoxAdd(st, c);
-        c.step = 2, c.counted = false, c.soil = 0.62f, c.flat = 1.31f;
-        strcpy_s(c.reason, "on soil 0.62 of it");
+        c.step = 2, c.counted = false, c.soil = 0.98f, c.flat = 1.31f;
+        strcpy_s(c.reason, "the brake");
         RollBoxAdd(st, c);
         st.coasting = true;
         st.coastFrom = 11.0f;

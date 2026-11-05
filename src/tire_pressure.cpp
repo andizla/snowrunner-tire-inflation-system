@@ -1366,14 +1366,14 @@ static void LogDamage(uint64_t vehicle, size_t wheelCount, const TickResult &r, 
 // counted each second over the wheels written, then each value written every frame by the truck update
 // (RollFrameWrite). A step moves on only by a counted coast (roll_probe.h, RollRunPass): in N (the game's engaged
 // gear, action + 0x70), no pedal and no brake (action + 0x44 within 0.02 of 0, below 0 is the pedal), no handbrake
-// (action + 0x48), from 7 m/s or more down to 1 m/s, soil under a wheel for at most 0.1 of it; the next step begins as
+// (action + 0x48), from 7 m/s or more down to 1 m/s, on any ground; the next step begins as
 // the coast ends. Every run from 7 m/s down to 1 m/s gives one line, counted or not, with the coast's numbers where it ran in N and the reason
 // where it did not count. Every wheel's ground is read every pass. The speed and the chassis's height (a grade of
 // 0.1° is as large as the whole drag at stock) are logged every 0.1 s while it moves, after the last step too
 // ("after"). The probe box (panel.cpp) shows the step, the rules now and the last six coasts from the same results.
 // Each body's word from before the mod's first write to it is what goes back.
-// The soil layer's weight: the first wheel's floats in 0..1 from +0x100 to +0x260 that changed since the second before,
-// each second, and at a flip of its soil flag (+0x1CE) those that crossed 0.5 or moved by more than 0.05 since the pass
+// The weight behind flag 1CE: the first wheel's floats in 0..1 from +0x100 to +0x260 that changed since the second before,
+// each second, and at a flip of its flag 1CE (+0x1CE, meaning not known) those that crossed 0.5 or moved by more than 0.05 since the pass
 // before (RollCandidates): the weight the game's ground check (RVA 0xc22f40, through 0xbcd720) compares with 0.5
 // crosses 0.5 at the flip.
 static const int kRollScanFrom = 0x100, kRollScanFloats = (0x260 - 0x100) / 4;
@@ -1430,10 +1430,10 @@ static void RollScanSecond(BYTE flag, const float *now, const float *before)
         swprintf_s(one, L" +0x%X %.3f", kRollScanFrom + i * 4, now[i]);
         list += one;
     }
-    Log(L"probe roll: soil flag %u, floats changed in the second:%s", flag, list.empty() ? L" none" : list.c_str());
+    Log(L"probe roll: flag 1CE %u, floats changed in the second:%s", flag, list.empty() ? L" none" : list.c_str());
 }
 
-// At a flip of the soil flag: the candidates for the weight (RollCandidates), each as before and now
+// At a flip of flag 1CE: the candidates for the weight (RollCandidates), each as before and now
 static void RollScanFlip(BYTE was, BYTE flag, const float *before, const float *now)
 {
     int idx[kRollScanFloats] = {};
@@ -1446,7 +1446,7 @@ static void RollScanFlip(BYTE was, BYTE flag, const float *before, const float *
         swprintf_s(one, L" +0x%X %.3f>%.3f%s", kRollScanFrom + i * 4, before[i], now[i], (before[i] < 0.5f) != (now[i] < 0.5f) ? L" (crossed 0.5)" : L"");
         list += one;
     }
-    Log(L"probe roll: soil flag flips %u to %u, the candidates (crossed 0.5 or moved over 0.05 since the pass before):%s", was, flag, list.empty() ? L" none" : list.c_str());
+    Log(L"probe roll: flag 1CE flips %u to %u, the candidates (crossed 0.5 or moved over 0.05 since the pass before):%s", was, flag, list.empty() ? L" none" : list.c_str());
 }
 
 static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, float height, float dt, ULONGLONG passAt, bool show)
@@ -1517,8 +1517,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
                 Log(L"probe roll: step %d of %d, damping %g written every frame (word %04X)", run.step + 1, steps, d.damping, HavokHalf(d.damping));
             }
             else Log(L"probe roll: step %d of %d, the stock damping", run.step + 1, steps);
-            Log(L"probe roll: drive to 40 km/h on flat asphalt, shift to N and coast to a stop; a stop in gear does not count; find a "
-                L"stretch where soil stays 0 under every wheel (the per-second line and the probe box show it)");
+            Log(L"probe roll: drive to 40 km/h on flat asphalt, shift to N and coast to under 4 km/h; a stop in gear does not count");
             break;
         }
         stepAt = passAt;
@@ -1613,7 +1612,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             sampleCount = 0;
         }
     }
-    // the soil weight's search, on the first wheel
+    // the weight search behind flag 1CE, on the first wheel
     float scan[kRollScanFloats] = {};
     BYTE flag = 0;
     if (Read(wheels[0].wheel + kRollScanFrom, scan) && Read(wheels[0].wheel + 0x1CE, flag))
@@ -1680,11 +1679,11 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             if (b.damping == onceWord) held++;
         }
         const int axle = RollAxle(b.inv);
-        BYTE soil = 0;
-        Read(w.wheel + 0x1CE, soil);
+        BYTE flag1CE = 0;
+        Read(w.wheel + 0x1CE, flag1CE);
         wchar_t one[360];
-        swprintf_s(one, L"; w%d c%u b%u soil %u AC %.4f A8 %.4f body %.4f (%04X%s) time %.4f (%04X) bytes %02X %02X, spin x y z %.2f %.2f %.2f, axle %c %.2f, v/r %.2f", w.index, contact,
-                   flat, soil, stock, broken, HalfToFloat(b.damping), b.damping, b.damping == HavokHalf(stock) ? L" =AC" : b.damping == HavokHalf(broken) ? L" =A8" : L"",
+        swprintf_s(one, L"; w%d c%u b%u 1CE %u AC %.4f A8 %.4f body %.4f (%04X%s) time %.4f (%04X) bytes %02X %02X, spin x y z %.2f %.2f %.2f, axle %c %.2f, v/r %.2f", w.index, contact,
+                   flat, flag1CE, stock, broken, HalfToFloat(b.damping), b.damping, b.damping == HavokHalf(stock) ? L" =AC" : b.damping == HavokHalf(broken) ? L" =A8" : L"",
                    HalfToFloat(b.time), b.time, b.bytes[0], b.bytes[1], RollSpin(b, 0), RollSpin(b, 1), RollSpin(b, 2), axle < 0 ? L'?' : (wchar_t)(L'x' + axle),
                    RollSpin(b, axle), r > 0.0f ? speed / r : 0.0f);
         list += one;
@@ -2160,7 +2159,7 @@ static DWORD WINAPI Run(void *)
         {
             // with the friction: the wheel's asphalt value and what the per-frame ground check (RVA 0xc22f40, through
             // 0xbcd720) left in the wheel: +0x1C8 paved, +0x1C9 gravel, +0x1CA sand, +0x1CD hard (not extrudable),
-            // +0x1CE soil (blended layer weight over 0.5), +0x1C0 ice with +0x1C4 its friction, +0x1A4 contact,
+            // +0x1CE flag 1CE (meaning unknown, on over paved road), +0x1C0 ice with +0x1C4 its friction, +0x1A4 contact,
             // +0x1CB and the ids +0x1B8 / +0x1D0 (meaning open). A line when the friction or any of these changes.
             static BYTE lastFlags[0x14] = {};
             static int lastIds[2] = {};
@@ -2174,7 +2173,7 @@ static DWORD WINAPI Run(void *)
                 const bool flagsChanged = memcmp(flags, lastFlags, 0x10) != 0 || ids[0] != lastIds[0] || ids[1] != lastIds[1];
                 if (flagsChanged || fabsf(friction - probeLast) > 0.005f * max(1.0f, fabsf(probeLast)))
                 {
-                    Log(L"probe: body friction %.4f (asphalt value %.4f) paved %u gravel %u sand %u hard %u soil %u ice %u %.3f, contact %u, +1CB %u, +1CC %u, ids %d %d",
+                    Log(L"probe: body friction %.4f (asphalt value %.4f) paved %u gravel %u sand %u hard %u flag 1CE %u ice %u %.3f, contact %u, +1CB %u, +1CC %u, ids %d %d",
                         friction, asphalt, flags[0x8], flags[0x9], flags[0xA], flags[0xD], flags[0xE], flags[0x0], iceFriction, contact, flags[0xB], flags[0xC], ids[0], ids[1]);
                     memcpy(lastFlags, flags, sizeof lastFlags);
                     lastIds[0] = ids[0];
@@ -3253,7 +3252,7 @@ static bool TireStateTest()
 // The rolling drag probe's reckoning (roll_probe.h): the half floats written and read back, the axle by the inertia
 // (none for a sphere's), the steps, the run's moving on, ProbeRollDamping's text and the mud weight's candidates.
 // The coasts a step counts (roll_probe.h): runs of passes 0.05 s apart, the speed falling 0.05 m/s a pass from v0 to a
-// stand, 4 wheels, then 4 s still. gear, throttle and the soil flag as given; brakeAt: the brake from that speed down.
+// stand, 4 wheels, then 4 s still. gear, throttle and flag 1CE as given; brakeAt: the brake from that speed down.
 struct RollFeed { int gear = 0; float throttle = 0.0f; float soilShare = 0.0f; float brakeAt = -1.0f; int onceHeld = 0, onceWritten = 0; };
 static int RollFeedRun(RollRun &r, int steps, float v0, const RollFeed &f, RollCoastResult *results, int most)
 {
@@ -3322,20 +3321,21 @@ static bool RollCoastTest()
     pedal.throttle = -1.0f;
     n = RollFeedRun(r, 5, 9.0f, pedal, c, 4);
     const bool floored = n == 1 && !c[0].counted && !c[0].numbers && !strcmp(c[0].reason, "the pedal") && r.step == 1;
-    // soil under a wheel 0.85 of the coast: not counted, its numbers still in the line
+    // flag 1CE under a wheel 0.85 of the coast, the four rules kept: counted, the step on, 0.85 in the line
     RollFeed soil;
     soil.soilShare = 0.85f;
     n = RollFeedRun(r, 5, 9.0f, soil, c, 4);
     RollCoastText(c[0], 5, text, sizeof text);
-    const bool onSoil = n == 1 && !c[0].counted && c[0].numbers && fabsf(c[0].soil - 0.85f) < 0.02f && !strncmp(c[0].reason, "on soil 0.8", 11) && r.step == 1 &&
-                        strstr(text, "flat decel") && strstr(text, "; not counted: on soil 0.8");
+    const bool onSoil = n == 1 && c[0].counted && c[0].numbers && fabsf(c[0].soil - 0.85f) < 0.02f && c[0].reason[0] == 0 && r.step == 2 &&
+                        strstr(text, "decel by time ") && strstr(text, "flat decel by distance ") && strstr(text, "flag 1CE under a wheel 0.8") &&
+                        strstr(text, "by wheel paved/gravel/sand/1CE w0 1.00/0.00/0.00/0.8") && strstr(text, "; counted");
     // the once step's word: held in 3 of 4 wheels at the coast's end
     RollFeed once;
     once.onceHeld = 3;
     once.onceWritten = 4;
     n = RollFeedRun(r, 5, 8.0f, once, c, 4);
     RollCoastText(c[0], 5, text, sizeof text);
-    const bool held = n == 1 && c[0].counted && c[0].once && c[0].onceHeld == 3 && r.step == 2 && strstr(text, "the once word held in 3 of 4 wheels at its end");
+    const bool held = n == 1 && c[0].counted && c[0].once && c[0].onceHeld == 3 && r.step == 3 && strstr(text, "the once word held in 3 of 4 wheels at its end");
     // the numbers: a 2 m drop over 100 m, 10 to 0.9 m/s in 20 s
     RollRun f;
     RollPass a = {};
@@ -3375,7 +3375,7 @@ static bool RollCoastTest()
     const bool after = n == 1 && !c[0].counted && c[0].numbers && done.step == 5 && !strncmp(text, "after, coast in N", 17) && strstr(text, "; after the run");
     const bool ok = stopInA && coastN && braked && floored && onSoil && held && numbers && after;
     printf("%s rolling drag probe: a stop in gear is one line and no step; a coast in N from 8 m/s counts and moves the step on as it ends at 1 m/s, with no stand; the brake midway, the pedal in N "
-           "and soil under a wheel 0.85 of it count not, with the reason and the numbers kept; the once word's hold at the end; a 2 m drop over 100 m gives "
+           "count not, with the reason and the numbers kept; flag 1CE under a wheel 0.85 of it counts, its share in the line; the once word's hold at the end; a 2 m drop over 100 m gives "
            "the slope part and the flat decel; the distance by the trapezoid; a broken coast ends at its last good pass; after the run coasts are measured and move nothing\n", ok ? "ok  " : "FAIL");
     if (!ok) printf("     stopInA %d coastN %d braked %d floored %d onSoil %d held %d numbers %d after %d\n", stopInA, coastN, braked, floored, onSoil, held, numbers, after);
     // the box from a set of results: the step, the rules, the coasts newest first, "x1.08 of stock" once the stock
@@ -3395,7 +3395,7 @@ static bool RollCoastTest()
     RollBox b;
     RollBoxText(st, b);
     const bool before = !strcmp(b.line[0].text, "Step 3 of 5: damping 0.5, every frame") && b.line[1].segs == 4 && b.line[1].seg[0].color == kBoxRed &&
-                        b.line[1].seg[1].color == kBoxGreen && b.line[1].seg[3].color == kBoxGreen && b.line[2].segs == 3 && !strcmp(b.line[2].seg[1].text, "soil 1") && b.line[2].seg[1].color == kBoxRed && !strcmp(b.line[2].seg[2].text, "paved") &&
+                        b.line[1].seg[1].color == kBoxGreen && b.line[1].seg[3].color == kBoxGreen && b.line[2].segs == 3 && !strcmp(b.line[2].seg[1].text, "flag 1CE 1") && b.line[2].seg[1].color == kBoxWhite && !strcmp(b.line[2].seg[2].text, "paved") &&
                         !strcmp(b.line[3].text, "Speed 36 km/h") && strstr(b.line[5].text, "counted, no stock coast yet");
     RollCoastResult s0 = s1;
     s0.step = 0;
@@ -3408,13 +3408,13 @@ static bool RollCoastTest()
     strcpy_s(no.reason, "in gear 3");
     RollBoxAdd(st, no);
     RollBoxText(st, b);
-    const bool coasts = !strcmp(b.line[5].text, "Step 3: not counted: in gear 3") && !strcmp(b.line[6].text, "Step 3: 36 to 3 km/h, flat 1.08 m/s2, soil 0.00, counted, x1.08 of stock") &&
+    const bool coasts = !strcmp(b.line[5].text, "Step 3: not counted: in gear 3") && !strcmp(b.line[6].text, "Step 3: 36 to 3 km/h, flat 1.08 m/s2, flag 1CE 0.00, counted, x1.08 of stock") &&
                         strstr(b.line[7].text, "counted (stock)") && b.lines == 9;
     st.step = 5;
     RollBoxText(st, b);
     const bool doneLine = !strcmp(b.line[0].text, "Done: the log has the results. ProbeRoll=0 to stop.");
     const bool boxOk = before && coasts && doneLine;
-    printf("%s probe box: the step, the four rules red or green by the coast's own checks, the ground with soil in red and the speed; the coasts newest first from the results, "
+    printf("%s probe box: the step, the four rules red or green by the coast's own checks, the ground with flag 1CE in white and the speed; the coasts newest first from the results, "
            "x1.08 of stock once the stock step counted, no stock coast yet before; the done line\n", boxOk ? "ok  " : "FAIL");
     if (!boxOk)
     {
@@ -3463,7 +3463,7 @@ static bool RollProbeTest()
     const bool unit = RollUnit(0.0f) && RollUnit(1.0f) && !RollUnit(1.01f) && !RollUnit(-0.01f) && !RollUnit(nanf(""));
     const bool ok = halves && axles && parsed && stepsOk && unit && mud;
     printf("%s rolling drag probe: dampings back from their halves within 0.4 %%, the axle by the inertia that stands apart (none for a sphere's), five steps for 0.5,2,8 "
-           "(stock, once, three every frame), the text read to its first bad value, the soil weight's crosser found behind 30 zeros\n",
+           "(stock, once, three every frame), the text read to its first bad value, the weight behind flag 1CE crossing 0.5 found behind 30 zeros\n",
            ok ? "ok  " : "FAIL");
     if (!ok) printf("     halves %d axles %d parsed %d steps %d unit %d mud %d (%d)\n", halves, axles, parsed, stepsOk, unit, mud, candidates);
     return ok && RollCoastTest();

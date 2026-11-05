@@ -556,7 +556,9 @@ to System32 only and loads nothing, so two copies cannot call each other in a ci
 <li><code>.asi</code> files in the folder are loaded on a thread of their own once the loader lock is free. Only names ending
 exactly in <code>.asi</code> load, so <code>x.asi_off</code> is skipped; a module another ASI loader has already loaded is left
 alone. It writes <code>AsiLoader.log</code>.</li>
-<li>If the real exports cannot be loaded the proxy refuses to load, and the game reports the missing DLL instead of crashing later.</li></ul>
+<li>If <code>System32\\version.dll</code> cannot be loaded the proxy refuses to load, and the game reports the missing DLL instead of crashing later.
+An export that neither file has (Wine's and Proton's <code>version.dll</code> lack <code>GetFileVersionInfoByHandle</code>) fails only its
+own call, with <code>ERROR_PROC_NOT_FOUND</code>, and <code>AsiLoader.log</code> names it.</li></ul>
 <p>The ASI does nothing outside <code>SnowRunner.exe</code>. A mutex <code>Local\\SnowRunnerTirePressure-&lt;process id&gt;</code> lets only
 one copy run; a second one logs it and stops.</p>
 '''

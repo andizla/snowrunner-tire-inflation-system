@@ -1,4 +1,4 @@
-// Offline test of out\version.dll. Built three times:
+// Offline test of out\version.dll. Built four times:
 //   loader_test.exe   imports version.dll (the proxy next to it), asks for kernel32.dll's file version through it,
 //                     then waits for the marker the test .asi writes.
 //   probe.asi         (LOADER_TEST_ASI) writes asi_marker.txt next to itself when loaded: the id of the process it
@@ -11,13 +11,20 @@
 // proxy's log to say that it left the loaded probe.asi alone. In out\test\helper the test is named crash_reporter.exe,
 // as the game's crash reporter that loads version.dll too: run there with the argument "helper", it wants the calls to
 // go through, no .asi loaded, and the log test.bat put there (as the game's) kept, with one line added.
+//   system_standin.dll (LOADER_TEST_STANDIN) a stand-in for Wine's System32 version.dll:
+//                     16 of the 17 exports, forwarded to version_sys.dll (a copy of System32's), no
+//                     GetFileVersionInfoByHandle. In out\test\proton the proxy is built with LOADER_TEST_SYSTEM and
+//                     takes it for System32's: run there with "proton", the test wants the load to go on, the 17th
+//                     export to fail its call with ERROR_PROC_NOT_FOUND and the log to say so once, after "calls go to".
+//                     out\test\proton_helper is the crash reporter's run with the same stand-in.
+// Run with "windows" (out\test), it wants the log to say all 17 exports come from System32.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
 
-static std::wstring DirOf(HMODULE m)
+[[maybe_unused]] static std::wstring DirOf(HMODULE m)
 {
     wchar_t p[MAX_PATH] = {};
     GetModuleFileNameW(m, p, MAX_PATH);
@@ -36,6 +43,14 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     }
     return TRUE;
 }
+#elif defined(LOADER_TEST_STANDIN)
+// every export but GetFileVersionInfoByHandle, forwarded to the copy of System32's version.dll
+#define FORWARD(f) __pragma(comment(linker, "/export:" #f "=version_sys." #f))
+FORWARD(GetFileVersionInfoA) FORWARD(GetFileVersionInfoExA) FORWARD(GetFileVersionInfoExW) FORWARD(GetFileVersionInfoSizeA)
+FORWARD(GetFileVersionInfoSizeExA) FORWARD(GetFileVersionInfoSizeExW) FORWARD(GetFileVersionInfoSizeW) FORWARD(GetFileVersionInfoW)
+FORWARD(VerFindFileA) FORWARD(VerFindFileW) FORWARD(VerInstallFileA) FORWARD(VerInstallFileW) FORWARD(VerLanguageNameA)
+FORWARD(VerLanguageNameW) FORWARD(VerQueryValueA) FORWARD(VerQueryValueW)
+BOOL WINAPI DllMain(HINSTANCE, DWORD, LPVOID) { return TRUE; }
 #elif defined(LOADER_TEST_CHAIN)
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
@@ -121,9 +136,11 @@ int main(int argc, char **argv)
         const bool none = GetModuleHandleW(L"probe.asi") == nullptr;
         printf("%s no .asi loaded into the game's crash reporter\n", none ? "ok  " : "FAIL");
         fails += !none;
+        size_t lines = 0;
+        for (char c : log) lines += c == '\n';
         const bool kept = log.find("the game's log") != std::string::npos && log.find("crash_reporter.exe started, one of the game's own programs") != std::string::npos &&
-                          log.find("asi loader in") == std::string::npos;
-        printf("%s the game's log kept, with the crash reporter's line added\n", kept ? "ok  " : "FAIL");
+                          log.find("asi loader in") == std::string::npos && log.find("not in System32's") == std::string::npos && lines == 2;
+        printf("%s the game's log kept, with only the crash reporter's line added (%zu lines)\n", kept ? "ok  " : "FAIL", lines);
         fails += !kept;
         printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
         return fails;
@@ -162,6 +179,36 @@ int main(int argc, char **argv)
         printf("%s the proxy left probe.asi alone, which the other loader had loaded%s\n", left ? "ok  " : "FAIL",
                log.empty() ? " (no log of this run)" : "");
         fails += !left;
+    }
+
+    if (argc > 1 && !strcmp(argv[1], "windows"))
+    {
+        const std::string log = LoaderLog(dir + L"AsiLoader.log");
+        const bool all = log.find("calls go to System32\\version.dll (17 of 17)") != std::string::npos && log.find("not in System32's") == std::string::npos;
+        printf("%s the log says all 17 exports come from System32%s\n", all ? "ok  " : "FAIL", log.empty() ? " (no log of this run)" : "");
+        fails += !all;
+    }
+
+    if (argc > 1 && !strcmp(argv[1], "proton"))
+    {
+        // the export the stand-in lacks: through the proxy its call fails as a missing function's would
+        typedef BOOL(WINAPI * ByHandle)(DWORD, HANDLE, void **, DWORD *);
+        const ByHandle byHandle = (ByHandle)(void *)GetProcAddress(GetModuleHandleW(L"version.dll"), "GetFileVersionInfoByHandle");
+        SetLastError(0);
+        const BOOL r = byHandle ? byHandle(0, nullptr, nullptr, nullptr) : TRUE;
+        const DWORD err = GetLastError();
+        printf("%s GetFileVersionInfoByHandle fails its call: %d, error %lu\n", byHandle && !r && err == ERROR_PROC_NOT_FOUND ? "ok  " : "FAIL", r, err);
+        fails += !(byHandle && !r && err == ERROR_PROC_NOT_FOUND);
+
+        const std::string log = LoaderLog(dir + L"AsiLoader.log");
+        const char *line = "version.dll: GetFileVersionInfoByHandle not in System32's version.dll, the call fails (Wine)";
+        const size_t at = log.find(line), go = log.find("calls go to System32\\version.dll (16 of 17)");
+        const size_t missing = log.find("not in System32's");
+        const bool once = at != std::string::npos && missing != std::string::npos && log.find("not in System32's", missing + 1) == std::string::npos;
+        const bool after = go != std::string::npos && at != std::string::npos && go < at;
+        printf("%s the log says 16 of 17 and names the missing export once, after \"calls go to\"%s\n", once && after ? "ok  " : "FAIL",
+               log.empty() ? " (no log of this run)" : "");
+        fails += !(once && after);
     }
 
     printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);

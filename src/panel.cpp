@@ -145,6 +145,7 @@ typedef DWORD(WINAPI *XInputGetStateFn)(DWORD, XINPUT_STATE *);
 static XInputGetStateFn g_realGetState = nullptr;
 static volatile LONG g_openMask = 0, g_panelMask = 0;
 static volatile LONG g_padLive = 0; // 1 while a truck is driven: only then are the panel's buttons taken from the game
+static volatile LONG g_padGameMenu = 0; // 1 while the game's function menu is up: nothing new is taken from the game
 static uint8_t g_padMap[2][256];      // each trigger's value through its curve: 0 the right trigger (throttle), 1 the left (brake and reverse)
 static volatile LONG g_padCurved = 0; // 1 while a curve is not 1, so the filter maps the triggers
 
@@ -167,7 +168,7 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
             state->Gamepad.bRightTrigger = g_padMap[0][state->Gamepad.bRightTrigger];
             state->Gamepad.bLeftTrigger = g_padMap[1][state->Gamepad.bLeftTrigger];
         }
-        const PadHidden h = PadHide(b, g_view.open != 0, (uint32_t)g_openMask, (uint32_t)g_panelMask, (uint32_t)held[index]);
+        const PadHidden h = PadHide(b, g_view.open != 0, (uint32_t)g_openMask, (uint32_t)g_panelMask, (uint32_t)held[index], g_padGameMenu != 0);
         InterlockedExchange(&held[index], (LONG)h.held);
         b &= (WORD)~h.hide;
     }
@@ -175,6 +176,7 @@ static DWORD WINAPI PadHook(DWORD index, XINPUT_STATE *state)
 }
 
 void PadLive(bool live) { InterlockedExchange(&g_padLive, live ? 1 : 0); }
+void PadGameMenu(bool up) { InterlockedExchange(&g_padGameMenu, up ? 1 : 0); }
 
 // The curve: the trigger's share raised to the power, so a light pull gives less and the full pull stays full (at 2,
 // half the trigger gives a quarter). A table per trigger, built here on the settings thread; the filter only reads

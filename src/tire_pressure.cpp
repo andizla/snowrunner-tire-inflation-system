@@ -20,6 +20,7 @@
 #include <tlhelp32.h>
 #include <intrin.h>
 #include <stdio.h>
+#include <share.h>
 #include <stdint.h>
 #include <math.h>
 #include <string>
@@ -35,6 +36,7 @@
 #include "tire_state.h"
 #include "truck_modes.h"
 #include "roll_probe.h"
+#include "crt_line.h"
 
 // Where the few places lie that are elsewhere in every build of the game's exe (build_find.h has what each is). Run
 // looks for them in the running exe at the start and stands down when it does not find every one.
@@ -118,14 +120,16 @@ static int g_mode = kNormal;
 static Mode g_now = g_modes[kNormal]; // the factors in force, moving towards g_modes[g_mode]
 
 // The log is rewritten at each game start. This thread and the game's render thread (the overlay, PanelLog) both write it: one at a
-// time, as the file is opened for one writer and a second open would fail and lose its line.
+// time, under the lock. The file is opened sharing writing, so the crash line's own handle (CrashLineOut) gets in while a line
+// is being written: the C runtime's handler can come from inside a Log call (review F1).
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in (a second copy of the mod sets it to add to the first copy's log)
+static FILE *LogOpen() { return _wfsopen((g_dir + L"TirePressure.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8", _SH_DENYNO); }
 static void LogV(const wchar_t *fmt, va_list ap)
 {
     AcquireSRWLockExclusive(&g_logLock);
-    FILE *f = nullptr;
-    if (_wfopen_s(&f, (g_dir + L"TirePressure.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8") == 0 && f)
+    FILE *f = LogOpen();
+    if (f)
     {
         g_logStarted = true;
         SYSTEMTIME t;
@@ -146,6 +150,29 @@ static void Log(const wchar_t *fmt, ...)
     va_end(ap);
 }
 
+// The crash line's handle on TirePressure.log, opened once as the handlers are set and kept (it appends and shares
+// reading and writing with the log's own opens), and its writer: one line with no heap and no lock (crt_line.h), as
+// the C runtime's handler may come while either is held.
+static HANDLE g_crashFile = INVALID_HANDLE_VALUE;
+static bool CrashFileOpen()
+{
+    if (g_crashFile == INVALID_HANDLE_VALUE)
+        g_crashFile = CreateFileW((g_dir + L"TirePressure.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
+    return g_crashFile != INVALID_HANDLE_VALUE;
+}
+static void CrashLineOut(const char *text)
+{
+    if (g_crashFile == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[1400];
+    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    DWORD wrote = 0;
+    if (n > 0) WriteFile(g_crashFile, line, (DWORD)n, &wrote, nullptr);
+    FlushFileBuffers(g_crashFile);
+}
+
+
 void PanelLog(const wchar_t *fmt, ...)
 {
     va_list ap;
@@ -157,6 +184,27 @@ void PanelLog(const wchar_t *fmt, ...)
 // Game memory is read and written through these, so an object freed under us is an error return, not a fault.
 template <typename T> static bool Read(uint64_t addr, T &out) { return addr >= 0x10000 && ReadProcessMemory(GetCurrentProcess(), (void *)addr, &out, sizeof out, nullptr); }
 template <typename T> static bool WriteAs(uint64_t addr, const T &v) { return addr >= 0x10000 && WriteProcessMemory(GetCurrentProcess(), (void *)addr, &v, sizeof v, nullptr) != 0; }
+
+// The game's menu input flag, input + 0x1D8, by the input global's place in each build it is known in (control + 0x68
+// in all three: 6a607c05 as Gauges reads it, 6ab52f5d from its image, 6adb8627 as Gauges found it in the game on
+// 2026-11-05). 0 elsewhere: the controls then wait on the function menu alone.
+static uint64_t InputPlace(uint32_t stamp)
+{
+    static const struct { uint32_t stamp; uint64_t input; } kInput[] = { { 0x6a607c05, 0x2a8ebe0 }, { 0x6ab52f5d, 0x2a92ea0 }, { 0x6adb8627, 0x2a93c60 } };
+    for (const auto &k : kInput)
+        if (k.stamp == stamp) return k.input;
+    return 0;
+}
+
+// The game's function menu (control + 0xD8) or its menu input (input + 0x1D8) is up. Read as Gauges reads them.
+static bool GameMenuUpNow(uint64_t inputPlace)
+{
+    uint64_t control = 0, input = 0;
+    uint8_t function = 0, menuInput = 0;
+    if (g_build->control && Read(g_base + g_build->control, control) && control) Read(control + 0xD8, function);
+    if (inputPlace && Read(g_base + inputPlace, input) && input) Read(input + 0x1D8, menuInput);
+    return function != 0 || menuInput != 0;
+}
 static bool Write(uint64_t addr, float v) { return WriteAs(addr, v); }
 
 // The driven truck's kind as the game's files name it ("western_star_6900xd"; "zetros/176593" for a truck from a mod),
@@ -1848,7 +1896,10 @@ static DWORD WINAPI Run(void *)
     }
     const BYTE *image = (const BYTE *)g_base;
     const DWORD stamp = *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
+    // the last start's log kept as TirePressure.prev.log, before this start's first line (as Gauges keeps its logs)
+    const bool logKept = MoveFileExW((g_dir + L"TirePressure.log").c_str(), (g_dir + L"TirePressure.prev.log").c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
     Log(L"Next Gen Tire Inflation " TP_VERSION L" (TirePressure): exe stamp %08lx", stamp);
+    if (logKept) Log(L"log: the last start's log is kept as TirePressure.prev.log");
     SettingsDefaults(g_set); // what the settings page shows until the ini is read
     g_overlayOk = PanelInit(g_self);
     // The mod's places in the exe, looked for by what the game's code is like around them (build_find.h), so it needs
@@ -1908,6 +1959,10 @@ static DWORD WINAPI Run(void *)
     bool down = false, chainSeen = false, moving = false, panelOpen = false;
     int sel = 0;
     uint32_t padPrev = 0;
+    GameMenuGate gameMenu = {}; // the game's function menu: the panel's controls wait in it
+    const uint64_t inputPlace = InputPlace(stamp);
+    if (!inputPlace)
+        Log(L"input: the game's menu input is not known in this build (exe stamp %08lx), so the panel's controls wait on the function menu alone", stamp);
     ULONGLONG lastInput = 0, saveAt = 0;
     if (g_probeWriters) AddVectoredExceptionHandler(1, ProbeHandler);
     int probeState = 0, probeLines = 0; // writers probe: 0 waiting for the truck, 1 found, 2 breakpoint set, 3 over
@@ -1969,8 +2024,16 @@ static DWORD WINAPI Run(void *)
             if (g_mode >= g_modeCount) { g_mode = kNormal; Log(L"mode Normal (Increased is off now)"); }
         }
         const bool front = GameInFront();
-        const bool now = front && !NgMenuOpen() && (GetAsyncKeyState(g_key) & 0x8000); // not while the NEXT GEN menu has the keys
-        const bool pressed = now && !down;
+        // the game's function menu: the panel's controls wait while it is up and a moment after, and the filter hides
+        // nothing new from it
+        const ULONGLONG menuNow = GetTickCount64();
+        if (GameMenuGateSeen(gameMenu, GameMenuUpNow(inputPlace), menuNow)) Log(L"input: the game's function menu is up, the panel's controls wait");
+        const bool gameMenuHolds = GameMenuGateHolds(gameMenu, menuNow);
+        PadGameMenu(gameMenuHolds);
+        // the key's own state is kept through a menu, so a key held as it closes is no press; no press while the NEXT
+        // GEN menu has the keys or the game's function menu is up
+        const bool now = front && (GetAsyncKeyState(g_key) & 0x8000);
+        const bool pressed = now && !down && !NgMenuOpen() && !gameMenuHolds;
         down = now;
         // The driven truck's wheels, with the vehicle they belong to. Until the first truck is found they are looked
         // up twice a second (and at a key press); from then on every pass, as the ground under each wheel and the
@@ -1987,9 +2050,9 @@ static DWORD WINAPI Run(void *)
         const LONG capture = g_pageCapturing;
         const bool capturing = capture && GetTickCount() - (DWORD)capture < 500;
         const uint32_t padHeld = front && g_ui && !wheels.empty() && !capturing ? PadButtons() : 0;
-        // not while the NEXT GEN menu has the pad. What is held then still counts as held on the last pass, so a binding
-        // held as the menu opens or closes is no press when it closes
-        const uint32_t pad = NgMenuOpen() ? 0 : padHeld;
+        // not while the NEXT GEN menu or the game's function menu has the pad. What is held then still counts as held
+        // on the last pass, so a binding held as the menu opens or closes is no press when it closes
+        const uint32_t pad = NgMenuOpen() || gameMenuHolds ? 0 : padHeld;
         auto edge = [&](uint32_t mask) { return mask && (pad & mask) == mask && (padPrev & mask) != mask; };
         // with the panel open the d-pad is the panel's (the filter hides it from the game then), as in Expeditions:
         // the open, confirm and cancel bindings also count without their shoulder button. A step needs the panel
@@ -2013,6 +2076,15 @@ static DWORD WINAPI Run(void *)
         {
             chainSeen = true;
             Log(L"driven truck found: %zu wheels", wheels.size());
+            // the crash line (round 4): the C runtime's invalid parameters and abort named in this log. ucrtbase.dll's
+            // handlers are Gauges' where Gauges.asi is loaded, so the line is not written twice
+            wchar_t crt[320];
+            if (CrashFileOpen())
+            {
+                crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
+                Log(L"crash line: %s", crt);
+            }
+            else Log(L"crash line: none, as TirePressure.log could not be opened for it (error %lu)", GetLastError());
             if (g_overlayOk && !g_padOk) Log(L"pad: none of the game's XInputGetState pointers found so far: the pad works the panel, the game sees the presses too");
             if (g_probeByHand) Log(L"tire damage: dealt by hand (ProbeByHand=1)");
             else if (HookTruckUpdate()) Log(L"tire damage: dealt on the game's own thread, from its truck update, with its damage update after");
@@ -2627,6 +2699,89 @@ static bool PadCurveTest()
            ok ? "ok  " : "FAIL", half, full, brakeHalf);
     PadCurves(1.0f, 1.0f);
     return ok;
+}
+
+// The crash line lands while a Log call has the file open (review F1): written between the log's own lines, in order.
+static bool CrashLogTest()
+{
+    g_logStarted = false;
+    Log(L"crash test: the first line");
+    const bool opened = CrashFileOpen();
+    AcquireSRWLockExclusive(&g_logLock);
+    FILE *held = LogOpen();
+    CrashLineOut("crash: test line while the log is open");
+    if (held) fclose(held);
+    ReleaseSRWLockExclusive(&g_logLock);
+    Log(L"crash test: after");
+    std::string text;
+    FILE *f = _wfsopen((g_dir + L"TirePressure.log").c_str(), L"rb", _SH_DENYNO); // the crash line's handle is still open
+    if (f)
+    {
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+        fclose(f);
+    }
+    const size_t first = text.find("crash test: the first line\r\n"), crash = text.find(" crash: test line while the log is open\r\n"), after = text.find("crash test: after\r\n");
+    const bool ok = opened && held && first != std::string::npos && crash != std::string::npos && after != std::string::npos && first < crash && crash < after;
+    printf("%s crash line: written into TirePressure.log while a Log call has it open, between its lines\n", ok ? "ok  " : "FAIL");
+    if (!ok) printf("     opened %d, held %d, at %zd %zd %zd\n", opened, held != nullptr, (ptrdiff_t)first, (ptrdiff_t)crash, (ptrdiff_t)after);
+    CloseHandle(g_crashFile);
+    g_crashFile = INVALID_HANDLE_VALUE;
+    return ok;
+}
+
+// The game's function menu: d-pad right with the panel open walks no step while the menu is up, nor for 250 ms after
+// it closes, and a d-pad held over the menu gives no step until let go; the filter hides nothing new while it is up.
+// The pass as Run has it: the gate from this pass's flags, the pad zeroed while it holds, the last pass's buttons kept.
+static bool GameMenuTest()
+{
+    const uint32_t RT = XINPUT_GAMEPAD_DPAD_RIGHT, LB = XINPUT_GAMEPAD_LEFT_SHOULDER, DN = XINPUT_GAMEPAD_DPAD_DOWN, A = XINPUT_GAMEPAD_A;
+    GameMenuGate g = {};
+    unsigned long long now = 1000;
+    uint32_t prev = 0;
+    auto pass = [&](uint32_t held, bool menu) {
+        GameMenuGateSeen(g, menu, now);
+        const bool holds = GameMenuGateHolds(g, now);
+        const uint32_t pad = holds ? 0 : held;
+        const bool step = PadStep(RT, pad, prev, true);
+        prev = held;
+        now += 50;
+        return step;
+    };
+    const bool before = !pass(0, false) && pass(RT, false);
+    pass(0, false);
+    const bool inMenu = !pass(RT, true) && !pass(0, true) && !pass(RT, true);
+    bool held = true;
+    for (int i = 0; i < 10; i++) held = held && !pass(RT, false);
+    const bool again = !pass(0, false) && pass(RT, false);
+    pass(0, true);
+    const bool soon = !pass(RT, false) && !pass(0, false); // a press 50 ms after the menu closed
+    pass(0, false);
+    pass(0, false);
+    pass(0, false);
+    const bool later = pass(RT, false);
+    // the filter in the game's menu: the open chord, the d-pad and A reach the game with the panel open; what it hid
+    // before stays hidden until let go
+    const uint32_t open = LB | DN, panel = open | XINPUT_GAMEPAD_DPAD_LEFT | RT | A | XINPUT_GAMEPAD_B;
+    const bool filter = PadHide(RT, true, open, panel, 0, true).hide == 0 && PadHide(A, true, open, panel, 0, true).hide == 0 &&
+                        PadHide(LB | DN, false, open, panel, 0, true).hide == 0 && PadHide(RT, true, open, panel, RT, true).hide == RT &&
+                        PadHide(0, true, open, panel, RT, true).held == 0 && PadHide(RT, true, open, panel, 0, false).hide == RT;
+    const bool ok = before && inMenu && held && again && soon && later && filter;
+    printf("%s function menu: d-pad right with the panel open steps nothing while the game's function menu is up; one held over it steps only once let go and "
+           "pressed again; a press 50 ms after it closed steps nothing, one after 250 ms steps; the filter hides no new button from the menu, what it hid stays "
+           "hidden until let go\n",
+           ok ? "ok  " : "FAIL");
+    GameMenuGate h = {};
+    const bool fresh = !GameMenuGateHolds(h, 5);
+    const bool seen = GameMenuGateSeen(h, true, 10) && !GameMenuGateSeen(h, true, 60);
+    GameMenuGateSeen(h, false, 110);
+    const bool hold = fresh && seen && GameMenuGateHolds(h, 110) && GameMenuGateHolds(h, 359) && !GameMenuGateHolds(h, 360);
+    const bool places = InputPlace(0x6a607c05) == 0x2a8ebe0 && InputPlace(0x6ab52f5d) == 0x2a92ea0 && InputPlace(0x6adb8627) == 0x2a93c60 && InputPlace(0x12345678) == 0;
+    printf("%s function menu: nothing waits before any menu; a menu is seen once as it comes up; the controls wait 250 ms after; the menu input's place "
+           "in the three known builds and none elsewhere\n",
+           hold && places ? "ok  " : "FAIL");
+    return ok && hold && places;
 }
 
 // The pad's rule with the default bindings: what the filter hides from the game (PadHide), when a step counts
@@ -3503,6 +3658,8 @@ int wmain(int argc, wchar_t **argv)
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
     if (!PadCurveTest()) return 1;
     if (!PadRuleTest()) return 1;
+    if (!GameMenuTest()) return 1;
+    if (!CrashLogTest()) return 1;
     if (!WornGripTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;

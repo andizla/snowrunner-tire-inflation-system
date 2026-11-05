@@ -76,6 +76,7 @@ PART1 = f'''
 <li>Откройте папку игры <code>Sources\\Bin</code>, где лежит <code>SnowRunner.exe</code>. В Steam: правый клик по SnowRunner, «Управление», «Просмотреть локальные файлы», затем <code>Sources\\Bin</code>.</li>
 <li>Скопируйте туда файлы из архива: <code>version.dll</code>, <code>TirePressure.asi</code>, <code>dxgi.dll</code> и <code>ReShade.ini</code>.</li>
 <li>Запустите игру. Клавиша F2 открывает меню NEXT GEN, в нём есть вкладка «Tire Inflation».</li></ol>
+<p>На Linux (Proton, Steam Deck) задайте в Steam параметры запуска SnowRunner (правый клик, «Свойства», «Общие»): <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Тогда игра берёт этот <code>version.dll</code>, а не собственный файл Wine. Мод там игроки пока не проверяли.</p>
 <div class="box"><b>Уже стоит ReShade?</b> Когда Windows спросит, заменить ли <code>dxgi.dll</code> и <code>ReShade.ini</code>, выберите «Пропустить», и ваш ReShade останется. Моды рисуют и без ReShade. Он в архиве для тех, у кого RivaTuner: без него их игра не запускается. Если стоит Spotter, оверлей рисует через его перехват кадра; <code>NextGen.ini</code> <code>[Overlay] Spotter=0</code> это выключает. <b>Уже стоят другие моды?</b> Если в этой папке уже работают другие моды <code>.asi</code>, у вас есть ASI-загрузчик: скопируйте только <code>TirePressure.asi</code>. Если там лежит <code>version.dll</code> другого мода и это не ASI-загрузчик, сначала переименуйте его в <code>version_chain.dll</code>: наш загрузчик передаёт ему все вызовы. Для обновления скопируйте новый <code>TirePressure.asi</code> поверх старого и держите в папке только один файл <code>.asi</code> этого мода. Если у вас ReShade из архива 1.2: <code>dxgi.dll</code> из этого архива можно положить поверх него.ini</code>, если вы его меняли, оставьте.</div>
 
 <h2>Первая поездка</h2>
@@ -102,7 +103,7 @@ PART1 = f'''
 <li>Без ReShade игра вылетает с оверлеем RivaTuner или Discord или с несколькими мониторами: поставьте ReShade из архива (шаг 3 установки). С ReShade на тех же ПК всё работало.</li>
 <li>Поддержка, обсуждение и идеи: канал автора на Discord-сервере EnthusiastRunner, <a href="https://discord.com/invite/MssDb2Pvcj" target="_blank" rel="noopener noreferrer">discord.com/invite/MssDb2Pvcj</a>, или issue на GitHub для сообщения об ошибке; <code>GrabDumps.bat</code> из архива собирает логи, ini-файлы и дамп вылета в один архив для него.</li>
 <li>В логе «key pressed, no driven truck found»: вы не были за рулём грузовика.</li>
-<li>Чтобы удалить мод, удалите <code>TirePressure.asi</code>, <code>TirePressure.ini</code>, <code>TirePressure.log</code> из <code>Sources\\Bin</code>. <code>version.dll</code> и <code>AsiLoader.log</code> удаляйте, только если других модов <code>.asi</code> не осталось (через них загружается Next Gen Gameplay). Если вы переименовывали <code>version.dll</code> другого мода в <code>version_chain.dll</code>, верните ему старое имя. <code>NextGen.ini</code> тоже удалите, если других модов Next Gen не осталось. ReShade из архива удаляется так же, если он больше никому не нужен: <code>dxgi.dll</code>, <code>ReShade.ini</code> и <code>ReShade.log</code>.</li></ul>
+<li>Чтобы удалить мод, удалите <code>TirePressure.asi</code>, <code>TirePressure.ini</code>, <code>TirePressure.log</code>, <code>TirePressure.prev.log</code> из <code>Sources\\Bin</code>. <code>version.dll</code> и <code>AsiLoader.log</code> удаляйте, только если других модов <code>.asi</code> не осталось (через них загружается Next Gen Gameplay). Если вы переименовывали <code>version.dll</code> другого мода в <code>version_chain.dll</code>, верните ему старое имя. <code>NextGen.ini</code> тоже удалите, если других модов Next Gen не осталось. ReShade из архива удаляется так же, если он больше никому не нужен: <code>dxgi.dll</code>, <code>ReShade.ini</code> и <code>ReShade.log</code>.</li></ul>
 
 <div class="sect break">Функция за функцией</div>
 
@@ -174,7 +175,7 @@ PART1 = f'''
 
 <h2>Панель, клавиатура и геймпад</h2>
 {table(['Что', 'Геймпад (по умолчанию)', 'Клавиатура'], [['Открыть панель', 'LB + крестовина вниз', 'F3'], ['Понизить давление', 'крестовина влево (при открытой панели)', 'F3 понижает на один режим, с Low по кругу на самый высокий'], ['Повысить давление', 'крестовина вправо (при открытой панели)', ''], ['Подтвердить', 'A', 'ничего не трогать: выбор подтвердится сам через 5 с'], ['Закрыть без изменений', 'B', '']], 'Управление')}
-<ul><li>Пока панель открыта, крестовина работает без LB, как в Expeditions, а мод прячет от игры простую крестовину и кнопки панели. LB + крестовина влево или вправо никогда не принадлежит панели, ни при открытой, ни при закрытой, так что передача на этом сочетании работает. В меню и вне грузовика кнопки геймпада принадлежат только игре.</li>
+<ul><li>Пока панель открыта, крестовина работает без LB, как в Expeditions, а мод прячет от игры простую крестовину и кнопки панели. LB + крестовина влево или вправо никогда не принадлежит панели, ни при открытой, ни при закрытой, так что передача на этом сочетании работает. В меню и вне грузовика кнопки геймпада принадлежат только игре. Пока открыто функциональное меню игры и ещё четверть секунды после его закрытия, кнопки и клавиша панели ждут, а мод ничего не прячет от игры.</li>
 <li>Любую привязку можно задать на вкладке: нажмите её кнопку, зажмите кнопки на геймпаде, отпустите. Подходит любой геймпад, который Windows видит как геймпад Xbox.</li>
 <li><code>ConfirmSeconds</code> (5) задаёт, сколько выбор ждёт, прежде чем примениться сам; 0 оставляет только подтверждение с геймпада. У клавиатуры нет клавиши подтверждения, поэтому для неё эта настройка нужна.</li>
 <li>Если <b>«Show the panel»</b> (показывать панель) выключено (<code>UI=0</code>), клавиша меняет давление сразу, без панели. Со включённым сигналом мод пищит один раз для Normal, дважды для Reduced, трижды для Low и один раз высоким тоном для Increased.</li></ul>
@@ -747,8 +748,9 @@ System32, а SnowRunner импортирует <code>version.dll</code>. У пр
 <li>Файлы <code>.asi</code> из папки загружаются в отдельном потоке, как только освободится блокировка загрузчика (loader lock).
 Загружаются только имена, которые заканчиваются ровно на <code>.asi</code>, так что <code>x.asi_off</code> пропускается; модуль,
 который уже загрузил другой ASI-загрузчик, не трогается. Загрузчик пишет <code>AsiLoader.log</code>.</li>
-<li>Если настоящие экспорты не загружаются, прокси отказывается загружаться, и игра сообщает об отсутствующей DLL, а не вылетает
-позже.</li></ul>
+<li>Если <code>System32\\version.dll</code> не загружается, прокси отказывается загружаться, и игра сообщает об отсутствующей DLL, а не вылетает
+позже. Экспорт, которого нет ни в одном из файлов (в <code>version.dll</code> Wine и Proton нет <code>GetFileVersionInfoByHandle</code>),
+не срабатывает только сам, с ошибкой <code>ERROR_PROC_NOT_FOUND</code>, а <code>AsiLoader.log</code> называет его.</li></ul>
 <p>Вне <code>SnowRunner.exe</code> ASI ничего не делает. Мьютекс <code>Local\\SnowRunnerTirePressure-&lt;process id&gt;</code>
 позволяет работать только одной копии; вторая пишет об этом в лог и останавливается.</p>
 '''

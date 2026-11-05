@@ -244,6 +244,7 @@ void LiveGet(TpLive &out);
 int PadInit(uint64_t exeBase);            // pointers newly sent through the filter
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel); // the bindings
 void PadLive(bool live);                  // the filter only takes buttons from the game while live (a truck is driven)
+void PadGameMenu(bool up);                // the game's function menu is up (GameMenuGate): the filter hides no new button
 void PadCurves(float throttle, float brake); // the triggers' curves, 1 = as they are: the filter maps each trigger while live
 uint8_t PadCurved(uint8_t value, int trigger); // a trigger's value through its curve: 0 the right trigger, 1 the left
 uint32_t PadButtons();                    // the buttons of all connected pads together, 0 without a pad
@@ -266,11 +267,14 @@ inline bool PadStep(uint32_t mask, uint32_t pad, uint32_t prev, bool open)
 // binding while all its buttons are down; while the panel is open the plain d-pad (no shoulder reaching the game) and
 // the panel's bindings without their shoulders; and a button hidden once, until it is let go, so it never comes back
 // as a fresh press. Nothing else, so LB with the d-pad reaches the game, the panel open or closed. panel: the open,
-// step, confirm and cancel bindings together. The result's held is the next read's held.
+// step, confirm and cancel bindings together. The result's held is the next read's held. While the game's function
+// menu is up (gameMenu) the d-pad and A are the menu's: nothing new is hidden, only what was hidden stays so until let
+// go, so the panel left open does not hide the d-pad from the menu.
 struct PadHidden { uint32_t hide, held; };
-inline PadHidden PadHide(uint32_t buttons, bool open, uint32_t openMask, uint32_t panel, uint32_t held)
+inline PadHidden PadHide(uint32_t buttons, bool open, uint32_t openMask, uint32_t panel, uint32_t held, bool gameMenu = false)
 {
     uint32_t hide = held & buttons;
+    if (gameMenu) return { hide, hide };
     if (openMask && (buttons & openMask) == openMask) hide |= openMask;
     if (open)
     {
@@ -288,6 +292,30 @@ static const struct { const char *name; uint32_t mask; } kPadButtons[14] = {
     { "LS", XINPUT_GAMEPAD_LEFT_THUMB }, { "RS", XINPUT_GAMEPAD_RIGHT_THUMB }, { "LB", XINPUT_GAMEPAD_LEFT_SHOULDER },
     { "RB", XINPUT_GAMEPAD_RIGHT_SHOULDER }, { "A", XINPUT_GAMEPAD_A }, { "B", XINPUT_GAMEPAD_B }, { "X", XINPUT_GAMEPAD_X },
     { "Y", XINPUT_GAMEPAD_Y } };
+
+// The game's function menu (where Recover is) is worked with the d-pad and A, the panel's own buttons:
+// while it or the game's menu input is up, and for kGameMenuHoldMs after both read 0, the panel's pad and key controls
+// wait. The A that picks an entry closes the menu within a game frame. A button held over the menu gives no press until
+// it is let go and pressed again (the caller keeps the last pass's buttons as they were). The same gate as Gauges'.
+static const unsigned long long kGameMenuHoldMs = 250;
+struct GameMenuGate
+{
+    bool up;                   // the game's flags said a menu is up on the last pass
+    unsigned long long downAt; // when they first read 0 again; 0 before any menu
+};
+// One pass with what the game's flags say now. True on the pass a menu comes up (the caller logs it once a menu).
+inline bool GameMenuGateSeen(GameMenuGate &g, bool up, unsigned long long now)
+{
+    const bool began = up && !g.up;
+    if (!up && g.up) g.downAt = now ? now : 1;
+    g.up = up;
+    return began;
+}
+// The controls wait: a menu is up, or it closed less than kGameMenuHoldMs ago.
+inline bool GameMenuGateHolds(const GameMenuGate &g, unsigned long long now)
+{
+    return g.up || (g.downAt && now - g.downAt < kGameMenuHoldMs);
+}
 
 // "LB+DPadDown" -> XINPUT_GAMEPAD_* mask; 0 for "None" or a name that is not a button
 inline uint32_t PadParse(const char *text)

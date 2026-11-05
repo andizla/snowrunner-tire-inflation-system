@@ -19,6 +19,8 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 2. Copy the files from the zip into the game's `Sources\Bin` folder, next to `SnowRunner.exe`: `version.dll`, `TirePressure.asi`, `dxgi.dll` and `ReShade.ini`.
 3. Start the game. F2 opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
 
+On Linux (Proton, the Steam Deck) set SnowRunner's launch options in Steam (right click, Properties, General) to `WINEDLLOVERRIDES="version=n,b" %command%`. Then the game takes this `version.dll` instead of Wine's own. The mod there is not yet tested by a player.
+
 Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off. Coming from 1.2 with the ReShade it brought: this zip's `dxgi.dll` can go over it.
 
 `version.dll` is a small loader: it loads every file in that folder whose name ends in `.asi`. If you already use an ASI loader (other `.asi` mods work in that folder), copy only `TirePressure.asi` and leave your loader as it is. If another mod's `version.dll` is there and it is not an ASI loader, rename that one to `version_chain.dll` first, and this loader passes everything on to it.
@@ -31,6 +33,7 @@ With a pad (any pad Windows sees as an Xbox pad):
 
 - LB + d-pad down opens the panel.
 - D-pad left or right lowers or raises the pressure while the panel is open. D-pad down, A or the open chord confirms, and B closes the panel unchanged. The game sees none of the plain d-pad while the panel is open, so nothing shifts from inside it.
+- While the game's function menu is up, and for a quarter second after it closes, the panel's buttons and key wait and the game sees every button, so the d-pad and A work the menu.
 - LB + d-pad left or right is never the panel's, open or closed, so a gear on that chord keeps working.
 - The triggers are shaped: at the default of 2, half the trigger gives a quarter of the throttle or brake and the full pull stays full, so a light pull is gentle. The tab's pad throttle and brake curves set it (see Settings); at 1 the game reads them as they are.
 
@@ -128,7 +131,7 @@ Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` a
 
 ## Remove
 
-Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini` and `TirePressure.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
+Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini`, `TirePressure.log` and `TirePressure.prev.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.
 
 ## Notes
 
@@ -161,7 +164,7 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\version.dll` and `out\TirePressure.asi`. `test.bat` runs the offline tests: the loader on a test `.asi`, the loader with a copy of itself as its chain file, the loader behind another ASI loader that had the `.asi` first, and the mod's own checks (every setting through the ini and back, the flattening and gear numbers, the pressure scale, the outside temperature and hard mode, the readers of the sound files, the compressor's tank), and the overlay's way to the game's swap chains: two stand-in Next Gen mods in a program that makes its swap chains through its imports as the game does, both drawing once for each Present and each Present1, with DirectX's own method tables left as they were and the DirectInput reads in place; a stand-in for the Steam overlay's hook, under the mods in DirectX's factory table, must see only DirectX's own Present in every new swap chain (the code before the fix shows it two), and the two mods' slot writes on one read-only page at once must all land. `out\test\probe_test.exe sound` plays the sounds through the default sound device as the mod does in the game. `test\build_preview.bat` builds a program that draws the panel, the warning and the settings tab into PNG files without the game and checks the pad binding window. It needs the Dear ImGui sources, see the file.
+`build.bat` makes `out\version.dll` and `out\TirePressure.asi`. `test.bat` runs the offline tests: the loader on a test `.asi`, the loader with a copy of itself as its chain file, the loader behind another ASI loader that had the `.asi` first, the loader with a System32 `version.dll` that lacks an export (as Wine's), and the mod's own checks (every setting through the ini and back, the flattening and gear numbers, the pressure scale, the outside temperature and hard mode, the readers of the sound files, the compressor's tank), and the overlay's way to the game's swap chains: two stand-in Next Gen mods in a program that makes its swap chains through its imports as the game does, both drawing once for each Present and each Present1, with DirectX's own method tables left as they were and the DirectInput reads in place; a stand-in for the Steam overlay's hook, under the mods in DirectX's factory table, must see only DirectX's own Present in every new swap chain (the code before the fix shows it two), and the two mods' slot writes on one read-only page at once must all land. `out\test\probe_test.exe sound` plays the sounds through the default sound device as the mod does in the game. `test\build_preview.bat` builds a program that draws the panel, the warning and the settings tab into PNG files without the game and checks the pad binding window. It needs the Dear ImGui sources, see the file.
 
 A few places the mod needs lie elsewhere in every build of the game's exe. It finds them itself (`src\build_find.h`). `out\test\probe_test.exe find <exe>` runs the same search on an exe in a file and prints what it found and what it did not. Steam's exe on disk will not do for that, as its code is only readable in the running game. With `SR_IMAGE` set to a copy of the exe's image from a running game, `test.bat` checks the search against the numbers of the builds it knows: the Steam build it was made on (exe stamp 6a607c05) and the game's update of 20 October 2026 (6ab52f5d).
 

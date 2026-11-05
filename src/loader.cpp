@@ -10,6 +10,10 @@
 // The .asi files are loaded from a thread, so they load after the loader lock of this DLL's own load is released.
 // Log: AsiLoader.log next to the exe, rewritten each start.
 //
+// An export that neither the chain file nor System32 has fails its call and nothing else: Wine's and Proton's
+// version.dll lack GetFileVersionInfoByHandle, and with a missing export this DLL once failed its whole load there,
+// so the game did not start. A System32 version.dll that does not load at all still fails the load.
+//
 // The game's other programs in Bin (its crash reporter, converters and encoders) load this DLL as well. They get no
 // .asi files, and their one line goes at the end of the game's log instead of replacing it, so the crash reporter's
 // line there says the game crashed (a tester's log of 2026-10-22 was the crash reporter's, the mods loaded into it).
@@ -24,6 +28,8 @@ extern "C" void *g_verReal[64] = {};
 static std::wstring g_dir;      // the folder of this DLL, with the last backslash; empty = not known, nothing is loaded from it
 static std::wstring g_forwards; // for the log: where the calls go
 static bool g_logFresh = true;  // the first line rewrites the log; false = every line is added at its end
+static int g_missing[64] = {};  // the exports neither file has, by their index in kVerNames, for the game's log
+static int g_missingCount = 0;
 
 static const wchar_t *const kHelpers[] = { L"crash_reporter.exe", L"SnowrunnerResourceConverter.exe", L"TextureConverter.exe", L"lame.exe",
                                            L"opusenc.exe",        L"xma2encode.exe",                  L"xwmaencode.exe" };
@@ -55,13 +61,45 @@ static std::wstring ModulePath(HMODULE m)
     }
 }
 
+// The stand-in for an export that neither file has: the call fails as Windows says a missing function fails. One
+// function serves every export because the game and this DLL are x64, where the caller cleans the stack, so any
+// arguments are fine. Not for a 32-bit build: there a WINAPI function cleans its own arguments, a different count each.
+extern "C" DWORD WINAPI MissingExport()
+{
+    SetLastError(ERROR_PROC_NOT_FOUND);
+    return 0;
+}
+
+// Fills g_verReal from the two files: the chain file first (none = nullptr), else System32. An export neither has
+// gets MissingExport and its index in g_missing. Gives the count of exports from the chain file.
+static int ResolveExports(HMODULE chain, HMODULE system)
+{
+    int fromChain = 0;
+    g_missingCount = 0;
+    for (int i = 0; i < kVerCount; i++)
+    {
+        void *p = chain ? (void *)GetProcAddress(chain, kVerNames[i]) : nullptr;
+        if (p) fromChain++;
+        else p = (void *)GetProcAddress(system, kVerNames[i]);
+        if (!p) { p = (void *)&MissingExport; g_missing[g_missingCount++] = i; }
+        g_verReal[i] = p;
+    }
+    return fromChain;
+}
+
 // Fills g_verReal. chained: this DLL is itself somebody's chain file, so it goes to System32 only.
 static bool LoadRealVersion(HINSTANCE self, bool chained)
 {
+#ifdef LOADER_TEST_SYSTEM
+    // the loader test's build: a stand-in for System32's version.dll next to it, without GetFileVersionInfoByHandle
+    if (g_dir.empty()) return false;
+    const HMODULE system = LoadLibraryW((g_dir + L"system_standin.dll").c_str());
+#else
     wchar_t sys[MAX_PATH] = {};
     const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
     if (!n || n >= MAX_PATH) return false;
     const HMODULE system = LoadLibraryW((std::wstring(sys) + L"\\version.dll").c_str());
+#endif
     if (!system) return false;
     HMODULE chain = nullptr;
     if (!chained && !g_dir.empty())
@@ -69,18 +107,10 @@ static bool LoadRealVersion(HINSTANCE self, bool chained)
         chain = LoadLibraryW((g_dir + L"version_chain.dll").c_str());
         if (chain == self || chain == system) chain = nullptr;
     }
-    int fromChain = 0;
-    for (int i = 0; i < kVerCount; i++)
-    {
-        void *p = chain ? (void *)GetProcAddress(chain, kVerNames[i]) : nullptr;
-        if (p) fromChain++;
-        else p = (void *)GetProcAddress(system, kVerNames[i]);
-        if (!p) return false;
-        g_verReal[i] = p;
-    }
+    const int fromChain = ResolveExports(chain, system);
     wchar_t note[160];
     if (chain) swprintf_s(note, L"version_chain.dll next to the exe (%d of %d exports; the rest from System32)", fromChain, kVerCount);
-    else swprintf_s(note, L"System32\\version.dll%s", chained ? L" (this file is a chain file itself)" : L"");
+    else swprintf_s(note, L"System32\\version.dll (%d of %d)%s", kVerCount - g_missingCount, kVerCount, chained ? L" (this file is a chain file itself)" : L"");
     g_forwards = note;
     return true;
 }
@@ -101,6 +131,10 @@ static DWORD WINAPI LoadAsiFiles(void *)
         }
     Log(L"asi loader in %s", exe.c_str());
     Log(L"version.dll calls go to %s", g_forwards.c_str());
+    // logged here, not where they are found: DllMain runs in the game's helpers and in a chain copy too, and a line
+    // from there would rewrite the game's log
+    for (int i = 0; i < g_missingCount; i++)
+        Log(L"version.dll: %hs not in System32's version.dll, the call fails (Wine)", kVerNames[g_missing[i]]);
     WIN32_FIND_DATAW fd = {};
     const HANDLE h = FindFirstFileW((g_dir + L"*.asi").c_str(), &fd);
     int loaded = 0, already = 0, failed = 0;

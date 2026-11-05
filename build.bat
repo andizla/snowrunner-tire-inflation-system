@@ -11,7 +11,7 @@ if not exist out\test mkdir out\test
 if not exist out\test\chain mkdir out\test\chain
 if not exist out\test\twice mkdir out\test\twice
 rem the loader test loads every .asi in its folder: only this build's probe.asi may be there
-del /q out\test\*.asi out\test\chain\*.asi out\test\twice\*.asi 2>nul
+del /q out\test\*.asi out\test\chain\*.asi out\test\twice\*.asi out\test\proton\*.asi out\test\proton_helper\*.asi 2>nul
 ml64 /nologo /c /Fo out\obj\version_stubs.obj src\version_stubs.asm || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj src\loader.cpp || goto fail
 link /nologo /DLL /DEF:src\version.def /OUT:out\version.dll /IMPLIB:out\obj\version_proxy.lib out\obj\version_stubs.obj out\obj\loader.obj || goto fail
@@ -32,6 +32,20 @@ if not exist out\test\helper mkdir out\test\helper
 copy /y out\version.dll out\test\helper\version.dll >nul || goto fail
 copy /y out\test\loader_test.exe out\test\helper\crash_reporter.exe >nul || goto fail
 copy /y out\test\probe.asi out\test\helper\probe.asi >nul || goto fail
+rem Linux (Wine, Proton): System32's version.dll lacks GetFileVersionInfoByHandle. A copy of the proxy built with
+rem LOADER_TEST_SYSTEM takes system_standin.dll next to it for System32's: 16 exports forwarded to version_sys.dll, a copy
+rem of System32's. In out\test\proton the test wants the load to go on; in out\test\proton_helper as the crash reporter.
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D LOADER_TEST_SYSTEM /Fo:out\obj\loader_proton.obj src\loader.cpp || goto fail
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D LOADER_TEST_STANDIN /Fo:out\obj\system_standin.obj test\loader_test.cpp || goto fail
+for %%d in (proton proton_helper) do (
+  if not exist out\test\%%d mkdir out\test\%%d
+  link /nologo /DLL /DEF:src\version.def /OUT:out\test\%%d\version.dll /IMPLIB:out\obj\version_proton.lib out\obj\version_stubs.obj out\obj\loader_proton.obj || goto fail
+  link /nologo /DLL /OUT:out\test\%%d\system_standin.dll /IMPLIB:out\obj\system_standin.lib out\obj\system_standin.obj || goto fail
+  copy /y %SystemRoot%\System32\version.dll out\test\%%d\version_sys.dll >nul || goto fail
+  copy /y out\test\probe.asi out\test\%%d\probe.asi >nul || goto fail
+)
+copy /y out\test\loader_test.exe out\test\proton\loader_test.exe >nul || goto fail
+copy /y out\test\loader_test.exe out\test\proton_helper\crash_reporter.exe >nul || goto fail
 rem the mod itself, and the read-only tools for the running game
 rem Dear ImGui (deps\imgui) and its DirectX 11 renderer (src\ng_dx11.cpp) compiled in; ng_overlay.cpp is Next Gen's overlay
 rem (the Present hook, the NEXT GEN menu), ng_reshade.cpp takes the swap chain from ReShade where it is installed;

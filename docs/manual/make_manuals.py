@@ -215,7 +215,7 @@ TIRE = f'''
 {table(['Ground', 'Crr', 'Slows the truck at Normal, m/s²', 'At Low, m/s²'], [['Paved', '0.010', '0.10', '0.15'], ['Rock', '0.015', '0.15', '0.22'], ['Gravel', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', '0.030', '0.29', '0.44'], ['Sand', '0.060', '0.59', '0.88'], ['Ice', '0', '0', '0']], 'Table 11. Rolling drag by ground')}
 <p>The pressure scales it by (p / p<sub>Normal</sub>)<sup>−0.5</sup>: Low ×1.49, Reduced ×1.24, Normal ×1, Increased ×0.89. It follows the pressure through a change. The numbers are the mod's own, from published truck tire figures (0.006 to 0.01 on asphalt at the rated pressure).</p>
 <ul><li>The game shows mud to the mod as no ground of its own. So mud gets dirt's number, on top of the game's own drag in mud. The mod cannot yet tell the two apart.</li>
-<li>The weight is the truck's as the game's physics has it: the chassis and the wheels. Cargo and a trailer are not counted.</li>
+<li>The weight is the truck's as the game's physics has it: the chassis, the wheels and any body a wheel hangs on (a cab, a bed or an axle of its own). Cargo and a trailer are not counted.</li>
 <li>The drag goes in through each wheel's own damping, the way the game drags a flat tire. It acts with the foot off too. A broken wheel keeps the game's own.</li>
 <li>It needs the game's truck update, as tire damage on the game's thread does. On a build where the mod does not find it, rolling drag stays off and the log says so.</li>
 <li>Fuel: the engine works harder against the drag and burns more by itself. So hard mode's fuel factors are 1. The default modes keep theirs for now.</li></ul>

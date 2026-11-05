@@ -19,7 +19,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 2. Copy the files from the zip into the game's `Sources\Bin` folder, next to `SnowRunner.exe`: `version.dll`, `TirePressure.asi`, `dxgi.dll` and `ReShade.ini`.
 3. Start the game. F2 opens the NEXT GEN menu, and its Tire Inflation tab has the mod's settings. The key (F3) or the pad opens the panel.
 
-On Linux (Proton, the Steam Deck) set SnowRunner's launch options in Steam (right click, Properties, General) to `WINEDLLOVERRIDES="version=n,b" %command%`. Then the game takes this `version.dll` instead of Wine's own. The overlay there is not yet tested by a player.
+On Linux (Proton, the Steam Deck) set SnowRunner's launch options in Steam (right click, Properties, General) to `WINEDLLOVERRIDES="version=n,b" %command%`. Then the game takes this `version.dll` instead of Wine's own. The mod there is not yet tested by a player.
 
 Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off. Coming from 1.2 with the ReShade it brought: this zip's `dxgi.dll` can go over it.
 

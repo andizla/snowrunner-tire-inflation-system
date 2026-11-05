@@ -66,6 +66,7 @@ struct TpSettings
     bool standStill;         // StandStill: a pressure change only goes on while the truck stands still
     bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini); 0 = one mode for all, Normal at every start
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
+    bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); off by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
     bool insaneMode;         // InsaneMode: a hardcore set harder than real tires (InsaneSettings) in the same place; it wins over HardMode
@@ -125,6 +126,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.standStill = true;
     s.perTruck = true;
     s.temperature = true;
+    s.rollingDrag = false; // until its drive (BRIEF_rolling_drag.md)
     s.ambientC = 15.0f;
     s.hardMode = false;
     s.insaneMode = false;
@@ -155,13 +157,14 @@ static const float kModePressure[kModeCount] = { 0.45f, 0.65f, 1.0f, 1.25f };
 // Hard mode: the numbers and options nearest to real tires (HardMode=1). Airing a tire down to half its pressure
 // lengthens its contact patch by about half: that much more grip on sand and soft ground, a little less on hard
 // ground; over-inflating does the reverse and gains nothing on asphalt. The flattening is a few centimetres. Rolling
-// resistance, and the fuel with it, rises as the pressure falls. A soft tire's sidewalls flex and heat at speed, so
+// resistance rises as the pressure falls: rolling drag is on, and the engine burns more by itself against it, so the
+// modes' fuel is 1 (no second charge for it). A soft tire's sidewalls flex and heat at speed, so
 // its wear starts higher up than the defaults but ends a tire faster. A change takes half a minute, as a truck's
 // compressor does. The numbers are this mod's; the reasoning is the physics above.
 static const float kHardModes[3][kModeKeyCount] = {
-    { 1.3f, 0.9f, 1.18f, 0.025f, 1.12f, 0.9f, 1.15f, 1.45f, 1.3f, 50.0f / 3.6f, 75.0f / 3.6f, 1.0f, 6.0f, 10.0f },  // Reduced
-    { 1.6f, 0.8f, 1.35f, 0.05f, 1.25f, 0.8f, 1.3f, 1.9f, 1.6f, 30.0f / 3.6f, 55.0f / 3.6f, 2.0f, 10.0f, 8.0f },   // Low
-    { 0.92f, 0.97f, 0.9f, 0.0f, 0.96f, 1.05f, 0.95f, 0.85f, 0.92f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f } };            // Increased
+    { 1.3f, 0.9f, 1.18f, 0.025f, 1.0f, 0.9f, 1.15f, 1.45f, 1.3f, 50.0f / 3.6f, 75.0f / 3.6f, 1.0f, 6.0f, 10.0f },  // Reduced
+    { 1.6f, 0.8f, 1.35f, 0.05f, 1.0f, 0.8f, 1.3f, 1.9f, 1.6f, 30.0f / 3.6f, 55.0f / 3.6f, 2.0f, 10.0f, 8.0f },   // Low
+    { 0.92f, 0.97f, 0.9f, 0.0f, 1.0f, 1.05f, 0.95f, 0.85f, 0.92f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f } };             // Increased
 static const float kHardSeconds = 30.0f;
 
 // Puts hard mode's numbers and options into s: everything but the controls, the panel, the sounds and the outside
@@ -179,6 +182,7 @@ inline void HardSettings(TpSettings &s)
     s.rollingRadius = true;
     s.standStill = true;
     s.temperature = true;
+    s.rollingDrag = true;
     memcpy(s.mode, kHardModes, sizeof s.mode);
 }
 
@@ -205,6 +209,7 @@ inline void InsaneSettings(TpSettings &s)
     s.rollingRadius = false;
     s.standStill = true;
     s.temperature = true;
+    s.rollingDrag = true;
     memcpy(s.mode, kInsaneModes, sizeof s.mode);
 }
 

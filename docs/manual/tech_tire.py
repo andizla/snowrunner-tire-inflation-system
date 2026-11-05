@@ -356,6 +356,41 @@ truck changed in the garage, or a value another mod writes, becomes the new stoc
 '''
 
 
+def s_drag():
+    return f'''
+<h2>Rolling drag</h2>
+<p>With <code>RollingDrag=1</code> (or hard or insanity mode) the mod writes each grounded, unbroken wheel's Havok angular damping
+(body +0x216, a half float: a float's upper 16 bits, rounded up by 1.003906 first). Havok slows a body's spin by <i>c</i>·ω, a
+torque of <i>I</i>·<i>c</i>·ω, and the tire's grip passes it to the truck. A rolling resistance is the force Crr·<i>N</i>, the
+torque Crr·<i>N</i>·<i>r</i>. So (<code>rolling_drag.h</code>):</p>
+{eq('<i>c</i> = <i>c</i><sub>stock</sub> + Crr · <i>f</i>(<i>p</i>) · <i>N</i> · <i>r</i> / (<i>I</i> · max(|ω|, 2 m/s / <i>r</i>)),    <i>f</i>(<i>p</i>) = (<i>p</i> / <i>p</i><sub>Normal</sub>)<sup>−0.5</sup>,    <i>N</i> = <i>M</i> <i>g</i> / <i>n</i>')}
+<p class="where"><i>c</i><sub>stock</sub> is wheel +0xAC, the game's own figure, never the body's word read back. <i>r</i> is
+wheel +0x94. <i>I</i> is the wheel body's inertia about its axle: 1 over body +0x220's x, y or z, the one that stands apart
+(<code>RollAxle</code>). ω is the body's angular velocity (+0x240) along that axle's column of the rotation (+0x170). <i>M</i> is
+the Havok mass: the chassis's 1/w (body +0x22C, the chassis at model +0x230) and every wheel body's. <i>n</i> is the wheels with
+contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is held at 100 at most.</p>
+<p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
+floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never
+pushes a wheel. Over all the wheels the drag slows the truck by Crr · <i>f</i> · <i>g</i>, whatever its mass.</p>
+{table(['Ground', 'Flag', 'Crr', 'At Normal, m/s²', 'At Low, m/s²'], [['Paved', '<code>+0x1C8</code>', '0.010', '0.10', '0.15'], ['Rock', '<code>+0x1CD</code>', '0.015', '0.15', '0.22'], ['Gravel', '<code>+0x1C9</code>', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', 'none', '0.030', '0.29', '0.44'], ['Sand', '<code>+0x1CA</code>', '0.060', '0.59', '0.88'], ['Ice', '<code>+0x1C0</code>', '0', '0', '0']], 'Crr by the ground flags the game\'s check leaves in the wheel')}
+<p>Where several flags are set: ice, then paved, sand, gravel, rock, and dirt for the rest. No flag counts as dirt. Mud sets
+none, so mud gets dirt's 0.030 on top of the game's own mud drag; +0x1CE is not mud (it is on over paved road). Ice is 0.</p>
+<p><b>When it writes.</b> <code>RollingDragFrame</code> runs in the truck update, on the game's thread, every frame, on reads of
+that frame. A wheel's <i>c</i> goes in when the mod has no word of its own in it, when the body holds another word than the mod's
+last (the game wrote it: compared as a word, never taken as a stock), or when <i>c</i> moved by over 2 % since. The mod keeps its
+last word itself. A broken wheel (model +0x328) keeps the game's own. A wheel off the ground, the truck left for another and the
+setting off get the stock back, where the body still holds the mod's word. While the probe (<code>ProbeRoll</code>) holds a
+damping of its own, the drag waits. Without the truck update hook it stays off, with a log line.</p>
+<p><b>The log.</b> A line per truck with the Havok mass, <i>N</i>, the first wheel's <i>I</i>, <i>r</i> and stock damping, the
+Crr and the pressure factor. With <code>ProbeRoll=1</code> also one a second while the truck moves: each wheel's ground,
+Crr × <i>f</i>, the <i>c</i> in its body, its spin, and the torque <i>I</i>·(<i>c</i> − <i>c</i><sub>stock</sub>)·ω against
+Crr·<i>f</i>·<i>N</i>·<i>r</i>.</p>
+<p>The probe's coast-downs showed that body +0x216 reaches the truck as <i>I</i>·<i>c</i>·ω, for torques well above any rolling
+drag writes. Fuel: hard mode's fuel factors are 1, as the engine burns more against the drag by itself. The default modes keep
+theirs until a drive says otherwise.</p>
+'''
+
+
 def s_damage():
     sets = [('Default Low', 'default', 0), ('Default Reduced', 'default', 1), ('Hard Low', 'hard', 0), ('Hard Reduced', 'hard', 1),
             ('Insanity Low', 'insane', 0), ('Insanity Reduced', 'insane', 1)]
@@ -494,7 +529,7 @@ def s_presets():
 
     forced = [['Seconds (Normal to Low)', '30', '25'], ['Base grip, all three', '1', '1'], ['Vanilla balance', 'on, strength 1', 'on, strength 2'],
               ['Asphalt floor', 'off', 'off'], ['Increased', 'on', 'off'], ['Tire damage', 'on', 'on'], ['Rolling radius', 'on', 'off'],
-              ['Change only standing', 'on', 'on'], ['Temperature', 'on', 'on'], ['Left alone', 'key, beep, volume, panel, pads, AmbientC', 'the same']]
+              ['Change only standing', 'on', 'on'], ['Temperature', 'on', 'on'], ['Rolling drag', 'on', 'on'], ['Left alone', 'key, beep, volume, panel, pads, AmbientC', 'the same']]
     return f'''
 <h2>Hard mode and the insanity mode: the full numbers</h2>
 <p>Both replace the player's numbers and options while ticked; the ini keeps the player's own, and unticking brings them back
@@ -503,7 +538,7 @@ exclude each other. The shared state flag "hard mode" is set for either.</p>
 {table(['Setting', 'Hard mode', 'Insanity mode'], forced, 'What each one forces (panel.h:156-194)')}
 {preset_table('hard', 'Hard mode (kHardModes, panel.h:148-151)')}
 <p>Hard mode's reasoning (<code>panel.h:142-147</code>): halving a tire's pressure lengthens its contact patch by about half, which
-is that much more grip on soft ground and a little less on hard; rolling resistance and fuel use rise as the pressure falls; a
+is that much more grip on soft ground and a little less on hard; rolling resistance rises as the pressure falls, and the mod's rolling drag charges it, so the fuel factors are 1; a
 soft tire's sidewalls flex and heat at speed; a change takes half a minute, as a truck's onboard compressor does. The numbers are
 the mod's; the reasoning is the physics.</p>
 {preset_table('insane', 'Globalhacker insanity mode (kInsaneModes, panel.h:175-178)', inc=False)}
@@ -823,7 +858,8 @@ def s_tests():
              'The scale: each mode\'s pressure gives the mode\'s numbers; half way gives the mean; half a step past each end, then flat.',
              'The temperature: 15 °C changes nothing; Normal holds 0.827 at −20 °C and 1.098 at 35 °C; every effect goes the right way.',
              'The balance: <i>f</i> at strength 1, <i>f</i>² at 2, in between at 1.5; a vanilla tire stays at 1.',
-             'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard.',
+             'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, hard with fuel ×1.',
+             'Rolling drag: at 10 m/s on paved at Normal the written word\'s torque within 1 % of Crr·N·r, with N by the Havok mass and not the files\'; the same at three times the spin; under the floor the torque falls to nothing; ice none, sand at Low ×1.49, no flag dirt; a broken wheel left alone; airborne, off and another truck get the stock back; a write over 2 % and on the game\'s word; no climb over 10 lost records; none while the probe holds; the probe\'s stock back in the truck update; no hook, off.',
              'Shared state: the block is created, written and read back by name, every field at its offset.',
              'Sounds: WAV and ADPCM decoding, pak reading (zip and zip64), loop and ending cuts, made loops that join without a click and stay within level, the compressor starting on the right filling and stopping once, change times matching the passes.',
              'Game code, with a copy of the Steam image: every place found at its known address, and each of the three ways to the control global alone gives the same one.']
@@ -868,6 +904,6 @@ def s_constants():
 
 
 def body():
-    return ''.join([s_intro(), s_overview(), s_scale(), s_speed(), s_grip(), s_flat(), s_roll(), s_fuel(), s_damage(), s_temp(),
+    return ''.join([s_intro(), s_overview(), s_scale(), s_speed(), s_grip(), s_flat(), s_roll(), s_fuel(), s_drag(), s_damage(), s_temp(),
                     s_presets(), s_balance(), s_loader(), s_find(), s_memory(), s_thread(), s_shared(), s_sounds(), s_limits(),
                     s_tests(), s_constants()])

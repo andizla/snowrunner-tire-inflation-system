@@ -22,8 +22,8 @@ NORMAL = M(1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0)
 SETS = {
  'default': [M(3.5, 0.85, 1.3, 0.10, 1.5, 0.7, 2.75, 4.0, 3.5, 20, 30, 4, 8, 7), M(3.0, 0.95, 1.15, 0.06, 1.25, 0.85, 2.4, 3.4, 3.0, 35, 45, 2, 6, 10), NORMAL,
              M(0.9, 1.3, 0.85, 0.0, 0.85, 1.1, 0.95, 0.85, 0.9, 0, 0, 0, 0, 7)],
- 'hard':    [M(1.6, 0.8, 1.35, 0.05, 1.25, 0.8, 1.3, 1.9, 1.6, 30, 55, 2, 10, 8), M(1.3, 0.9, 1.18, 0.025, 1.12, 0.9, 1.15, 1.45, 1.3, 50, 75, 1, 6, 10), NORMAL,
-             M(0.92, 0.97, 0.9, 0.0, 0.96, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
+ 'hard':    [M(1.6, 0.8, 1.35, 0.05, 1.0, 0.8, 1.3, 1.9, 1.6, 30, 55, 2, 10, 8), M(1.3, 0.9, 1.18, 0.025, 1.0, 0.9, 1.15, 1.45, 1.3, 50, 75, 1, 6, 10), NORMAL,
+             M(0.92, 0.97, 0.9, 0.0, 1.0, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
  'insane':  [M(2.0, 0.4, 1.5, 0.12, 1.75, 0.6, 1.6, 2.3, 2.0, 15, 20, 8, 16, 2), M(1.5, 0.45, 1.25, 0.06, 1.5, 0.75, 1.3, 1.7, 1.5, 20, 25, 4, 12, 2), NORMAL,
              M(0.92, 0.97, 0.9, 0.0, 0.96, 1.05, 0.95, 0.85, 0.92, 0, 0, 0, 0, 7)],
 }
@@ -209,13 +209,24 @@ TIRE = f'''
 <h2>10. Fuel and steering</h2>
 <p>The fuel factor scales the truck's engine and gearbox <code>FuelConsumption</code>, and only counts while the truck moves: standing at idle burns as usual. The steering factor scales the truck's steering speed, so soft tires turn slower.</p>
 
-<h2>11. Tire damage</h2>
+<h2>11. Rolling drag</h2>
+<p>One checkbox in the Realism section, or <code>RollingDrag=1</code>. It is off by default. Hard mode and the insanity mode turn it on. A tire rolls harder on soft ground and when it is aired down. The game slows a rolling truck by itself, but its tires roll the same at every pressure. With this on the mod adds a rolling resistance by the ground and the pressure.</p>
+<p>The resistance is a force of Crr × N on each wheel on the ground. N is the wheel's share of the truck's weight. Crr goes by the ground under the wheel:</p>
+{table(['Ground', 'Crr', 'Slows the truck at Normal, m/s²', 'At Low, m/s²'], [['Paved', '0.010', '0.10', '0.15'], ['Rock', '0.015', '0.15', '0.22'], ['Gravel', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', '0.030', '0.29', '0.44'], ['Sand', '0.060', '0.59', '0.88'], ['Ice', '0', '0', '0']], 'Table 11. Rolling drag by ground')}
+<p>The pressure scales it by (p / p<sub>Normal</sub>)<sup>−0.5</sup>: Low ×1.49, Reduced ×1.24, Normal ×1, Increased ×0.89. It follows the pressure through a change. The numbers are the mod's own, from published truck tire figures (0.006 to 0.01 on asphalt at the rated pressure).</p>
+<ul><li>The game shows mud to the mod as no ground of its own. So mud gets dirt's number, on top of the game's own drag in mud. The mod cannot yet tell the two apart.</li>
+<li>The weight is the truck's as the game's physics has it: the chassis and the wheels. Cargo and a trailer are not counted.</li>
+<li>The drag goes in through each wheel's own damping, the way the game drags a flat tire. It acts with the foot off too. A broken wheel keeps the game's own.</li>
+<li>It needs the game's truck update, as tire damage on the game's thread does. On a build where the mod does not find it, rolling drag stays off and the log says so.</li>
+<li>Fuel: the engine works harder against the drag and burns more by itself. So hard mode's fuel factors are 1. The default modes keep theirs for now.</li></ul>
+
+<h2>12. Tire damage</h2>
 <p>While the truck is faster than the mode's first speed, a timer runs. Each time it passes the mode's interval, every wheel on the ground takes damage: the least at the first speed, rising to the most at the second speed and above. Below the first speed for a full second, the timer starts over. Increased and Normal never wear.</p>
 <ul><li>A wheel takes about 50 damage; the exact number is the wheel's own. The warning shows the most worn tire in percent, with a bar.</li>
 <li>A worn out tire goes flat. It is the game's own wheel damage: the HUD's wheel icon turns red, the damage stays in the save, and a garage or a service repairs it like any other.</li>
 <li>A worn out tire keeps <b>a slight grip</b>, <code>WornGrip</code> percent of its own on the ground, on asphalt and in mud (10 by default, so the truck still moves; 0 gives none, as from 1.2), and is <b>drawn flat</b>, as flat as the game can draw it, until it is repaired.</li>
 <li>The mod deals the damage on the game's own thread, at the point in its frame where the game deals damage itself, and runs the game's damage update after it. On a build of the game where it does not find that place, it deals the damage from its own thread and makes the tire flat itself; the game's damage display then catches up at the next damage the game deals.</li>
-<li>The outside temperature moves the two speeds (section 13).</li></ul>
+<li>The outside temperature moves the two speeds (section 14).</li></ul>
 
 <h2>12. Changing only while standing still</h2>
 <p>With <code>StandStill=1</code> (the default) the pressure only moves while the truck stands, below about 1 km/h. A choice made while driving waits, and a change under way pauses and goes on when the truck stops again. While it waits, an amber hint "TIRE PRESSURE: Stop the truck to change the pressure" shows at the top left.</p>
@@ -230,12 +241,12 @@ TIRE = f'''
 <p>The temperature is <code>AmbientC</code> in the ini (15 to begin with), or, while the Gauges mod runs, the map's and the hour's from Gauges, and then the tab's slider has no effect. It is taken in half-degree steps. The tab line "the tires hold A% of Normal's pressure, B% once the air's temperature counts" shows the mode's place on the scale (A) and where the temperature moved it (B). A separate document goes through the temperature model with full tables.</p>
 
 <h2>14. Hard mode</h2>
-<p>One checkbox at the top of the Realism section, or <code>HardMode=1</code>. It sets the numbers and options nearest to real tires: a change takes half a minute and only while the truck stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla balance is on at strength 1, no asphalt floor and no base grip. The rest of the settings are greyed out; the ini keeps your own numbers for when it is off.</p>
+<p>One checkbox at the top of the Realism section, or <code>HardMode=1</code>. It sets the numbers and options nearest to real tires: a change takes half a minute and only while the truck stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla balance is on at strength 1, rolling drag is on, no asphalt floor and no base grip. The modes' fuel factors are 1, as the engine burns more against the drag by itself. The rest of the settings are greyed out; the ini keeps your own numbers for when it is off.</p>
 {modes_table('hard', 'Table 3. Hard mode')}
 <p>Airing a tire down to half its pressure lengthens its contact patch by about half: that much more grip on sand and soft ground, a little less on hard ground. Over-inflating does the reverse and gains nothing on asphalt. A soft tire's sidewalls flex and heat at speed, so its wear starts higher up than the defaults but ends a tire faster.</p>
 
 <h2>15. Globalhacker insanity mode</h2>
-<p>One checkbox under hard mode, or <code>InsaneMode=1</code>; it excludes hard mode and greys out the same settings. It is built from the own settings of the player Globalhacker and is harder than real tires: a change takes 25 seconds and only while the truck stands, the tires feel the temperature, flattened tires lose the speed the smaller wheel loses, there is no Increased mode, and the vanilla balance runs at strength 2.</p>
+<p>One checkbox under hard mode, or <code>InsaneMode=1</code>; it excludes hard mode and greys out the same settings. It is built from the own settings of the player Globalhacker and is harder than real tires: a change takes 25 seconds and only while the truck stands, the tires feel the temperature, flattened tires lose the speed the smaller wheel loses, there is no Increased mode, the vanilla balance runs at strength 2, and rolling drag is on.</p>
 {modes_table('insane', 'Table 4. Globalhacker insanity mode', with_increased=False)}
 <div class="warn">These numbers were made for tire files already cut by 45% on the ground and in mud. On vanilla tires they are milder than they look: Low ends near vanilla grip, not far above it. The next version also sets the base grip on the ground and in mud to ×0.55 in this mode, so it plays as its author plays it.</div>
 
@@ -269,7 +280,7 @@ TIRE = f'''
 <h2>20. With other mods</h2>
 <ul><li><b>Gauges</b> (the gauge cluster by the same author). Each mod publishes a small block of shared memory for the other. Gauges hands over the outside temperature by map and hour; the tire mod hands over its mode, pressure and wear, which Gauges shows as a tenth lamp: a tire with L, R, N or +, amber at Low and Reduced, green at Increased, blinking while the pressure moves, red while the tires take damage or one is worn out.</li>
 <li><b>ASI loaders</b>: see section 3. A second copy of this mod under another name stands down and says so in the log.</li>
-<li><b>Mods that edit tire files</b>: the modes multiply whatever values the game loaded, so they work on top. Only the vanilla balance compares against the stock values (section 16).</li>
+<li><b>Mods that edit tire files</b>: the modes multiply whatever values the game loaded, so they work on top. Only the vanilla balance compares against the stock values (section 17).</li>
 <li>The mod writes no game file, so it does not conflict with pak mods.</li></ul>
 
 <h2>21. How the mod finds its way into the game</h2>
@@ -280,7 +291,7 @@ TIRE = f'''
 <li>What the mod writes into the game's memory: the wheels' asphalt and mud grip and collision radius, the truck's ground grip list, fuel consumption, steering speed and gear speeds, the wheels' damage, one entry of the game's import table (for the game-thread damage) and the game's pointers to the pad function (two in the Steam build). All reads and writes go through checked calls, so an object the game frees gives an error, not a crash.</li></ul>
 
 <h2>22. Every setting in the ini</h2>
-<p><code>TirePressure.ini</code> next to the exe is written with the defaults and a short guide on the first start. The tab edits all of it except the four sound names and <code>DumpImage</code>. Each truck's mode goes into <code>TirePressure.trucks.ini</code> beside it (section 12).</p>
+<p><code>TirePressure.ini</code> next to the exe is written with the defaults and a short guide on the first start. The tab edits all of it except the four sound names and <code>DumpImage</code>. Each truck's mode goes into <code>TirePressure.trucks.ini</code> beside it (section 13).</p>
 {table(['Key', 'Default', 'Range', 'What it does'], [
  ['Key', '114 (F3)', 'virtual key code', 'The panel key'], ['Beep', '0', '0 or 1', 'Beep as a change begins'], ['Seconds', '6', '0 to 60', 'Normal to Low takes this long'],
  ['SoundVolume', '50', '0 to 100', '0 = no sound'], ['UI', '1', '0 or 1', 'Show the panel'], ['UIScale', '1', '0.3 to 3', 'Panel size'],
@@ -289,7 +300,7 @@ TIRE = f'''
  ['BaseGround, BaseAsphalt, BaseMud', '1', '0.1 to 5', 'Scale every mode\'s grip'], ['VanillaBalance', '0', '0 or 1', 'Vanilla balance on'],
  ['VanillaBalanceStrength', '1', '0 to 2', 'How far, past 1 below vanilla'], ['AsphaltFloor', '0', '0 to 10', 'Least grip on paved ground; 0 = off'], ['WornGrip', '10', '0 to 30', 'Percent of its grip a worn out tire keeps; 0 = none'],
  ['Increased', '1', '0 or 1', 'The road mode'], ['TireDamage', '1', '0 or 1', 'Soft tires wear at speed'], ['RollingRadius', '1', '0 or 1', 'Flattened tires roll like real ones'],
- ['StandStill', '1', '0 or 1', 'Change only while standing'], ['PerTruck', '1', '0 or 1', 'Each truck keeps its own pressure mode'], ['Temperature', '1', '0 or 1', 'Tires feel the outside temperature'], ['AmbientC', '15', '-40 to 50', 'Outside temperature without Gauges'],
+ ['StandStill', '1', '0 or 1', 'Change only while standing'], ['PerTruck', '1', '0 or 1', 'Each truck keeps its own pressure mode'], ['Temperature', '1', '0 or 1', 'Tires feel the outside temperature'], ['RollingDrag', '0', '0 or 1', 'Tires roll harder on soft ground and aired down'], ['AmbientC', '15', '-40 to 50', 'Outside temperature without Gauges'],
  ['HardMode', '0', '0 or 1', 'Hard mode'], ['InsaneMode', '0', '0 or 1', 'Globalhacker insanity mode; wins over HardMode'],
  ['AirOutSound, AirInSound, CompressorSound, CompressorStopSound', 'empty', 'WAV file, pak sample or none', 'Replace a sound'],
  ['DumpImage', '0', '0 or 1', 'Write the game\'s code image at the next start, for a report']], 'Table 8. [TirePressure]')}

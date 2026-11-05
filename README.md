@@ -86,11 +86,12 @@ A SnowRunner wheel takes about 50 damage. While the truck is too fast a warning 
 
 ## Realism
 
-Four settings in the tab and the ini. The first two are on by default.
+Five settings in the tab and the ini. The first two are on by default.
 
 - Pressure changes only while the truck stands still (`StandStill`). A choice made while driving waits, and a change under way pauses, until the truck stands. A hint at the top left says so.
 - The tires feel the outside temperature (`Temperature`). The air in them follows the gas law, with Normal taken as 35 psi: at 20 below, Normal holds 83% of its pressure and runs softer, flatter and with more grip on soft ground, and Low is as soft as the tires go; at 35 above, Normal holds 110%. Cold rubber grips less, most on asphalt and rock: a fifth less at 20 below. Warm rubber grips a little more on asphalt and rock. Above Normal's pressure the tires slide toward Increased's numbers, as over-inflated tires do, also with Increased switched off. In the heat soft tires wear from lower speeds, in the cold from higher ones. The modes' numbers are for 15 C. The outside temperature is `AmbientC` (the tab's slider, 15 to begin with), or comes by map and hour from a gauge mod by the same author while that runs: it publishes the temperature in a block of shared memory, whose layout `src\outside.h` has. The tab shows the temperature in force and the pressure the tires hold.
-- Hard mode (`HardMode`). The numbers and options nearest to real tires, all at once: a change takes half a minute and only while the truck stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla balance is on, no asphalt floor, no base grip, and the modes get these numbers:
+- Rolling drag (`RollingDrag`, off by default). Tires roll harder on soft ground and when aired down. The mod adds a rolling resistance to each wheel on the ground: Crr × the wheel's share of the weight, by the ground under it (paved 0.010, rock 0.015, gravel 0.020, dirt 0.030, sand 0.060, ice 0) and by the pressure (Low ×1.49, Reduced ×1.24, Increased ×0.89). On paved ground at Normal that slows a truck by about 0.1 m/s², in sand at Low by about 0.9. It goes in through the wheels' damping, as the game drags a flat tire, so it acts with the foot off too. Mud counts as dirt for now. The weight is the truck's as the game's physics has it, without cargo or a trailer.
+- Hard mode (`HardMode`). The numbers and options nearest to real tires, all at once: a change takes half a minute and only while the truck stands, the tires feel the outside temperature, soft tires wear, flattened tires roll like real ones, vanilla balance is on, rolling drag is on, no asphalt floor, no base grip, and the modes get these numbers:
 
 | | Low | Reduced | Increased |
 |---|---|---|---|
@@ -101,23 +102,23 @@ Four settings in the tab and the ini. The first two are on by default.
 | Grip on asphalt | x0.8 | x0.9 | x0.97 |
 | Grip in mud | x1.35 | x1.18 | x0.9 |
 | Tire radius | up to 5 cm less | up to 2.5 cm less | unchanged |
-| Fuel use while moving | x1.25 | x1.12 | x0.96 |
+| Fuel use while moving | x1 | x1 | x1 |
 | Steering speed | x0.8 | x0.9 | x1.05 |
 | Wear starts above | 30 km/h | 50 km/h | |
 | Most wear from | 55 km/h | 75 km/h | |
 | Damage per wheel | 2 to 10 | 1 to 6 | |
 | Every | 8 seconds | 10 seconds | |
 
-Airing a tire down to half its pressure lengthens its contact patch by about half, which is that much more grip on sand and soft ground and a little less on hard ground; over-inflating does the reverse and gains nothing on asphalt. A soft tire's sidewalls flex and heat at speed, so its wear starts higher up than the defaults but ends a tire faster. While hard mode is on, every other setting but the outside temperature, the controls, the panel and the sounds is greyed out in the tab, and `TirePressure.ini` keeps your own numbers for when it is off.
+Airing a tire down to half its pressure lengthens its contact patch by about half, which is that much more grip on sand and soft ground and a little less on hard ground; over-inflating does the reverse and gains nothing on asphalt. A soft tire's sidewalls flex and heat at speed, so its wear starts higher up than the defaults but ends a tire faster. The fuel stays at x1, as the engine burns more against the rolling drag by itself. While hard mode is on, every other setting but the outside temperature, the controls, the panel and the sounds is greyed out in the tab, and `TirePressure.ini` keeps your own numbers for when it is off.
 
-- Globalhacker insanity mode (`InsaneMode`), built from the own settings of the player Globalhacker. Harder than real tires, for players who want the game to fight back: Low grips x2 on dirt and x0.4 on asphalt, Reduced x1.5 and x0.45; soft tires wear from 15 km/h in Low (the most from 20, 8 to 16 every 2 seconds) and from 20 km/h in Reduced (the most from 25, 4 to 12 every 2 seconds), so they are worn out within seconds a little too fast; a change takes 25 seconds and only while the truck stands; flattened tires lose the speed the smaller wheel loses; no Increased mode; and the vanilla balance at 2. Hard mode and the insanity mode exclude each other and grey out the same settings.
+- Globalhacker insanity mode (`InsaneMode`), built from the own settings of the player Globalhacker. Harder than real tires, for players who want the game to fight back: Low grips x2 on dirt and x0.4 on asphalt, Reduced x1.5 and x0.45; soft tires wear from 15 km/h in Low (the most from 20, 8 to 16 every 2 seconds) and from 20 km/h in Reduced (the most from 25, 4 to 12 every 2 seconds), so they are worn out within seconds a little too fast; a change takes 25 seconds and only while the truck stands; flattened tires lose the speed the smaller wheel loses; no Increased mode; the vanilla balance at 2; and rolling drag on. Hard mode and the insanity mode exclude each other and grey out the same settings.
 
 ## Settings
 
 The NEXT GEN menu has a Tire Inflation tab. It shows the truck's tires, the ground under the first wheel and the speed, and it edits every setting while you play. F2 opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. With Next Gen Gameplay installed, its Gameplay tab is in the same window. While the menu is open the game gets no mouse and no keys, and the panel's key and pad buttons rest. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
 
 - Every number in the two tables of the modes, and tire damage on or off.
-- Hard mode, changes only while standing still, whether each truck keeps its own pressure, the outside temperature and whether the tires feel it.
+- Hard mode, rolling drag, changes only while standing still, whether each truck keeps its own pressure, the outside temperature and whether the tires feel it.
 - Whether flattened tires roll like real ones. On by default. Off, the truck loses about three times as much speed.
 - Vanilla balance: tires that grip better than every vanilla tire on ground, asphalt and mud at once (some modded trucks have them) come down just far enough that some vanilla tire, of any kind, matches or beats them in all three. Vanilla tires stay as they are. Off by default. Its strength goes from 0 to 2: 1 brings such a tire to the vanilla tire, above 1 below it (at 2 the tire's ratio to the vanilla tire counts twice, so three times the vanilla grip ends at a third of it), for modded trucks that should be harder to drive than vanilla ones.
 - Base grip for ground, asphalt and mud: scales every mode, Normal too.

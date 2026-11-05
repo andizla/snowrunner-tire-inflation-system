@@ -20,6 +20,7 @@
 #include <tlhelp32.h>
 #include <intrin.h>
 #include <stdio.h>
+#include <share.h>
 #include <stdint.h>
 #include <math.h>
 #include <string>
@@ -111,14 +112,16 @@ static int g_mode = kNormal;
 static Mode g_now = g_modes[kNormal]; // the factors in force, moving towards g_modes[g_mode]
 
 // The log is rewritten at each game start. This thread and the game's render thread (the overlay, PanelLog) both write it: one at a
-// time, as the file is opened for one writer and a second open would fail and lose its line.
+// time, under the lock. The file is opened sharing writing, so the crash line's own handle (CrashLineOut) gets in while a line
+// is being written: the C runtime's handler can come from inside a Log call (review F1).
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in (a second copy of the mod sets it to add to the first copy's log)
+static FILE *LogOpen() { return _wfsopen((g_dir + L"TirePressure.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8", _SH_DENYNO); }
 static void LogV(const wchar_t *fmt, va_list ap)
 {
     AcquireSRWLockExclusive(&g_logLock);
-    FILE *f = nullptr;
-    if (_wfopen_s(&f, (g_dir + L"TirePressure.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8") == 0 && f)
+    FILE *f = LogOpen();
+    if (f)
     {
         g_logStarted = true;
         SYSTEMTIME t;
@@ -139,21 +142,26 @@ static void Log(const wchar_t *fmt, ...)
     va_end(ap);
 }
 
-// The crash line's file, and its writer: one line into TirePressure.log with no heap and no lock (crt_line.h), as the
-// C runtime's handler may come while either is held.
-static wchar_t g_crashLog[MAX_PATH + 32];
+// The crash line's handle on TirePressure.log, opened once as the handlers are set and kept (it appends and shares
+// reading and writing with the log's own opens), and its writer: one line with no heap and no lock (crt_line.h), as
+// the C runtime's handler may come while either is held.
+static HANDLE g_crashFile = INVALID_HANDLE_VALUE;
+static bool CrashFileOpen()
+{
+    if (g_crashFile == INVALID_HANDLE_VALUE)
+        g_crashFile = CreateFileW((g_dir + L"TirePressure.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
+    return g_crashFile != INVALID_HANDLE_VALUE;
+}
 static void CrashLineOut(const char *text)
 {
+    if (g_crashFile == INVALID_HANDLE_VALUE) return;
     SYSTEMTIME st;
     GetLocalTime(&st);
     char line[1400];
     const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
-    const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return;
     DWORD wrote = 0;
-    if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
-    FlushFileBuffers(f);
-    CloseHandle(f);
+    if (n > 0) WriteFile(g_crashFile, line, (DWORD)n, &wrote, nullptr);
+    FlushFileBuffers(g_crashFile);
 }
 
 
@@ -1741,10 +1749,13 @@ static DWORD WINAPI Run(void *)
             Log(L"driven truck found: %zu wheels", wheels.size());
             // the crash line (round 4): the C runtime's invalid parameters and abort named in this log. ucrtbase.dll's
             // handlers are Gauges' where Gauges.asi is loaded, so the line is not written twice
-            wcsncpy_s(g_crashLog, (g_dir + L"TirePressure.log").c_str(), _TRUNCATE);
             wchar_t crt[320];
-            crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
-            Log(L"crash line: %s", crt);
+            if (CrashFileOpen())
+            {
+                crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
+                Log(L"crash line: %s", crt);
+            }
+            else Log(L"crash line: none, as TirePressure.log could not be opened for it (error %lu)", GetLastError());
             if (g_overlayOk && !g_padOk) Log(L"pad: none of the game's XInputGetState pointers found so far: the pad works the panel, the game sees the presses too");
             if (g_probeByHand) Log(L"tire damage: dealt by hand (ProbeByHand=1)");
             else if (HookTruckUpdate()) Log(L"tire damage: dealt on the game's own thread, from its truck update, with its damage update after");
@@ -2359,8 +2370,36 @@ static bool PadCurveTest()
     return ok;
 }
 
-// The pad's rule with the default bindings: what the filter hides from the game (PadHide), when a step counts
-// (PadStep), and a step binding with a shoulder read from an ini.
+// The crash line lands while a Log call has the file open (review F1): written between the log's own lines, in order.
+static bool CrashLogTest()
+{
+    g_logStarted = false;
+    Log(L"crash test: the first line");
+    const bool opened = CrashFileOpen();
+    AcquireSRWLockExclusive(&g_logLock);
+    FILE *held = LogOpen();
+    CrashLineOut("crash: test line while the log is open");
+    if (held) fclose(held);
+    ReleaseSRWLockExclusive(&g_logLock);
+    Log(L"crash test: after");
+    std::string text;
+    FILE *f = _wfsopen((g_dir + L"TirePressure.log").c_str(), L"rb", _SH_DENYNO); // the crash line's handle is still open
+    if (f)
+    {
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+        fclose(f);
+    }
+    const size_t first = text.find("crash test: the first line\r\n"), crash = text.find(" crash: test line while the log is open\r\n"), after = text.find("crash test: after\r\n");
+    const bool ok = opened && held && first != std::string::npos && crash != std::string::npos && after != std::string::npos && first < crash && crash < after;
+    printf("%s crash line: written into TirePressure.log while a Log call has it open, between its lines\n", ok ? "ok  " : "FAIL");
+    if (!ok) printf("     opened %d, held %d, at %zd %zd %zd\n", opened, held != nullptr, (ptrdiff_t)first, (ptrdiff_t)crash, (ptrdiff_t)after);
+    CloseHandle(g_crashFile);
+    g_crashFile = INVALID_HANDLE_VALUE;
+    return ok;
+}
+
 // The game's function menu: d-pad right with the panel open walks no step while the menu is up, nor for 250 ms after
 // it closes, and a d-pad held over the menu gives no step until let go; the filter hides nothing new while it is up.
 // The pass as Run has it: the gate from this pass's flags, the pad zeroed while it holds, the last pass's buttons kept.
@@ -2414,6 +2453,8 @@ static bool GameMenuTest()
     return ok && hold && places;
 }
 
+// The pad's rule with the default bindings: what the filter hides from the game (PadHide), when a step counts
+// (PadStep), and a step binding with a shoulder read from an ini.
 static bool PadRuleTest()
 {
     const uint32_t LB = XINPUT_GAMEPAD_LEFT_SHOULDER, RB = XINPUT_GAMEPAD_RIGHT_SHOULDER, UP = XINPUT_GAMEPAD_DPAD_UP,
@@ -3227,6 +3268,7 @@ int wmain(int argc, wchar_t **argv)
     if (!PadCurveTest()) return 1;
     if (!PadRuleTest()) return 1;
     if (!GameMenuTest()) return 1;
+    if (!CrashLogTest()) return 1;
     if (!WornGripTest()) return 1;
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;

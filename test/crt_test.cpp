@@ -2,7 +2,8 @@
 // each case and checks the exit code and the line in crt_test.log beside it:
 //   own      _invalid_parameter_noinfo of this exe's own runtime, no handler before: the line, then 0xC0000409
 //   game     the same through ucrtbase.dll, loaded as the game has it: the line names ucrtbase.dll, then 0xC0000409
-//   before   a handler set before ours that returns: the line, then strcpy_s gives EINVAL and the program goes on
+//   before   a handler set before ours that returns: the line, then strcpy_s gives EINVAL and the program goes on;
+//            five such calls give three lines, and an invalid parameter with no handler after them still gets its line
 //   abort    abort(): the line, and the exit code abort gives without our handler (plain)
 #include "crt_line.h"
 #include <errno.h>
@@ -82,9 +83,13 @@ int wmain(int argc, wchar_t **argv)
         else if (mode == L"before")
         {
             char room[4];
-            const errno_t e = strcpy_s(room, sizeof room, nullptr);
-            Note(e == EINVAL && g_beforeCalls == 1 ? "test: EINVAL, the handler before was called, and the program goes on" : "test: not as wanted");
-            return 0;
+            bool einval = true;
+            for (int i = 0; i < 5; i++) einval = einval && strcpy_s(room, sizeof room, nullptr) == EINVAL;
+            Note(einval && g_beforeCalls == 5 ? "test: EINVAL, the handler before was called, and the program goes on" : "test: not as wanted");
+            crtline::g_rt[crtline::kOwn].before = nullptr; // as if none had been set: the next one ends the program
+            _invalid_parameter_noinfo();
+            Note("test: the program went on");
+            return 7;
         }
         else if (mode == L"abort" || mode == L"plain") abort();
         Note("test: the program went on");
@@ -107,10 +112,14 @@ int wmain(int argc, wchar_t **argv)
     DeleteFileW(g_logPath);
     const DWORD before = Child(self, L"before");
     const std::string beforeLog = LogText();
-    Check(before == 0 && beforeLog.find("crash: an invalid parameter in the mod's own runtime") == 0 &&
-              beforeLog.find("; passed on to the handler set before ours\r\ntest: EINVAL, the handler before was called, and the program goes on\r\n") != std::string::npos,
-          "a handler set before ours: the line, then it is called, the call gives EINVAL and the program goes on");
-    if (before != 0) printf("     exit code %08lX\n%s", before, beforeLog.c_str());
+    size_t passed = 0;
+    for (size_t at = beforeLog.find("; passed on to the handler set before ours\r\n"); at != std::string::npos; at = beforeLog.find("; passed on to the handler set before ours\r\n", at + 1)) passed++;
+    Check(before == 0xC0000409 && beforeLog.find("crash: an invalid parameter in the mod's own runtime") == 0 && passed == 3 &&
+              beforeLog.find("; passed on to the handler set before ours\r\ntest: EINVAL, the handler before was called, and the program goes on\r\ncrash: ") != std::string::npos &&
+              beforeLog.find("; the program ends with a fast fail (0xC0000409), as with no handler\r\n") != std::string::npos && beforeLog.find("went on") == std::string::npos,
+          "a handler set before ours: the line, then it is called, the call gives EINVAL and the program goes on; five such calls give three lines, and the fatal "
+          "line after them is still written");
+    if (before != 0xC0000409 || passed != 3) printf("     exit code %08lX\n%s", before, beforeLog.c_str());
     DeleteFileW(g_logPath);
     const DWORD plain = Child(self, L"plain");
     const bool plainSilent = LogText().empty();

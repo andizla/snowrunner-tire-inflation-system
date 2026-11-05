@@ -12,7 +12,8 @@
 // running any code of the process: it cannot be caught here. Only a dump names it.
 //
 // A handler set before ours decides: ours writes its line, calls it and returns as it does, so a game that goes on
-// after EINVAL goes on (the lines are capped at kLines). Only when none was set does ours end the program with
+// after EINVAL goes on (those lines are capped at kLines; the line before an end is always written). Only when none
+// was set does ours end the program with
 // __fastfail(FAST_FAIL_INVALID_ARG), which is what the runtime would have done. SIGABRT's handler returns: abort then
 // ends the program its own way (a fast fail, or _exit(3)). It never calls abort itself.
 //
@@ -33,7 +34,7 @@ typedef void(__cdecl *SignalHandlerFn)(int);
 typedef SignalHandlerFn(__cdecl *SignalFn)(int, SignalHandlerFn);
 
 static const int kFrames = 16; // the runtime's own frames come first (_invalid_parameter, the function, its helpers)
-static const long kLines = 3;  // a game that goes on after EINVAL may come here often
+static const long kLines = 3;  // lines passed on to a handler that returns: a game that goes on after EINVAL may come here often
 
 enum { kGame, kOwn, kRuntimes };
 struct Runtime
@@ -59,10 +60,11 @@ inline int Place(const void *at, char *out, size_t size)
     return _snprintf_s(out, size, _TRUNCATE, "%ls+%llx", name, module ? (unsigned long long)((const uint8_t *)at - (const uint8_t *)module) : (unsigned long long)at);
 }
 
-// One line: what came, from which runtime, what the debug runtime names, the callers, and what happens next.
-inline void Write(int k, const char *what, bool invalid, const wchar_t *expr, const wchar_t *fn, const wchar_t *file, unsigned line, const char *then)
+// One line: what came, from which runtime, what the debug runtime names, the callers, and what happens next. capped:
+// the program may go on after it, so it counts against kLines; a line before an end is always written.
+inline void Write(int k, const char *what, bool invalid, const wchar_t *expr, const wchar_t *fn, const wchar_t *file, unsigned line, const char *then, bool capped)
 {
-    if (!g_out || InterlockedIncrement(&g_lines) > kLines) return;
+    if (!g_out || (capped && InterlockedIncrement(&g_lines) > kLines)) return;
     char text[1300];
     int used = _snprintf_s(text, sizeof text, _TRUNCATE, "crash: %s in %s, thread %lu; ", what, g_rt[k].name, GetCurrentThreadId());
     if (used < 0) used = (int)strlen(text);
@@ -92,7 +94,7 @@ template <int K> void __cdecl InvalidParameter(const wchar_t *expr, const wchar_
 {
     const InvalidParameterFn before = g_rt[K].before;
     Write(K, "an invalid parameter", true, expr, fn, file, line,
-          before ? "passed on to the handler set before ours" : "the program ends with a fast fail (0xC0000409), as with no handler");
+          before ? "passed on to the handler set before ours" : "the program ends with a fast fail (0xC0000409), as with no handler", before != nullptr);
     if (before)
     {
         before(expr, fn, file, line, reserved);
@@ -106,7 +108,7 @@ template <int K> void __cdecl Abort(int sig)
     const SignalHandlerFn before = g_rt[K].abortBefore;
     const bool chained = before && before != SIG_DFL && before != SIG_IGN && before != SIG_ERR;
     Write(K, "abort (SIGABRT)", false, nullptr, nullptr, nullptr, 0,
-          chained ? "passed on to the handler set before ours, then abort ends the program its own way" : "abort ends the program its own way");
+          chained ? "passed on to the handler set before ours, then abort ends the program its own way" : "abort ends the program its own way", false);
     if (chained) before(sig);
 }
 

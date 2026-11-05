@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option `WINEDLLOVERRIDES="version=n,b" %command%`. Before, the mods never loaded there, and with that option the game would not start.
 - With Spotter installed (its draw API, version 1 or later), the overlay draws through Spotter's frame hook instead of a hook of its own, where ReShade has not taken it as an add-on. `NextGen.ini` `[Overlay] Spotter=0` turns it off. While the NEXT GEN menu is open, the game gets no mouse or keys and Spotter's hotkeys rest. While Spotter's own menu or big map is open, the menu's key does nothing.
 - Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone. The log says which route the overlay takes. ReShade's `dxgi.dll` and `ReShade.ini` stay in the zip for RivaTuner users, whose game does not boot without it. The mods draw without it.
 

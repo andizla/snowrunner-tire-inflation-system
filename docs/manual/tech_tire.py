@@ -367,12 +367,11 @@ torque Crr·<i>N</i>·<i>r</i>. So (<code>rolling_drag.h</code>):</p>
 <p class="where"><i>c</i><sub>stock</sub> is wheel +0xAC, the game's own figure, never the body's word read back. <i>r</i> is
 wheel +0x94. <i>I</i> is the wheel body's inertia about its axle: 1 over body +0x220's x, y or z, the one that stands apart
 (<code>RollAxle</code>). ω is the body's angular velocity (+0x240) along that axle's column of the rotation (+0x170). <i>M</i> is
-the Havok mass, the sum of every body of the truck the mod finds: the chassis's 1/w (body +0x22C, the chassis at model +0x230),
-every wheel body's, and each body a wheel's constraint (wheel +0x28, its attach point +0xA0) hangs on where that is not the
-chassis. That body is looked for two pointer levels behind the wheel object, among bodies of the chassis's class: the attach point
-in its frame lies at the wheel's centre (+0x13C), within 0.5 m along and 1 m across, as Gauges' <code>suspension_step.h</code> finds
-it. The search runs on the mod's thread at each truck and when its wheel objects change. Until a truck shows such a body, the
-chassis and the wheels are the sum. <i>n</i> is the wheels with
+the mass the physics moves: model +0x784, the game's own sum of the truck's bodies but the wheels (the chassis, a cab on a hinge,
+an antenna, the steering pivot; the chassis's body alone misses the cab), and every wheel body's 1/w (body +0x22C). In <i>N</i>
+each body comes with its Havok gravity factor: <i>N</i> = (model +0x784 × the chassis's factor + Σ each wheel's 1/w × its own) ×
+<i>g</i> / <i>n</i>. Havok keeps the factor as a half in the body's motion after the velocities, at body +0x282 by its own layout.
+Until that place is confirmed in the game the factor is 1, and the truck's line says so, with what the place reads. <i>n</i> is the wheels with
 contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is held at 20 at most (the probe measured up to 8; at 60 frames a second <i>c</i>·dt reaches 1 at <i>c</i> = 60); the line a second counts the frames where it bites.</p>
 <p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
 floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never
@@ -386,7 +385,7 @@ last (the game wrote it: compared as a word, never taken as a stock), or when <i
 last word itself. A broken wheel (model +0x328) keeps the game's own. A wheel off the ground, the truck left for another and the
 setting off get the stock back, where the body still holds the mod's word. While the probe (<code>ProbeRoll</code>) holds a
 damping of its own, the drag waits. Without the truck update hook it stays off, with a log line.</p>
-<p><b>The log.</b> A line per truck with the Havok mass, each body in it and the files' mass beside it (model +0x784), <i>N</i>, the first wheel's <i>I</i>, <i>r</i> and stock damping, the
+<p><b>The log.</b> A line per truck with the chassis body's 1/w, the files' sum of the bodies (model +0x784), the wheels, the gravity factor, <i>N</i> and the mass, the first wheel's <i>I</i>, <i>r</i> and stock damping, the
 Crr and the pressure factor. With <code>ProbeRoll=1</code> also one a second while the truck moves: each wheel's ground,
 Crr × <i>f</i>, the <i>c</i> in its body, its spin, and the torque <i>I</i>·(<i>c</i> − <i>c</i><sub>stock</sub>)·ω against
 Crr·<i>f</i>·<i>N</i>·<i>r</i>.</p>

@@ -1448,20 +1448,39 @@ static int RollStockBack(const std::vector<WheelRef> &wheels)
 // holds another word than that one. A broken wheel keeps the game's own; an airborne one, the stock. Off, on another
 // truck and while the probe holds a damping of its own: the stock back into every wheel that still holds the mod's
 // word. The mod's thread only reads what it did (g_dragStats).
-// The mass is every Havok body of the truck the mod reaches (the Reviewer, 00:36): the chassis, the wheels, and each
-// body a wheel's constraint hangs on where that is not the chassis (DragFindBodies, on the mod's thread, as Gauges'
-// suspension_step.h finds them; a cab, a bed or an axle of its own). Until a truck shows one, the chassis and the
-// wheels are the sum.
-static const int kDragExtraMost = 8;
-struct DragExtra { uint64_t vehicle, vtable; int count; uint64_t body[kDragExtraMost]; int wheel[kDragExtraMost]; };
-static SRWLOCK g_dragExtraLock = SRWLOCK_INIT;
-static DragExtra g_dragExtra = {}; // under g_dragExtraLock: the mod's thread's last search
+// The mass (the Reviewer's F1, 00:43, from a truck's own file): model + 0x784 is the game's own sum of the truck's
+// bodies but the wheels (the chassis, a cab on a hinge, an antenna, the steering pivot; the chassis's body alone misses
+// the cab), and each wheel body's 1/w comes on top. The weight on the tires takes in each body's gravity factor, a
+// Havok half in the motion after the velocities: N = (model + 0x784 × the chassis's factor + Σ wheel 1/w × its own)
+// × g over the wheels on the ground. Where Havok keeps the factor is not confirmed in the game yet: Havok's own layout
+// puts it at body + 0x282 (after the deactivation places, the saved motion and its quality index), which the line
+// shows, and until it is confirmed the factor is 1 (g_dragGravityKnown).
+static const uint32_t kDragGravityAt = 0x282;
+static bool g_dragGravityKnown = false;
 struct DragKept { WheelRef w; RdRecord rec; };
 static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
-struct DragWheelStat { int index; RdGround ground; float crr, r, inertia, spin, stock, c, mass; bool grounded, broken, written; };
-struct DragStats { uint64_t vehicle, extraOf; float mass, chassis, factor, n, files; int count, grounded, extras, capped; LONG frames, writes, cappedFrames; DragWheelStat w[kRollWheelsMost];
-                   uint64_t extraBody[kDragExtraMost]; int extraWheel[kDragExtraMost]; float extraMass[kDragExtraMost]; };
+struct DragWheelStat { int index; RdGround ground; float crr, r, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written; };
+struct DragStats { uint64_t vehicle; float mass, chassis, files, gravity, gravityRead, factor, n; int count, grounded, capped; LONG frames, writes, cappedFrames;
+                   DragWheelStat w[kRollWheelsMost]; };
+static SRWLOCK g_dragLock = SRWLOCK_INIT;
+static DragStats g_dragStats = {}; // under g_dragLock: the last frame's, and the counts since the truck came
+static volatile LONG g_dragBacks = 0;  // wheels the stock went back into
+
+// A body's gravity factor as Havok keeps it (kDragGravityAt, a half): what it reads, 0 where it is no factor a body has.
+static float DragGravityRead(uint64_t body)
+{
+    WORD half = 0;
+    if (!Read(body + kDragGravityAt, half)) return 0.0f;
+    const float g = HalfToFloat(half);
+    return g > 0.05f && g < 20.0f ? g : 0.0f;
+}
+// The factor counted: the read one once its place is confirmed, else 1.
+static float DragGravity(uint64_t body)
+{
+    const float g = g_dragGravityKnown ? DragGravityRead(body) : 0.0f;
+    return g > 0.0f ? g : 1.0f;
+}
 
 // A Havok body's mass, 1 over its inverse mass (body + 0x22C); 0 where it is not a mass a truck's body can have.
 static float DragBodyMass(uint64_t body)
@@ -1471,80 +1490,6 @@ static float DragBodyMass(uint64_t body)
     const float m = Inverse(inv);
     return m > 0.01f && m < 1.0e5f ? m : 0.0f;
 }
-
-// A value that may be an address in the game's heap: not in the exe's image, in a program's range, aligned (as Gauges'
-// ClockPointer).
-static bool DragPointer(uint64_t q, uint64_t imageSize) { return q >= 0x10000 && q < 0x7FFFFFFFFFFFull && !(q & 7) && !(q >= g_base && q < g_base + imageSize); }
-
-// Whether a wheel's constraint attach point (in a body's frame) lies at the wheel: within 0.5 m along the body's
-// forward axis and 1 m across (Gauges' SuspBodyFits). frame: + 0x170 forward, + 0x180 up, + 0x190 left, + 0x1A0 place.
-static bool DragBodyFits(const float frame[16], const float attach[3], const float wheel[3])
-{
-    const float *f = frame, *u = frame + 4, *l = frame + 8, *p = frame + 12;
-    float d[3];
-    for (int k = 0; k < 3; k++) d[k] = wheel[k] - (p[k] + attach[0] * f[k] + attach[1] * u[k] + attach[2] * l[k]);
-    const float along = d[0] * f[0] + d[1] * f[1] + d[2] * f[2], across = d[0] * l[0] + d[1] * l[1] + d[2] * l[2];
-    return fabsf(along) < 0.5f && fabsf(across) < 1.0f;
-}
-
-// The mod's thread: for each wheel whose constraint ([wheel + 0x28], its attach point at + 0xA0) does not fit the chassis,
-// the body of the chassis's class behind the wheel object, two pointer levels deep, whose frame it fits (each body
-// once, the chassis and the wheels' own left out). imageSize: the exe's, so a pointer into it is no body.
-static DragExtra DragFindBodies(uint64_t vehicle, const std::vector<WheelRef> &wheels, uint64_t imageSize)
-{
-    DragExtra e = {};
-    e.vehicle = vehicle;
-    uint64_t model = 0, chassis = 0;
-    float chassisFrame[16] = {};
-    if (!Read(vehicle + 0x60, model) || !Read(model + 0x230, chassis) || !Read(chassis, e.vtable) || !Read(chassis + 0x170, chassisFrame)) return e;
-    auto known = [&](uint64_t q) {
-        if (q == chassis) return true;
-        for (const WheelRef &w : wheels)
-            if (w.body == q) return true;
-        for (int k = 0; k < e.count; k++)
-            if (e.body[k] == q) return true;
-        return false;
-    };
-    static uint64_t first[0x800 / 8], second[0x400 / 8];
-    for (const WheelRef &w : wheels)
-    {
-        uint64_t constraint = 0;
-        float attach[3] = {}, at[3] = {};
-        if (!Read(w.wheel + 0x28, constraint) || !Read(constraint + 0xA0, attach) || !Read(w.wheel + 0x13C, at)) continue;
-        if (DragBodyFits(chassisFrame, attach, at)) continue;
-        // a body of the chassis's class whose frame the attach point fits: a new one is added; one another wheel found
-        // already ends this wheel's search too
-        auto tryBody = [&](uint64_t q) {
-            uint64_t vt = 0;
-            float frame[16];
-            if (!DragPointer(q, imageSize) || !Read(q, vt) || vt != e.vtable || q == chassis || !Read(q + 0x170, frame) || !DragBodyFits(frame, attach, at))
-                return false;
-            for (int k = 0; k < e.count; k++)
-                if (e.body[k] == q) return true;
-            if (known(q) || e.count >= kDragExtraMost || DragBodyMass(q) <= 0.0f) return false;
-            e.body[e.count] = q;
-            e.wheel[e.count++] = w.index;
-            return true;
-        };
-        // an object near the end of its memory gives its first 0x100 bytes (as Gauges reads them)
-        auto partial = [](uint64_t at, uint64_t *buf, size_t size) { memset(buf, 0, size); return Read(at, *(uint64_t (*)[0x100 / 8])buf) || false; };
-        if (!Read(w.wheel, first) && !partial(w.wheel, first, sizeof first)) continue;
-        bool found = false;
-        for (int a = 0; a < 0x800 / 8 && !found; a++)
-        {
-            const uint64_t q = first[a];
-            uint64_t vt = 0;
-            if (!DragPointer(q, imageSize) || !Read(q, vt)) continue;
-            if (vt == e.vtable) { found = tryBody(q); continue; }
-            if (!Read(q, second) && !partial(q, second, sizeof second)) continue;
-            for (int b = 0; b < 0x400 / 8 && !found; b++) found = tryBody(second[b]);
-        }
-    }
-    return e;
-}
-static SRWLOCK g_dragLock = SRWLOCK_INIT;
-static DragStats g_dragStats = {}; // under g_dragLock: the last frame's, and the counts since the mod's thread took them
-static volatile LONG g_dragBacks = 0;  // wheels the stock went back into
 
 // The stock back into each kept wheel that still is that wheel, is not broken and holds the mod's last word.
 static int DragStockBack()
@@ -1564,9 +1509,8 @@ static int DragStockBack()
 }
 
 // One frame of rolling drag for a truck's wheels (on: the setting in force and nothing else holding the damping).
-// Writes made; stats, where given, what it found. extra: the bodies the mod's thread found behind the wheels (for this
-// vehicle, else none), each counted while it is still of the chassis's class and has a mass.
-static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool on, float factor, DragStats *stats, const DragExtra *extra = nullptr)
+// Writes made; stats, where given, what it found.
+static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool on, float factor, DragStats *stats)
 {
     if (!on || vehicle != g_dragVehicle)
     {
@@ -1574,50 +1518,38 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         g_dragVehicle = on ? vehicle : 0;
     }
     if (!on || !vehicle || wheels.empty()) return 0;
-    // the mass the physics moves: the chassis's, every wheel's, and each other body a wheel's constraint hangs on
-    uint64_t model = 0, chassis = 0, vtable = 0;
+    // the mass the physics moves: the game's sum of the truck's bodies (model + 0x784) and every wheel's; the weight
+    // with each one's gravity factor
+    uint64_t model = 0, chassis = 0;
     float files = 0;
-    const float chassisMass = Read(vehicle + 0x60, model) && Read(model + 0x230, chassis) ? DragBodyMass(chassis) : 0.0f;
-    Read(model + 0x784, files);
-    Read(chassis, vtable);
-    float mass = chassisMass;
+    const bool modelOk = Read(vehicle + 0x60, model) && Read(model + 0x784, files) && files > 1.0f && files < 1.0e6f;
+    Read(model + 0x230, chassis);
+    const float chassisMass = chassis ? DragBodyMass(chassis) : 0.0f, chassisGravity = DragGravity(chassis);
+    float mass = modelOk ? files : 0.0f, weight = modelOk ? files * chassisGravity : 0.0f;
     int grounded = 0;
     const size_t count = min(wheels.size(), (size_t)kRollWheelsMost);
     RollBody bodies[kRollWheelsMost];
     BYTE contact[kRollWheelsMost] = {};
-    float wheelMass[kRollWheelsMost] = {};
+    float wheelMass[kRollWheelsMost] = {}, wheelGravity[kRollWheelsMost] = {};
     for (size_t i = 0; i < count; i++)
     {
         bodies[i] = ReadRollBody(wheels[i].body);
         wheelMass[i] = bodies[i].ok ? DragBodyMass(wheels[i].body) : 0.0f;
+        wheelGravity[i] = DragGravity(wheels[i].body);
         mass += wheelMass[i];
+        weight += wheelMass[i] * wheelGravity[i];
         if (Read(wheels[i].wheel + 0x1A4, contact[i]) && contact[i]) grounded++;
     }
-    int extras = 0;
-    if (extra && extra->vehicle == vehicle && extra->vtable == vtable)
-        for (int k = 0; k < extra->count && k < kDragExtraMost; k++)
-        {
-            uint64_t vt = 0;
-            const float m = Read(extra->body[k], vt) && vt == vtable ? DragBodyMass(extra->body[k]) : 0.0f;
-            mass += m;
-            if (stats)
-            {
-                stats->extraBody[extras] = extra->body[k];
-                stats->extraWheel[extras] = extra->wheel[k];
-                stats->extraMass[extras] = m;
-            }
-            extras++;
-        }
-    const bool massOk = chassisMass > 1.0f && mass < 1.0e6f && grounded > 0;
-    const float n = massOk ? mass * kRdG / (float)grounded : 0.0f;
+    const bool massOk = modelOk && mass < 1.0e6f && grounded > 0;
+    const float n = massOk ? weight * kRdG / (float)grounded : 0.0f;
     if (stats)
     {
         stats->vehicle = vehicle;
-        stats->extraOf = extra ? extra->vehicle : 0;
-        stats->extras = extras;
         stats->mass = mass;
         stats->chassis = chassisMass;
         stats->files = files;
+        stats->gravity = chassisGravity;
+        stats->gravityRead = chassis ? DragGravityRead(chassis) : 0.0f;
         stats->factor = factor;
         stats->n = n;
         stats->count = (int)count;
@@ -1631,6 +1563,7 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         DragWheelStat st = {};
         st.index = w.index;
         st.mass = wheelMass[i];
+        st.gravity = wheelGravity[i];
         const DragKept *was = nullptr;
         for (const DragKept &k : g_dragKept)
             if (k.w.wheel == w.wheel && k.w.body == w.body) was = &k;
@@ -1695,15 +1628,8 @@ static void RollingDragTruckUpdate(uint64_t vehicle)
     uint64_t driven = 0;
     const std::vector<WheelRef> wheels = CurrentWheels(&driven);
     if (driven != vehicle) return;
-    // the mod's thread's search, copied when it is free (else the copy of the frame before)
-    static DragExtra extra = {};
-    if (TryAcquireSRWLockShared(&g_dragExtraLock))
-    {
-        extra = g_dragExtra;
-        ReleaseSRWLockShared(&g_dragExtraLock);
-    }
     DragStats stats = {};
-    const int writes = RollingDragFrame(vehicle, wheels, g_dragOn != 0, g_dragFactor, &stats, &extra);
+    const int writes = RollingDragFrame(vehicle, wheels, g_dragOn != 0, g_dragFactor, &stats);
     if (!TryAcquireSRWLockExclusive(&g_dragLock)) return; // the mod's thread is reading: next frame
     stats.frames = g_dragStats.vehicle == vehicle ? g_dragStats.frames + 1 : 1;
     stats.writes = (g_dragStats.vehicle == vehicle ? g_dragStats.writes : 0) + writes;
@@ -1956,6 +1882,25 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
         }
         Log(L"probe roll: masses: chassis 1/w %.0f kg (1/x 1/y 1/z %.0f %.0f %.0f kg m2), the files' %.0f kg (model+0x784), the wheels' %.0f kg%s", masses[0],
             Inverse(chassisInv[0]), Inverse(chassisInv[1]), Inverse(chassisInv[2]), files, wheelSum, list.c_str());
+        // the gravity factor's place (rolling drag's N): Havok keeps it as a half in the motion after the velocities, at
+        // + 0x282 by its own layout; every half from + 0x250 to + 0x2BE that reads 0.1 to 10, on the chassis and the first
+        // wheel, so a truck with a factor of its own (1.4 on some) shows where it lies
+        auto halves = [](uint64_t body) {
+            std::wstring out;
+            WORD h[(0x2C0 - 0x250) / 2] = {};
+            if (!Read(body + 0x250, h)) return std::wstring(L" not read");
+            for (int k = 0; k < (int)(sizeof h / sizeof h[0]); k++)
+            {
+                const float v = HalfToFloat(h[k]);
+                if (!(v >= 0.1f && v <= 10.0f)) continue;
+                wchar_t one[32];
+                swprintf_s(one, L" +0x%X %.3f", 0x250 + k * 2, v);
+                out += one;
+            }
+            return out.empty() ? std::wstring(L" none") : out;
+        };
+        Log(L"probe roll: the gravity factor's place: body+0x%X reads %.3f on the chassis, %.3f on the first wheel; halves 0.1 to 10 from +0x250, the chassis:%s; the first wheel:%s",
+            kDragGravityAt, DragGravityRead(chassis), DragGravityRead(wheels[0].body), halves(chassis).c_str(), halves(wheels[0].body).c_str());
     }
     // each wheel's damping and spin
     std::wstring list;
@@ -2001,28 +1946,6 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
 // hook is in (else off, with a line saying why), the pressure's factor, a line once per truck and, with ProbeRoll=1,
 // one a second while the truck moves: each wheel's ground, Crr, the c in its body and the torque that c means,
 // I·(c − stock)·ω, against Crr·N·r.
-static uint64_t ExeImageSize()
-{
-    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)g_base;
-    return ((const IMAGE_NT_HEADERS64 *)(g_base + dos->e_lfanew))->OptionalHeader.SizeOfImage;
-}
-
-// The bodies behind the wheels, looked for at each truck and when its wheel objects change (a recovery rebuilds them),
-// and handed to the truck update.
-static void DragBodiesLook(uint64_t vehicle, const std::vector<WheelRef> &wheels)
-{
-    static uint64_t lookedVehicle = 0, lookedWheels = 0;
-    uint64_t sum = 0;
-    for (const WheelRef &w : wheels) sum = sum * 31 + w.wheel + w.body;
-    if (vehicle == lookedVehicle && sum == lookedWheels) return;
-    lookedVehicle = vehicle;
-    lookedWheels = sum;
-    const DragExtra e = DragFindBodies(vehicle, wheels, ExeImageSize());
-    AcquireSRWLockExclusive(&g_dragExtraLock);
-    g_dragExtra = e;
-    ReleaseSRWLockExclusive(&g_dragExtraLock);
-}
-
 static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, ULONGLONG passAt)
 {
     static bool wasOn = false, noHookSaid = false;
@@ -2047,34 +1970,34 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
         Log(on ? L"rolling drag: on, written in the truck update" : L"rolling drag: off, the stock damping back in the wheels that hold the mod's");
     }
     if (!on || !truck) return;
-    DragBodiesLook(vehicle, wheels);
     DragStats s;
     AcquireSRWLockShared(&g_dragLock);
     s = g_dragStats;
     ReleaseSRWLockShared(&g_dragLock);
-    if (!s.vehicle || s.frames <= 0 || s.extraOf != s.vehicle) return; // the line waits for the bodies' search
+    if (!s.vehicle || s.frames <= 0) return;
     if (s.vehicle != truckSaid)
     {
         truckSaid = s.vehicle;
         const DragWheelStat &w = s.w[0];
-        std::wstring bodies;
-        wchar_t one[96];
+        std::wstring wheelsText;
+        wchar_t one[64];
+        float wheelSum = 0.0f;
         for (int i = 0; i < s.count && i < kRollWheelsMost; i++)
         {
             swprintf_s(one, L"%sw%d %.1f", i ? L", " : L"", s.w[i].index, s.w[i].mass);
-            bodies += one;
+            wheelsText += one;
+            wheelSum += s.w[i].mass;
         }
-        if (!s.extras) bodies += L"; no other body found behind the wheels";
-        for (int k = 0; k < s.extras; k++)
-        {
-            swprintf_s(one, L"; a body %p %.1f kg (wheel %d's constraint hangs on it)", (void *)s.extraBody[k], s.extraMass[k], s.extraWheel[k]);
-            bodies += one;
-        }
-        Log(L"rolling drag: truck %p, Havok mass %.0f kg, the sum of its bodies: the chassis %.1f, the wheels %s; the files' mass %.0f kg (model+0x784); "
-            L"cargo and a trailer not in it; N %.0f N a wheel on %d on the ground; the first wheel I %.2f kg m2 about its axle, r %.3f m, stock damping %.3f; "
-            L"Crr paved %.3f, rock %.3f, gravel %.3f, dirt %.3f (with no flag, mud too), sand %.3f, ice 0; x%.2f at %s",
-            (void *)s.vehicle, s.mass, s.chassis, bodies.c_str(), s.files, s.n, s.grounded, w.inertia, w.r, w.stock, kRdCrr[kRdPaved], kRdCrr[kRdRock],
-            kRdCrr[kRdGravel], kRdCrr[kRdDirt], kRdCrr[kRdSand], s.factor, g_modes[g_mode].name);
+        wchar_t gravity[160];
+        if (g_dragGravityKnown) swprintf_s(gravity, L"the chassis's gravity factor %.2f (body+0x%X)", s.gravity, kDragGravityAt);
+        else
+            swprintf_s(gravity, L"the gravity factor taken as 1, as its place is not confirmed (body+0x%X, Havok's place for it, reads %.3f on the chassis)", kDragGravityAt,
+                       s.gravityRead);
+        Log(L"rolling drag: truck %p, the chassis's own body 1/w %.1f kg, the files' sum of its bodies %.0f kg (model+0x784), the wheels %s (%.1f kg); %s; "
+            L"N %.0f N a wheel on %d on the ground, the mass %.0f kg; cargo and a trailer not in it; the first wheel I %.2f kg m2 about its axle, r %.3f m, "
+            L"stock damping %.3f; Crr paved %.3f, rock %.3f, gravel %.3f, dirt %.3f (with no flag, mud too), sand %.3f, ice 0; x%.2f at %s",
+            (void *)s.vehicle, s.chassis, s.files, wheelsText.c_str(), wheelSum, gravity, s.n, s.grounded, s.mass, w.inertia, w.r, w.stock, kRdCrr[kRdPaved],
+            kRdCrr[kRdRock], kRdCrr[kRdGravel], kRdCrr[kRdDirt], kRdCrr[kRdSand], s.factor, g_modes[g_mode].name);
     }
     if (!g_probeRoll || passAt < secondAt || speed < 0.5f) return;
     secondAt = passAt + 1000;
@@ -3824,19 +3747,21 @@ static bool RollCoastTest()
     return ok && boxOk;
 }
 
-// Rolling drag (BRIEF_rolling_drag.md part 2) on made up wheels in this process: a truck of a 1338 kg chassis and four
-// 75 kg wheels (I 9.9 kg m2 about x, r 0.51 m, stock damping 0.05), its files saying 2149 kg.
-struct FakeWheel { uint8_t model[0x400], wheel[0x400], body[0x260], shape[0x40]; };
-struct FakeTruck { uint8_t vehicle[0x100], model[0x800], chassis[0x260]; FakeWheel w[4]; };
+// Rolling drag (BRIEF_rolling_drag.md part 2) on made up wheels in this process, round figures: the game's sum of the
+// truck's bodies 1200 kg (model + 0x784), the chassis's own body 1000 kg with a gravity factor of 1.4, four 50 kg
+// wheels (I 10 kg m2 about x, r 0.5 m, stock damping 0.05).
+struct FakeWheel { uint8_t model[0x400], wheel[0x400], body[0x300], shape[0x40]; };
+struct FakeTruck { uint8_t vehicle[0x100], model[0x800], chassis[0x300]; FakeWheel w[4]; };
 static void FakeTruckMake(FakeTruck &t, std::vector<WheelRef> &refs)
 {
     memset(&t, 0, sizeof t);
     auto put = [](uint8_t *o, size_t k, auto v) { memcpy(o + k, &v, sizeof v); };
     put(t.vehicle, 0x60, (uint64_t)t.model);
     put(t.model, 0x230, (uint64_t)t.chassis);
-    put(t.model, 0x784, 2149.0f);
-    const float chassisInv[4] = { 1.0f / 3000.0f, 1.0f / 3500.0f, 1.0f / 900.0f, 1.0f / 1338.0f };
+    put(t.model, 0x784, 1200.0f);
+    const float chassisInv[4] = { 1.0f / 2000.0f, 1.0f / 2500.0f, 1.0f / 800.0f, 1.0f / 1000.0f };
     memcpy(t.chassis + 0x220, chassisInv, sizeof chassisInv);
+    put(t.chassis, kDragGravityAt, HavokHalf(1.4f));
     refs.clear();
     for (int i = 0; i < 4; i++)
     {
@@ -3846,14 +3771,14 @@ static void FakeTruckMake(FakeTruck &t, std::vector<WheelRef> &refs)
         put(f.model, 0x2C8, (uint64_t)f.wheel);
         put(f.wheel, 0x18, (uint64_t)f.body);
         put(f.body, 0x20, (uint64_t)f.shape);
-        put(f.wheel, 0x94, 0.51f);
+        put(f.wheel, 0x94, 0.5f);
         put(f.wheel, 0xAC, 0.05f);
         put(f.wheel, 0xA8, 2.0f);
         put(f.wheel, 0x1A4, (BYTE)1);
         put(f.wheel, 0x1C8, (BYTE)1); // paved
         const float cols[3][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } };
         memcpy(f.body + 0x170, cols, sizeof cols);
-        const float inv[4] = { 1.0f / 9.9f, 1.0f / 6.0f, 1.0f / 6.0f, 1.0f / 75.0f };
+        const float inv[4] = { 1.0f / 10.0f, 1.0f / 6.0f, 1.0f / 6.0f, 1.0f / 50.0f };
         memcpy(f.body + 0x220, inv, sizeof inv);
         put(f.body, 0x216, HavokHalf(0.05f));
         refs.push_back({ (uint64_t)f.wheel, (uint64_t)f.body, (uint64_t)f.shape, (uint64_t)f.model, i });
@@ -3871,7 +3796,7 @@ static bool RollingDragTest()
     std::vector<WheelRef> wa, wb;
     FakeTruckMake(a, wa);
     FakeTruckMake(b, wb);
-    const float r = 0.51f, inertia = 9.9f, stock = 0.05f, mass = 1338.0f + 4.0f * 75.0f, n = mass * kRdG / 4.0f;
+    const float r = 0.5f, inertia = 10.0f, stock = 0.05f, mass = 1200.0f + 4.0f * 50.0f, n = mass * kRdG / 4.0f;
     g_dragKept.clear();
     g_dragVehicle = 0;
     // the torque the word written means, I·(c − stock)·ω, against Crr·N·r, through the half
@@ -3973,50 +3898,28 @@ static bool RollingDragTest()
     OnTruckUpdate((uint64_t)slot);
     const bool posted = g_rollBackPending == 0 && g_rollBackDone == 2 && FakeWord(b.w[0]) == stockWord && FakeWord(b.w[1]) == stockWord;
     g_rollBackDone = -1;
-    // a truck whose front wheels' constraints hang on a body of their own (400 kg, as an axle or a cab on its own): found
-    // behind the wheel objects, two levels deep, and in the sum; without it the chassis and the wheels are the sum
+    // the gravity factor: taken as 1 until its place is confirmed, and with it the chassis's 1.4 on the game's sum
     FakeTruck *c = new FakeTruck;
     std::vector<WheelRef> wc;
     FakeTruckMake(*c, wc);
-    const uint64_t bodyClass = 0x7F12345670ull;
-    auto put = [](uint8_t *o, size_t k, auto v) { memcpy(o + k, &v, sizeof v); };
-    const float identity[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
-    uint8_t *axle = new uint8_t[0x260](), *holder = new uint8_t[0x400](), *constraints = new uint8_t[4 * 0x100]();
-    put(c->chassis, 0, bodyClass);
-    memcpy(c->chassis + 0x170, identity, sizeof identity);
-    put(axle, 0, bodyClass);
-    memcpy(axle + 0x170, identity, sizeof identity);
-    put(axle, 0x1A0, 2.5f);
-    put(axle, 0x22C, 1.0f / 400.0f);
-    put(holder, 0x10, (uint64_t)axle);
-    for (int i = 0; i < 4; i++)
-    {
-        uint8_t *k = constraints + i * 0x100;
-        const bool front = i < 2;
-        const float side = i % 2 ? -1.0f : 1.0f, centre[3] = { front ? 2.0f : -2.0f, 0.0f, side }, attach[3] = { front ? -0.5f : -2.0f, 0.0f, side };
-        memcpy(c->w[i].wheel + 0x13C, centre, sizeof centre);
-        memcpy(k + 0xA0, attach, sizeof attach);
-        put(c->w[i].wheel, 0x28, (uint64_t)k);
-        put(c->w[i].wheel, 0x30, (uint64_t)holder);
-        put(c->w[i].body, 0, bodyClass);
-    }
-    const DragExtra found = DragFindBodies((uint64_t)c->vehicle, wc, ExeImageSize());
-    DragStats withAxle = {}, without = {};
     for (FakeWheel &f : c->w) FakeSpin(f, 10.0f / r);
+    DragStats asOne = {}, withGravity = {};
     g_dragKept.clear();
     g_dragVehicle = 0;
-    RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &without, nullptr);
-    RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &withAxle, &found);
-    const float sum = mass + 400.0f;
-    bool summed = found.count == 1 && found.body[0] == (uint64_t)axle && found.wheel[0] == 0 && fabsf(withAxle.mass - sum) < 0.5f && withAxle.extras == 1 &&
-                  fabsf(withAxle.n - sum * kRdG / 4.0f) < 0.5f && fabsf(without.mass - mass) < 0.5f && withAxle.files == 2149.0f;
-    // the line once per truck: the sum, each body and the files' mass beside it
+    RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &asOne);
+    g_dragGravityKnown = true;
+    RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &withGravity);
+    g_dragGravityKnown = false;
+    const float read = HalfToFloat(HavokHalf(1.4f)), heavy = (1200.0f * read + 200.0f) * kRdG / 4.0f;
+    bool summed = fabsf(asOne.mass - mass) < 0.5f && fabsf(asOne.n - n) < 0.5f && asOne.gravity == 1.0f && fabsf(asOne.gravityRead - read) < 1e-4f &&
+                  fabsf(withGravity.n - heavy) < 0.5f && fabsf(withGravity.mass - mass) < 0.5f && fabsf(asOne.chassis - 1000.0f) < 0.1f && asOne.files == 1200.0f;
+    // the line once per truck: the chassis's own body, the files' sum, the wheels, the factor, N and the mass
     HWND (WINAPI *const hookWas)() = g_foregroundReal;
     g_foregroundReal = GetForegroundWindow;
     g_dragSetting = true;
-    withAxle.frames = 1;
+    asOne.frames = 1;
     AcquireSRWLockExclusive(&g_dragLock);
-    g_dragStats = withAxle;
+    g_dragStats = asOne;
     ReleaseSRWLockExclusive(&g_dragLock);
     RollingDragPass((uint64_t)c->vehicle, wc, 0.0f, 0);
     g_dragSetting = false;
@@ -4039,27 +3942,26 @@ static bool RollingDragTest()
         fclose(lf);
     }
     const bool noHook = g_dragOn == 0 && text.find("rolling drag: off, as the game's truck update is not hooked") != std::string::npos;
-    char sumLine[96];
-    sprintf_s(sumLine, "Havok mass %.0f kg, the sum of its bodies: the chassis 1338.0", sum);
-    summed = summed && text.find(sumLine) != std::string::npos && text.find("kg (wheel 0's constraint hangs on it); the files' mass 2149 kg") != std::string::npos;
+    char sumLine[200];
+    sprintf_s(sumLine, "the chassis's own body 1/w 1000.0 kg, the files' sum of its bodies 1200 kg (model+0x784), the wheels w0 50.0, w1 50.0, w2 50.0, w3 50.0 (200.0 kg)");
+    char gravityLine[160];
+    sprintf_s(gravityLine, "the gravity factor taken as 1, as its place is not confirmed (body+0x282, Havok's place for it, reads %.3f on the chassis); N %.0f N", read, n);
+    summed = summed && text.find(sumLine) != std::string::npos && text.find(gravityLine) != std::string::npos && text.find("the mass 1400 kg") != std::string::npos;
     delete c;
-    delete[] axle;
-    delete[] holder;
-    delete[] constraints;
     g_foregroundReal = hookWas;
     g_dragSetting = false;
     g_dragKept.clear();
     g_dragVehicle = 0;
     g_buildFound = saved;
     const bool ok = atTen && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed && capOk;
-    printf("%s rolling drag: at 10 m/s on paved at Normal the word's torque %.2f N m against Crr N r %.2f (N %.0f N by the Havok mass %.0f kg, not the files' 2149), "
+    printf("%s rolling drag: at 10 m/s on paved at Normal the word's torque %.2f N m against Crr N r %.2f (N %.0f N by the mass %.0f kg, the game's sum and the wheels), "
            "%.2f at three times the spin, under the floor falling to nothing; ice none, sand at Low x%.3f, no flag dirt; broken kept, airborne and off and another truck "
            "stock; a write over 2 %% and on the game's word only; no climb over 10 lost records; none while the probe holds; the probe's stock back in the truck update; no hook off; "
-           "a body the front wheels' constraints hang on found behind them and in the sum (%.0f kg), the truck's line with each body and the files' mass\n",
-           ok ? "ok  " : "FAIL", t10, want, st.n, st.mass, t30, low, sum);
+           "the gravity factor 1 until its place is confirmed, with it the chassis's 1.4 on the game's sum (N %.0f N), the truck's line; c held at 20\n",
+           ok ? "ok  " : "FAIL", t10, want, st.n, st.mass, t30, low, withGravity.n);
     if (!ok)
         printf("     ten %d spin %d standing %d grounds %d ice %d broken %d air %d change %d (%d %d %d) flat %d switched %d off %d waits %d posted %d nohook %d summed %d (found %d)\n", atTen,
-               spinning, standing, grounds, iceStock, broken, airborne, change, slight, larger, game, flat, switched, off, waits, posted, noHook, summed, found.count);
+               spinning, standing, grounds, iceStock, broken, airborne, change, slight, larger, game, flat, switched, off, waits, posted, noHook, summed, 0);
     return ok;
 }
 

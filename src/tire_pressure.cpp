@@ -1366,8 +1366,8 @@ static void LogDamage(uint64_t vehicle, size_t wheelCount, const TickResult &r, 
 // counted each second over the wheels written, then each value written every frame by the truck update
 // (RollFrameWrite). A step moves on only by a counted coast (roll_probe.h, RollRunPass): in N (the game's engaged
 // gear, action + 0x70), no pedal and no brake (action + 0x44 within 0.02 of 0, below 0 is the pedal), no handbrake
-// (action + 0x48), from 7 m/s or more to a stand, soil under a wheel for at most 0.1 of it, then 3 s still. Every run
-// from 7 m/s to a stand gives one line, counted or not, with the coast's numbers where it ran in N and the reason
+// (action + 0x48), from 7 m/s or more down to 1 m/s, soil under a wheel for at most 0.1 of it; the next step begins as
+// the coast ends. Every run from 7 m/s down to 1 m/s gives one line, counted or not, with the coast's numbers where it ran in N and the reason
 // where it did not count. Every wheel's ground is read every pass. The speed and the chassis's height (a grade of
 // 0.1° is as large as the whole drag at stock) are logged every 0.1 s while it moves, after the last step too
 // ("after"). The probe box (panel.cpp) shows the step, the rules now and the last six coasts from the same results.
@@ -1517,7 +1517,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
                 Log(L"probe roll: step %d of %d, damping %g written every frame (word %04X)", run.step + 1, steps, d.damping, HavokHalf(d.damping));
             }
             else Log(L"probe roll: step %d of %d, the stock damping", run.step + 1, steps);
-            Log(L"probe roll: drive to 40 km/h on flat asphalt, shift to N and coast to a stop, then stand 3 s; a stop in gear does not count; find a "
+            Log(L"probe roll: drive to 40 km/h on flat asphalt, shift to N and coast to a stop; a stop in gear does not count; find a "
                 L"stretch where soil stays 0 under every wheel (the per-second line and the probe box show it)");
             break;
         }
@@ -3294,14 +3294,29 @@ static bool RollCoastTest()
     // a coast in N from 8 m/s on paved ground: counted, the step on
     n = RollFeedRun(r, 5, 8.0f, RollFeed{}, c, 4);
     RollCoastText(c[0], 5, text, sizeof text);
-    const bool coastN = n == 1 && c[0].counted && c[0].numbers && r.step == 1 && fabsf(c[0].v0 - 8.0f) < 0.01f && c[0].v1 < 1.0f && c[0].soil == 0.0f &&
+    // the step moves on as the coast ends at 1 m/s, with no stand (review F1, the lead's pick)
+    RollRun atOnce;
+    RollPass e = {};
+    e.gearKnown = true;
+    e.wheels = 1;
+    e.dt = 0.05f;
+    bool early = false;
+    int endedAt = -1;
+    for (int i = 0; i <= 160 && endedAt < 0; i++)
+    {
+        e.speed = 8.0f - 0.05f * i;
+        RollCoastResult x;
+        if (RollRunPass(atOnce, 5, e, x)) endedAt = i, early = x.counted && atOnce.step == 1 && x.v1 < 1.0f;
+    }
+    const bool noStand = early && (endedAt == 140 || endedAt == 141); // 1.00 or 0.95 m/s by the float sums
+    const bool coastN = noStand && n == 1 && c[0].counted && c[0].numbers && r.step == 1 && fabsf(c[0].v0 - 8.0f) < 0.01f && c[0].v1 < 1.0f && c[0].soil == 0.0f &&
                         c[0].share[0][0] == 1.0f && strstr(text, "; counted") && strstr(text, "step 1, coast in N 8.00 to 0.95 m/s");
     // the brake from 4 m/s: not counted, the numbers kept, the step stays
     RollFeed brake;
     brake.brakeAt = 4.0f;
     n = RollFeedRun(r, 5, 9.0f, brake, c, 4);
     RollCoastText(c[0], 5, text, sizeof text);
-    const bool braked = n == 1 && !c[0].counted && c[0].numbers && !strcmp(c[0].reason, "the brake") && r.step == 1 && c[0].v1 <= 4.0f && strstr(text, "; not counted: the brake");
+    const bool braked = n == 1 && !c[0].counted && c[0].numbers && !strcmp(c[0].reason, "the brake") && r.step == 1 && c[0].v1 > 4.0f && c[0].v1 < 4.1f && strstr(text, "; not counted: the brake"); // ends at the last pass before the brake
     // the pedal floored in N (throttle -1): no coast begins, the line says the pedal
     RollFeed pedal;
     pedal.throttle = -1.0f;
@@ -3333,7 +3348,25 @@ static bool RollCoastTest()
     a.speed = 0.9f;
     a.height = 0.0f;
     RollCoastEnd(f, a);
-    const bool numbers = fabsf(f.c.decel - 0.455f) < 0.0005f && fabsf(f.c.slope - 0.1962f) < 0.0005f && fabsf(f.c.flat - (99.19f / 200.0f + 0.1962f)) < 0.0005f;
+    // the distance by the trapezoid: 10 then 8 m/s over 1 s is 9 m; a rule broken ends the coast at the last good pass
+    RollRun z;
+    RollPass q = {};
+    q.gearKnown = true;
+    q.wheels = 1;
+    q.dt = 1.0f;
+    q.speed = 10.0f;
+    q.height = 5.0f;
+    RollCoastResult zc;
+    RollRunPass(z, 5, q, zc);
+    q.speed = 8.0f;
+    q.height = 4.0f;
+    RollRunPass(z, 5, q, zc);
+    const float trapezoid = z.c.d;
+    q.speed = 7.5f;
+    q.height = 3.0f;
+    q.throttle = 0.5f; // the brake
+    const bool brokenEnd = RollRunPass(z, 5, q, zc) && !zc.counted && zc.v1 == 8.0f && zc.h1 == 4.0f && fabsf(zc.d - 9.0f) < 0.001f && !strcmp(zc.reason, "the brake");
+    const bool numbers = fabsf(trapezoid - 9.0f) < 0.001f && brokenEnd && fabsf(f.c.decel - 0.455f) < 0.0005f && fabsf(f.c.slope - 0.1962f) < 0.0005f && fabsf(f.c.flat - (99.19f / 200.0f + 0.1962f)) < 0.0005f;
     // after the last step coasts are still measured and move nothing
     RollRun done;
     done.step = 5;
@@ -3341,9 +3374,9 @@ static bool RollCoastTest()
     RollCoastText(c[0], 5, text, sizeof text);
     const bool after = n == 1 && !c[0].counted && c[0].numbers && done.step == 5 && !strncmp(text, "after, coast in N", 17) && strstr(text, "; after the run");
     const bool ok = stopInA && coastN && braked && floored && onSoil && held && numbers && after;
-    printf("%s rolling drag probe: a stop in gear is one line and no step; a coast in N from 8 m/s counts and moves the step on; the brake midway, the pedal in N "
+    printf("%s rolling drag probe: a stop in gear is one line and no step; a coast in N from 8 m/s counts and moves the step on as it ends at 1 m/s, with no stand; the brake midway, the pedal in N "
            "and soil under a wheel 0.85 of it count not, with the reason and the numbers kept; the once word's hold at the end; a 2 m drop over 100 m gives "
-           "the slope part and the flat decel; after the run coasts are measured and move nothing\n", ok ? "ok  " : "FAIL");
+           "the slope part and the flat decel; the distance by the trapezoid; a broken coast ends at its last good pass; after the run coasts are measured and move nothing\n", ok ? "ok  " : "FAIL");
     if (!ok) printf("     stopInA %d coastN %d braked %d floored %d onSoil %d held %d numbers %d after %d\n", stopInA, coastN, braked, floored, onSoil, held, numbers, after);
     // the box from a set of results: the step, the rules, the coasts newest first, "x1.08 of stock" once the stock
     // step has a counted coast, "no stock coast yet" before, and the done line
@@ -3362,7 +3395,7 @@ static bool RollCoastTest()
     RollBox b;
     RollBoxText(st, b);
     const bool before = !strcmp(b.line[0].text, "Step 3 of 5: damping 0.5, every frame") && b.line[1].segs == 4 && b.line[1].seg[0].color == kBoxRed &&
-                        b.line[1].seg[1].color == kBoxGreen && b.line[1].seg[3].color == kBoxGreen && !strcmp(b.line[2].text, "Ground: soil 1, paved") &&
+                        b.line[1].seg[1].color == kBoxGreen && b.line[1].seg[3].color == kBoxGreen && b.line[2].segs == 3 && !strcmp(b.line[2].seg[1].text, "soil 1") && b.line[2].seg[1].color == kBoxRed && !strcmp(b.line[2].seg[2].text, "paved") &&
                         !strcmp(b.line[3].text, "Speed 36 km/h") && strstr(b.line[5].text, "counted, no stock coast yet");
     RollCoastResult s0 = s1;
     s0.step = 0;
@@ -3381,7 +3414,7 @@ static bool RollCoastTest()
     RollBoxText(st, b);
     const bool doneLine = !strcmp(b.line[0].text, "Done: the log has the results. ProbeRoll=0 to stop.");
     const bool boxOk = before && coasts && doneLine;
-    printf("%s probe box: the step, the four rules red or green by the coast's own checks, the ground and the speed; the coasts newest first from the results, "
+    printf("%s probe box: the step, the four rules red or green by the coast's own checks, the ground with soil in red and the speed; the coasts newest first from the results, "
            "x1.08 of stock once the stock step counted, no stock coast yet before; the done line\n", boxOk ? "ok  " : "FAIL");
     if (!boxOk)
     {

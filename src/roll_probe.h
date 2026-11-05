@@ -50,12 +50,10 @@ inline RollStepDef RollStepAt(const float *values, int count, int step)
 }
 
 // The coast-down a step counts (BRIEF_roll_probe_n_only.md): in N, with no pedal, no brake and no handbrake, from
-// 7 m/s or more (25 km/h) to a stand, on ground the game does not call soil, then 3 s still. Every run from 7 m/s or
-// more to a stand gives one result, counted or not, with the reason when not; only a counted one moves the step on.
+// 7 m/s or more (25 km/h) down to 1 m/s, on ground the game does not call soil. Every run from 7 m/s or more down to
+// 1 m/s gives one result, counted or not, with the reason when not; only a counted one moves the step on.
 static const float kRollFrom = 7.0f;        // m/s a coast starts from (25.2 km/h)
 static const float kRollTo = 1.0f;          // m/s it is measured to: the last crawl to the stand is the game's rest friction
-static const float kRollStand = 0.2f;       // m/s under which the truck stands
-static const float kRollStandFor = 3.0f;    // s it stands after a coast
 static const float kRollNoPedal = 0.02f;    // |throttle| under this is no pedal and no brake (below 0 is the pedal)
 static const float kRollSoilMost = 0.1f;    // the share of the coast a wheel may stand on soil
 static const float kRollG = 9.81f;
@@ -117,15 +115,14 @@ struct RollCoastResult
     int onceHeld, onceWritten;       // at the coast's end, in the once step
 };
 
-// The run of the coasts. phase: 0 waiting for 7 m/s, 1 from 7 m/s with no coast yet, 2 coasting, 3 the coast over,
-// waiting for the stand.
+// The run of the coasts. phase: 0 waiting for 7 m/s, 1 from 7 m/s with no coast yet, 2 coasting.
 struct RollRun
 {
     int step = 0;
     int phase = 0;
-    float stillFor = 0.0f;
     char why[64] = "";  // phase 1: why no coast began (the rule last broken at 1 m/s or more, or the start under 7)
     float on[4][kRollWheelsMost] = {}, any = 0.0f;
+    float lastSpeed = 0.0f, lastHeight = 0.0f; // the coast's last pass with every rule held (review N1, N2)
     RollCoastResult c = {};
 };
 
@@ -140,6 +137,8 @@ inline void RollCoastBegin(RollRun &r, const RollPass &p)
     r.c.wheels = p.wheels < kRollWheelsMost ? p.wheels : kRollWheelsMost;
     memset(r.on, 0, sizeof r.on);
     r.any = 0.0f;
+    r.lastSpeed = p.speed;
+    r.lastHeight = p.height;
 }
 
 // The coast's numbers from what it gathered.
@@ -157,26 +156,16 @@ inline void RollCoastEnd(RollRun &r, const RollPass &p)
     c.once = p.onceWritten > 0;
     c.onceHeld = p.onceHeld;
     c.onceWritten = p.onceWritten;
-    r.phase = 3;
 }
 
-// One pass: true when a coast's result is ready (in out), whether it counted or not. A counted one in a step moves the
-// run to its next step. After the last step coasts are still measured (their step is the count), and move nothing.
+// One pass: true when a coast's result is ready (in out), whether it counted or not. It is ready as the coast ends: at
+// the first pass under 1 m/s, or at a broken rule. A counted one in a step moves the run to its next step at once, with
+// no stand (the lead's pick on review F1), so the next damping is written from then on. A run from 7 m/s with no coast
+// gives its line once it is under 1 m/s. After the last step coasts are still measured (their step is the count), and
+// move nothing.
 inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResult &out)
 {
     const RollRule rule = RollRuleOf(p);
-    const bool stand = p.speed < kRollStand;
-    r.stillFor = stand ? r.stillFor + p.dt : 0.0f;
-    bool ready = false;
-    // a run that went back over 7 m/s without the stand: its coast (if any) is over unstood, and a new run starts
-    if (r.phase == 3 && p.speed >= kRollFrom)
-    {
-        if (r.c.reason[0] == 0) strcpy_s(r.c.reason, "no stand of 3 s after it");
-        r.c.counted = false;
-        out = r.c;
-        ready = true;
-        r.phase = 0;
-    }
     if (r.phase == 0 && p.speed >= kRollFrom)
     {
         r.phase = 1;
@@ -184,13 +173,17 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
     }
     if (r.phase == 1)
     {
-        if (rule == kRuleOk && p.speed >= kRollFrom) RollCoastBegin(r, p);
+        if (rule == kRuleOk && p.speed >= kRollFrom)
+        {
+            RollCoastBegin(r, p); // its time and distance start from this pass
+            return false;
+        }
         else if (p.speed >= kRollTo)
         {
             if (rule != kRuleOk) RollRuleText(rule, p.gear, r.why, sizeof r.why);
             else strcpy_s(r.why, "from under 25 km/h");
         }
-        if (r.phase == 1 && r.stillFor >= kRollStandFor)
+        else
         {
             out = RollCoastResult{};
             out.step = r.step;
@@ -199,41 +192,42 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
             return true;
         }
     }
-    if (r.phase == 2)
+    if (r.phase != 2) return false;
+    if (rule != kRuleOk)
     {
-        if (rule != kRuleOk)
-        {
-            RollRuleText(rule, p.gear, r.c.reason, sizeof r.c.reason);
-            RollCoastEnd(r, p);
-        }
-        else
-        {
-            r.c.t += p.dt;
-            r.c.d += p.speed * p.dt;
-            bool any = false;
-            for (int w = 0; w < r.c.wheels; w++)
-            {
-                const RollGround &g = p.ground[w];
-                const uint8_t flags[4] = { g.paved, g.gravel, g.sand, g.soil };
-                for (int k = 0; k < 4; k++)
-                    if (flags[k]) r.on[k][w] += p.dt;
-                any = any || g.soil;
-            }
-            if (any) r.any += p.dt;
-            if (p.speed < kRollTo) RollCoastEnd(r, p);
-        }
+        // the coast ends where it last held: the pass that broke a rule is not part of it
+        RollRuleText(rule, p.gear, r.c.reason, sizeof r.c.reason);
+        RollPass last = p;
+        last.speed = r.lastSpeed;
+        last.height = r.lastHeight;
+        RollCoastEnd(r, last);
     }
-    if (r.phase == 3 && r.stillFor >= kRollStandFor)
+    else
     {
-        RollCoastResult &c = r.c;
-        if (c.reason[0] == 0 && c.soil > kRollSoilMost) sprintf_s(c.reason, "on soil %.2f of it", c.soil);
-        c.counted = c.reason[0] == 0 && c.step < steps;
-        out = c;
-        ready = true;
-        r.phase = 0;
-        if (c.counted) r.step++;
+        r.c.t += p.dt;
+        r.c.d += 0.5f * (r.lastSpeed + p.speed) * p.dt; // the trapezoid between the last pass and this one
+        r.lastSpeed = p.speed;
+        r.lastHeight = p.height;
+        bool any = false;
+        for (int w = 0; w < r.c.wheels; w++)
+        {
+            const RollGround &g = p.ground[w];
+            const uint8_t flags[4] = { g.paved, g.gravel, g.sand, g.soil };
+            for (int k = 0; k < 4; k++)
+                if (flags[k]) r.on[k][w] += p.dt;
+            any = any || g.soil;
+        }
+        if (any) r.any += p.dt;
+        if (p.speed >= kRollTo) return false;
+        RollCoastEnd(r, p);
     }
-    return ready;
+    RollCoastResult &c = r.c;
+    if (c.reason[0] == 0 && c.soil > kRollSoilMost) sprintf_s(c.reason, "on soil %.2f of it", c.soil);
+    c.counted = c.reason[0] == 0 && c.step < steps;
+    out = c;
+    r.phase = 0;
+    if (c.counted) r.step++;
+    return true;
 }
 
 // The step's name: "step 3" or "after" (the coasts after the run).
@@ -329,9 +323,21 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
         strcpy_s(rules.seg[i].text, r[i].text);
         rules.seg[i].color = (uint8_t)(r[i].ok ? kBoxGreen : kBoxRed);
     }
+    // the ground under the first wheel, soil in red while it is on (it keeps a coast from counting)
     RollBoxLine &ground = RollBoxNext(b, kBoxWhite);
     const RollGround g = s.now.wheels > 0 ? s.now.ground[0] : RollGround{};
-    sprintf_s(ground.text, "Ground: soil %u%s%s%s", g.soil ? 1u : 0u, g.paved ? ", paved" : "", g.gravel ? ", gravel" : "", g.sand ? ", sand" : "");
+    ground.segs = 2;
+    strcpy_s(ground.seg[0].text, "Ground:");
+    ground.seg[0].color = kBoxWhite;
+    sprintf_s(ground.seg[1].text, "soil %u", g.soil ? 1u : 0u);
+    ground.seg[1].color = (uint8_t)(g.soil ? kBoxRed : kBoxWhite);
+    if (g.paved || g.gravel || g.sand)
+    {
+        ground.segs = 3;
+        sprintf_s(ground.seg[2].text, "%s%s%s", g.paved ? "paved " : "", g.gravel ? "gravel " : "", g.sand ? "sand " : "");
+        ground.seg[2].text[strlen(ground.seg[2].text) - 1] = 0;
+        ground.seg[2].color = kBoxWhite;
+    }
     RollBoxLine &speed = RollBoxNext(b, kBoxWhite);
     sprintf_s(speed.text, "Speed %.0f km/h", s.now.speed * 3.6f);
     RollBoxLine &head = RollBoxNext(b, kBoxGrey);

@@ -1452,11 +1452,13 @@ static int RollStockBack(const std::vector<WheelRef> &wheels)
 // bodies but the wheels (the chassis, a cab on a hinge, an antenna, the steering pivot; the chassis's body alone misses
 // the cab), and each wheel body's 1/w comes on top. The weight on the tires takes in each body's gravity factor, a
 // Havok half in the motion after the velocities: N = (model + 0x784 × the chassis's factor + Σ wheel 1/w × its own)
-// × g over the wheels on the ground. Where Havok keeps the factor is not confirmed in the game yet: Havok's own layout
-// puts it at body + 0x282 (after the deactivation places, the saved motion and its quality index), which the line
-// shows, and until it is confirmed the factor is 1 (g_dragGravityKnown).
+// × g over the wheels on the ground. The factor's place is confirmed in the game's code (BRIEF_gravity_from_image.md,
+// review\gravity_from_image.md): the truck file's GravityFactor is parsed into the body's construction info at + 0x9C
+// (in the function at RVA 0xdeef90 of build 6ab52f5d, 0xded980 of 6a607c05), and Havok's body constructor (RVA
+// 0x1940230 of 6ab52f5d, 0x193e5b0 of 6a607c05) stores it at body + 0x282 as a half, beside the damping at + 0x214 and
+// + 0x216; the same shape in both builds. g_dragGravityKnown false takes the factor as 1 (the tests use it).
 static const uint32_t kDragGravityAt = 0x282;
-static bool g_dragGravityKnown = false;
+static bool g_dragGravityKnown = true;
 struct DragKept { WheelRef w; RdRecord rec; };
 static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
@@ -3790,6 +3792,9 @@ static WORD FakeWord(const FakeWheel &f) { WORD w; memcpy(&w, f.body + 0x216, 2)
 static bool RollingDragTest()
 {
     const Build saved = g_buildFound;
+    // the made up chassis has a gravity factor of 1.4; the figures below go by 1 until the gravity part sets it on
+    const bool gravityKnown = g_dragGravityKnown;
+    g_dragGravityKnown = false;
     g_buildFound.wheelVtable = 0x100;
     g_buildFound.cylinderVtable = 0x200;
     static FakeTruck a, b;
@@ -3898,7 +3903,7 @@ static bool RollingDragTest()
     OnTruckUpdate((uint64_t)slot);
     const bool posted = g_rollBackPending == 0 && g_rollBackDone == 2 && FakeWord(b.w[0]) == stockWord && FakeWord(b.w[1]) == stockWord;
     g_rollBackDone = -1;
-    // the gravity factor: taken as 1 until its place is confirmed, and with it the chassis's 1.4 on the game's sum
+    // the gravity factor: taken as 1 with g_dragGravityKnown false, and with it (the default) the chassis's 1.4 on the game's sum
     FakeTruck *c = new FakeTruck;
     std::vector<WheelRef> wc;
     FakeTruckMake(*c, wc);
@@ -3909,7 +3914,6 @@ static bool RollingDragTest()
     RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &asOne);
     g_dragGravityKnown = true;
     RollingDragFrame((uint64_t)c->vehicle, wc, true, 1.0f, &withGravity);
-    g_dragGravityKnown = false;
     const float read = HalfToFloat(HavokHalf(1.4f)), heavy = (1200.0f * read + 200.0f) * kRdG / 4.0f;
     bool summed = fabsf(asOne.mass - mass) < 0.5f && fabsf(asOne.n - n) < 0.5f && asOne.gravity == 1.0f && fabsf(asOne.gravityRead - read) < 1e-4f &&
                   fabsf(withGravity.n - heavy) < 0.5f && fabsf(withGravity.mass - mass) < 0.5f && fabsf(asOne.chassis - 1000.0f) < 0.1f && asOne.files == 1200.0f;
@@ -3917,9 +3921,9 @@ static bool RollingDragTest()
     HWND (WINAPI *const hookWas)() = g_foregroundReal;
     g_foregroundReal = GetForegroundWindow;
     g_dragSetting = true;
-    asOne.frames = 1;
+    withGravity.frames = 1;
     AcquireSRWLockExclusive(&g_dragLock);
-    g_dragStats = asOne;
+    g_dragStats = withGravity;
     ReleaseSRWLockExclusive(&g_dragLock);
     RollingDragPass((uint64_t)c->vehicle, wc, 0.0f, 0);
     g_dragSetting = false;
@@ -3945,7 +3949,7 @@ static bool RollingDragTest()
     char sumLine[200];
     sprintf_s(sumLine, "the chassis's own body 1/w 1000.0 kg, the files' sum of its bodies 1200 kg (model+0x784), the wheels w0 50.0, w1 50.0, w2 50.0, w3 50.0 (200.0 kg)");
     char gravityLine[160];
-    sprintf_s(gravityLine, "the gravity factor taken as 1, as its place is not confirmed (body+0x282, Havok's place for it, reads %.3f on the chassis); N %.0f N", read, n);
+    sprintf_s(gravityLine, "the chassis's gravity factor %.2f (body+0x282); N %.0f N", withGravity.gravity, heavy);
     summed = summed && text.find(sumLine) != std::string::npos && text.find(gravityLine) != std::string::npos && text.find("the mass 1400 kg") != std::string::npos;
     delete c;
     g_foregroundReal = hookWas;
@@ -3953,11 +3957,12 @@ static bool RollingDragTest()
     g_dragKept.clear();
     g_dragVehicle = 0;
     g_buildFound = saved;
+    g_dragGravityKnown = gravityKnown;
     const bool ok = atTen && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed && capOk;
     printf("%s rolling drag: at 10 m/s on paved at Normal the word's torque %.2f N m against Crr N r %.2f (N %.0f N by the mass %.0f kg, the game's sum and the wheels), "
            "%.2f at three times the spin, under the floor falling to nothing; ice none, sand at Low x%.3f, no flag dirt; broken kept, airborne and off and another truck "
            "stock; a write over 2 %% and on the game's word only; no climb over 10 lost records; none while the probe holds; the probe's stock back in the truck update; no hook off; "
-           "the gravity factor 1 until its place is confirmed, with it the chassis's 1.4 on the game's sum (N %.0f N), the truck's line; c held at 20\n",
+           "the gravity factor 1 with it off, with it on (the default) the chassis's 1.4 on the game's sum (N %.0f N) and in the truck's line; c held at 20\n",
            ok ? "ok  " : "FAIL", t10, want, st.n, st.mass, t30, low, withGravity.n);
     if (!ok)
         printf("     ten %d spin %d standing %d grounds %d ice %d broken %d air %d change %d (%d %d %d) flat %d switched %d off %d waits %d posted %d nohook %d summed %d (found %d)\n", atTen,

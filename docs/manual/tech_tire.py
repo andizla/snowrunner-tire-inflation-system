@@ -370,8 +370,9 @@ wheel +0x94. <i>I</i> is the wheel body's inertia about its axle: 1 over body +0
 the mass the physics moves: model +0x784, the game's own sum of the truck's bodies but the wheels (the chassis, a cab on a hinge,
 an antenna, the steering pivot; the chassis's body alone misses the cab), and every wheel body's 1/w (body +0x22C). In <i>N</i>
 each body comes with its Havok gravity factor: <i>N</i> = (model +0x784 × the chassis's factor + Σ each wheel's 1/w × its own) ×
-<i>g</i> / <i>n</i>. Havok keeps the factor as a half in the body's motion after the velocities, at body +0x282 by its own layout.
-Until that place is confirmed in the game the factor is 1, and the truck's line says so, with what the place reads. <i>n</i> is the wheels with
+<i>g</i> / <i>n</i>. Havok keeps the factor as a half in the body's motion after the velocities, at body +0x282. The game's code
+confirms the place: the truck file's GravityFactor goes into the body's construction info, and Havok's body constructor stores
+it there beside the damping, the same in both builds read. The truck's line gives the chassis's factor. <i>n</i> is the wheels with
 contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is held at 20 at most (the probe measured up to 8; at 60 frames a second <i>c</i>·dt reaches 1 at <i>c</i> = 60); the line a second counts the frames where it bites.</p>
 <p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
 floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never

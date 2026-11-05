@@ -71,6 +71,8 @@ cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_GRAPHICS /I s
 rem a stand-in for Spotter.asi's draw API (src\spotter_api.h), for the overlay's Spotter route
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_SPOTTER /I src /Fo:out\obj\overlay_spotter.obj /Fe:out\test\overlay\Spotter.asi test\overlay_test.cpp || goto fail
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\overlay_test.obj /Fe:out\test\overlay\overlay_test.exe test\overlay_test.cpp /link user32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib || goto fail
+rem the crash line's C runtime handlers (src\crt_line.h, the same file as Gauges'): an invalid parameter and abort, each in a child process
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\crt_test.obj /Fe:out\test\crt_test.exe test\crt_test.cpp || goto fail
 echo BUILD OK: out\version.dll, out\TirePressure.asi, out\test\loader_test.exe
 exit /b 0
 :fail

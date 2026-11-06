@@ -61,6 +61,79 @@ template <class Peek> inline void TruckIdOf(Peek peek, uint64_t vehicle, char (&
     if (peek(vehicle + 0x48, &chars, sizeof chars) && chars >= 0x10000 && peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id, text, sizeof text);
 }
 
+// The kind's name of the truck at vehicle as the game's files name it: a text at model + 0x588, the model at
+// vehicle + 0x60. A text is 0x20 bytes: its characters while it has room for fewer than 16, else a pointer to them;
+// the length at + 0x10 and the room at + 0x18 (Next Gen Gameplay's TruckText reads it so). False where it is not read,
+// empty or 95 long or more.
+template <class Peek> inline bool TruckKindOf(Peek peek, uint64_t vehicle, char (&out)[96])
+{
+    out[0] = 0;
+    uint64_t model = 0, chars = 0, length = 0, room = 0;
+    uint8_t text[0x20];
+    if (!peek(vehicle + 0x60, &model, sizeof model) || !peek(model + 0x588, text, sizeof text)) return false;
+    memcpy(&chars, text, 8);
+    memcpy(&length, text + 0x10, 8);
+    memcpy(&room, text + 0x18, 8);
+    if (!length || length >= 95 || room < length) return false;
+    if (room < 16) memcpy(out, text, (size_t)length);
+    else if (chars < 0x10000 || !peek(chars, out, (size_t)length)) return false;
+    out[length] = 0;
+    TruckKindClean(out);
+    return out[0] != 0;
+}
+
+// A vehicle's chassis body (model + 0x230, the model at vehicle + 0x60), the body's vtable, its inverse mass
+// (+ 0x22C) and its world: hkpWorldObject's m_world at + 0x10 in Havok's layout (not confirmed in this game yet; the
+// once-a-truck line gives the chassis's and the first wheel body's). False where a read fails.
+template <class Peek> inline bool TruckChassisWorld(Peek peek, uint64_t vehicle, uint64_t &body, uint64_t &vtable, float &inverseMass, uint64_t &world)
+{
+    uint64_t model = 0;
+    body = vtable = world = 0;
+    inverseMass = 0.0f;
+    return peek(vehicle + 0x60, &model, sizeof model) && peek(model + 0x230, &body, sizeof body) && peek(body, &vtable, sizeof vtable) &&
+           peek(body + 0x22C, &inverseMass, sizeof inverseMass) && peek(body + 0x10, &world, sizeof world);
+}
+
+// The take-over's check on another vehicle within 20 s (BRIEF_takeover_other_truck.md and the Reviewer's addendum,
+// as Next Gen Gameplay's TruckStillThere): whether the truck that went is still in the game. A switch to another
+// truck of the kind through the map goes through "none driven" as a rebuild does, and a freed vehicle block can still
+// read its old id. So the old truck counts as there only when all hold: its vehicle reads the old id (vehicle + 0x48)
+// and the old kind; its chassis body has the new truck's chassis's vtable and the inverse mass of 10 kg to 1000 t;
+// and that body's world is not 0 and is the new chassis's. A destroyed truck's bodies leave the world before they are
+// freed; a truck left through the map stays in it. Anything else (a read fails, another id or kind, another world, or
+// none) is gone.
+struct TruckThere
+{
+    char id[40];                              // what the old vehicle reads now ("" not read)
+    char kind[96];
+    uint64_t body, world, newBody, newWorld;  // the old and the new chassis body and their worlds (0 not read)
+    bool there;
+};
+template <class Peek> inline bool TruckStillThere(Peek peek, uint64_t oldVehicle, const char *oldKind, const char *oldId, uint64_t newVehicle, TruckThere &o)
+{
+    o = TruckThere{};
+    TruckIdOf(peek, oldVehicle, o.id);
+    TruckKindOf(peek, oldVehicle, o.kind);
+    uint64_t vtable = 0, newVtable = 0;
+    float inverse = 0.0f, newInverse = 0.0f;
+    const bool body = TruckChassisWorld(peek, oldVehicle, o.body, vtable, inverse, o.world);
+    const bool newBody = TruckChassisWorld(peek, newVehicle, o.newBody, newVtable, newInverse, o.newWorld);
+    const float mass = inverse > 0.0f ? 1.0f / inverse : 0.0f;
+    o.there = oldId[0] && !strcmp(o.id, oldId) && oldKind[0] && !strcmp(o.kind, oldKind) && body && newBody && vtable && vtable == newVtable && o.body != o.newBody &&
+              isfinite(mass) && mass >= 10.0f && mass <= 1.0e6f && o.world && o.world == o.newWorld;
+    return o.there;
+}
+
+// The first wheel's body of the truck at vehicle and its world, for the once-a-truck line: the wheel models from
+// [vehicle + 0x200], the wheel at wheel model + 0x2C8, its body at wheel + 0x18, m_world at body + 0x10.
+template <class Peek> inline bool TruckWheelWorld(Peek peek, uint64_t vehicle, uint64_t &body, uint64_t &world)
+{
+    uint64_t begin = 0, wheelModel = 0, wheel = 0;
+    body = world = 0;
+    return peek(vehicle + 0x200, &begin, sizeof begin) && peek(begin, &wheelModel, sizeof wheelModel) && peek(wheelModel + 0x2C8, &wheel, sizeof wheel) &&
+           peek(wheel + 0x18, &body, sizeof body) && peek(body + 0x10, &world, sizeof world);
+}
+
 // Which truck the mode goes by: its kind's name and the game's id for it ("" = not read). kind "" = none driven.
 struct TruckWho2 { char kind[96]; char id[40]; };
 inline bool TruckWhoSame(const TruckWho2 &a, const TruckWho2 &b) { return !strcmp(a.kind, b.kind) && !strcmp(a.id, b.id); }
@@ -280,10 +353,13 @@ static const ULONGLONG kTruckTakeOverMs = 20000; // the take-over's window: the 
 // long the gap (a garage visit with an upgrade took 21 s, the drive of 2026-11-06 22:37). This mod reads no loading
 // screen, so a load between does not void the same-vehicle rule as it does in Gameplay. wasVehicle and nowVehicle:
 // the vehicle each id was read on. oldId gets the id that went; byVehicle, where given, says the same-vehicle rule
-// took it (over 20 s).
+// took it (over 20 s). On another vehicle within 20 s, there(gone, goneVehicle) asks whether the old truck is still in
+// the game (TruckStillThere): a switch to another truck of the kind through the map, which is no take-over
+// (BRIEF_takeover_other_truck.md).
 struct TruckTracker { TruckWho2 gone; ULONGLONG goneAt; uint64_t goneVehicle; };
-inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle = 0,
-                       uint64_t nowVehicle = 0, bool *byVehicle = nullptr)
+template <class There>
+inline bool TruckTrackWith(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle, uint64_t nowVehicle,
+                           bool *byVehicle, There there)
 {
     oldId[0] = 0;
     if (byVehicle) *byVehicle = false;
@@ -298,11 +374,17 @@ inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &n
     const bool kind = t.gone.kind[0] && !strcmp(t.gone.kind, now.kind) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id);
     const bool soon = at - t.goneAt <= kTruckTakeOverMs;
     const bool sameVehicle = t.goneVehicle && t.goneVehicle == nowVehicle;
-    const bool due = kind && (soon || sameVehicle);
+    const bool due = kind && (sameVehicle || (soon && !there(t.gone, t.goneVehicle)));
     if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
     if (due && byVehicle) *byVehicle = !soon;
     t = TruckTracker{};
     return due;
+}
+// As TruckTrackWith with the old truck never there (the tests of the rules before the check).
+inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle = 0,
+                       uint64_t nowVehicle = 0, bool *byVehicle = nullptr)
+{
+    return TruckTrackWith(t, was, now, at, oldId, wasVehicle, nowVehicle, byVehicle, [](const TruckWho2 &, uint64_t) { return false; });
 }
 
 // The driven truck from pass to pass: the one read last (kind "" = none driven) and its vehicle, and the take-over's watch.
@@ -321,8 +403,8 @@ struct TruckChange
 // One pass: now is the truck read on vehicle (kind "" when none is driven). An id not read on this pass leaves the last
 // one of the same vehicle and kind (as Gameplay's TruckWhoStep). The same kind under another id with no pass of none
 // between is a take-over on the same vehicle only, a first read of the id none (Gameplay's SuspAgainTakeOver); else
-// the watch decides (TruckTrack).
-inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle, ULONGLONG at)
+// the watch decides (TruckTrackWith, there as there).
+template <class There> inline TruckChange TruckWatchStepWith(TruckWatch &w, TruckWho2 now, uint64_t vehicle, ULONGLONG at, There there)
 {
     TruckChange c = {};
     if (now.kind[0] && !now.id[0] && vehicle == w.seenVehicle && !strcmp(w.seen.kind, now.kind)) strncpy_s(now.id, w.seen.id, _TRUNCATE);
@@ -334,10 +416,14 @@ inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle
         c.whileDriven = c.takeOver = TruckAgainTakeOver(w.seen.id, w.seenVehicle, now.id, vehicle);
         if (c.takeOver) strncpy_s(c.oldId, w.seen.id, _TRUNCATE);
     }
-    else c.takeOver = TruckTrack(w.track, w.seen, now, at, c.oldId, w.seenVehicle, vehicle, &c.byVehicle);
+    else c.takeOver = TruckTrackWith(w.track, w.seen, now, at, c.oldId, w.seenVehicle, vehicle, &c.byVehicle, there);
     w.seen = now;
     w.seenVehicle = now.kind[0] ? vehicle : 0;
     return c;
+}
+inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle, ULONGLONG at)
+{
+    return TruckWatchStepWith(w, now, vehicle, at, [](const TruckWho2 &, uint64_t) { return false; });
 }
 
 // The mode in force for what f found: the start mode is the highest on offer (Increased where it is on, else Normal),

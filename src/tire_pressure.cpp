@@ -232,22 +232,8 @@ static bool Write(uint64_t addr, float v) { return WriteAs(addr, v); }
 // the key of TirePressure.trucks.ini. The game holds it as a text at model + 0x588, the model at vehicle + 0x60. A text
 // is 0x20 bytes: its characters while it has room for fewer than 16, else a pointer to them; the length at + 0x10 and
 // the room at + 0x18 (Next Gen Gameplay's TruckText reads it so). False where it is not read, empty or 95 long or more.
-static bool TruckKindName(uint64_t vehicle, char (&out)[96])
-{
-    out[0] = 0;
-    uint64_t model = 0, chars = 0, length = 0, room = 0;
-    uint8_t text[0x20];
-    if (!Read(vehicle + 0x60, model) || !Read(model + 0x588, text)) return false;
-    memcpy(&chars, text, 8);
-    memcpy(&length, text + 0x10, 8);
-    memcpy(&room, text + 0x18, 8);
-    if (!length || length >= 95 || room < length) return false;
-    if (room < 16) memcpy(out, text, (size_t)length);
-    else if (chars < 0x10000 || !ReadProcessMemory(GetCurrentProcess(), (void *)chars, out, (size_t)length, nullptr)) return false;
-    out[length] = 0;
-    TruckKindClean(out);
-    return out[0] != 0;
-}
+static bool GamePeek(uint64_t at, void *out, size_t size) { return at >= 0x10000 && ReadProcessMemory(GetCurrentProcess(), (void *)at, out, size, nullptr) != 0; }
+static bool TruckKindName(uint64_t vehicle, char (&out)[96]) { return TruckKindOf(GamePeek, vehicle, out); }
 
 // The game's own id of the driven truck ("{8E42BF0A-F7C6-40f9-B0F2-225DE74CE031}"), read as Next Gen Gameplay reads it
 // (truck_modes.h TruckIdOf: behind the pointer at vehicle + 0x48); "" where it is not read.
@@ -2807,7 +2793,31 @@ static DWORD WINAPI Run(void *)
                 strncpy_s(driven.kind, kindRead, _TRUNCATE);
                 TruckIdRead(vehicle, driven.id);
             }
-            const TruckChange c = TruckWatchStep(watch, driven, vehicle, GetTickCount64());
+            bool checked = false;
+            TruckThere there = {};
+            uint64_t thereVehicle = 0;
+            char thereId[40] = {};
+            const TruckChange c = TruckWatchStepWith(watch, driven, vehicle, GetTickCount64(), [&](const TruckWho2 &gone, uint64_t goneVehicle) {
+                checked = true;
+                thereVehicle = goneVehicle;
+                strncpy_s(thereId, gone.id, _TRUNCATE);
+                return TruckStillThere(GamePeek, goneVehicle, gone.kind, gone.id, vehicle, there);
+            });
+            if (checked)
+                Log(L"truck %S: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), its chassis body %p in world %p (the new truck's %p): %s",
+                    driven.kind, thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body,
+                    (void *)there.world, (void *)there.newWorld, there.there ? L"another truck, not taken over" : L"gone, taken over");
+            if (c.changed && vehicle)
+            {
+                // the take-over check's world, once a truck: the chassis's and the first wheel body's m_world should be the
+                // same and not 0 (the Reviewer's addendum point 3)
+                uint64_t body = 0, vtable = 0, world = 0, wheelBody = 0, wheelWorld = 0;
+                float inverse = 0.0f;
+                TruckChassisWorld(GamePeek, vehicle, body, vtable, inverse, world);
+                TruckWheelWorld(GamePeek, vehicle, wheelBody, wheelWorld);
+                Log(L"truck %S: its chassis body %p in world %p, its first wheel's body %p in world %p (Havok's m_world at + 0x10, not confirmed)", driven.kind,
+                    (void *)body, (void *)world, (void *)wheelBody, (void *)wheelWorld);
+            }
             TruckModeFound f = {};
             bool taken = false, firstShared = false;
             const bool read = TruckModeOnChange(trucksFile, g_perTruck, cur, watch.seen, c, f, taken, firstShared);
@@ -4076,6 +4086,91 @@ static bool TruckOwnTest()
             check(same && other && kindOther && between && ownKept,
                   "take-over: on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same pointer with another "
                   "kind or another truck between; an id with a mode of its own keeps it on the same pointer");
+        }
+        // another vehicle within 20 s asks whether the old truck is still there: there, no take-over; gone, taken over;
+        // the same vehicle and a gap over 20 s never ask
+        {
+            auto ask = [&](uint64_t on, ULONGLONG after, bool still, int &asked, uint64_t &askedOn) {
+                TruckWatch v = {};
+                TruckWatchStep(v, a1, 0x1000, 0);
+                TruckWatchStep(v, nobody, 0, 1000);
+                return TruckWatchStepWith(v, a2, on, 1000 + after, [&](const TruckWho2 &g, uint64_t gv) {
+                    asked++;
+                    askedOn = gv;
+                    return still && !strcmp(g.id, id1);
+                });
+            };
+            int n1 = 0, n2 = 0, n3 = 0, n4 = 0;
+            uint64_t on1 = 0, on2 = 0, on3 = 0, on4 = 0;
+            const bool stillThere = !ask(0x2000, 5000, true, n1, on1).takeOver && n1 == 1 && on1 == 0x1000;
+            const TruckChange g2 = ask(0x2000, 5000, false, n2, on2);
+            const bool goneOver = g2.takeOver && n2 == 1 && !strcmp(g2.oldId, id1);
+            const bool sameNot = ask(0x1000, 5000, true, n3, on3).takeOver && n3 == 0;
+            const bool lateNot = !ask(0x2000, 21000, true, n4, on4).takeOver && n4 == 0;
+            check(stillThere && goneOver && sameNot && lateNot,
+                  "take-over: on another vehicle within 20 s the old truck still there is no take-over, gone it is; the same vehicle and a gap over 20 s never ask");
+        }
+        // the check's reads: the old truck is there only with its id and kind, a chassis body of the new one's class
+        // and a truck's mass, in the new truck's world (not 0)
+        {
+            static uint8_t game[0x4000];
+            memset(game, 0, sizeof game);
+            const uint64_t base = 0x9000000;
+            auto peek = [&](uint64_t at, void *out, size_t size) {
+                if (at < base || at + size > base + sizeof game) return false;
+                memcpy(out, game + (at - base), size);
+                return true;
+            };
+            auto put = [&](uint64_t at, const void *v, size_t size) { memcpy(game + (at - base), v, size); };
+            auto put64 = [&](uint64_t at, uint64_t v) { put(at, &v, 8); };
+            auto putText = [&](uint64_t at, const char *text) {
+                uint8_t s[0x20] = {};
+                const uint64_t size = strlen(text), room = 15;
+                memcpy(s, text, (size_t)size);
+                memcpy(s + 0x10, &size, 8);
+                memcpy(s + 0x18, &room, 8);
+                put(at, s, sizeof s);
+            };
+            const uint64_t v1 = base, m1 = base + 0x1000, b1 = base + 0x1800, i1 = base + 0x1C00, v2 = base + 0x2000, m2 = base + 0x3000, b2 = base + 0x3800,
+                           vt = 0x141234560, world = 0x9100000;
+            const char *oldId = "{11111111-2222-3333-4444-555555555555}";
+            put(i1, oldId, 39);
+            put64(v1 + 0x48, i1);
+            put64(v1 + 0x60, m1);
+            putText(m1 + 0x588, "test_kind");
+            put64(m1 + 0x230, b1);
+            put64(b1, vt);
+            const float inv1 = 1.0f / 3000.0f, inv2 = 1.0f / 3500.0f;
+            put(b1 + 0x22C, &inv1, 4);
+            put64(b1 + 0x10, world);
+            put64(v2 + 0x60, m2);
+            putText(m2 + 0x588, "test_kind");
+            put64(m2 + 0x230, b2);
+            put64(b2, vt);
+            put(b2 + 0x22C, &inv2, 4);
+            put64(b2 + 0x10, world);
+            TruckThere o = {};
+            const bool there = TruckStillThere(peek, v1, "test_kind", oldId, v2, o) && o.body == b1 && o.world == world && o.newWorld == world && !strcmp(o.id, oldId) &&
+                               !strcmp(o.kind, "test_kind");
+            game[i1 - base + 1] = '9';
+            const bool otherId = !TruckStillThere(peek, v1, "test_kind", oldId, v2, o) && o.id[1] == '9';
+            game[i1 - base + 1] = '1';
+            const bool unread = !TruckStillThere(peek, 0x9800000, "test_kind", oldId, v2, o) && !o.id[0] && !o.body;
+            put64(b1 + 0x10, 0);
+            const bool outOfWorld = !TruckStillThere(peek, v1, "test_kind", oldId, v2, o) && !strcmp(o.id, oldId);
+            put64(b1 + 0x10, world + 0x1000);
+            const bool otherWorld = !TruckStillThere(peek, v1, "test_kind", oldId, v2, o);
+            put64(b1 + 0x10, world);
+            putText(m1 + 0x588, "test_other");
+            const bool otherKind = !TruckStillThere(peek, v1, "test_kind", oldId, v2, o);
+            putText(m1 + 0x588, "test_kind");
+            put64(b1, vt + 8);
+            const bool otherClass = !TruckStillThere(peek, v1, "test_kind", oldId, v2, o);
+            put64(b1, vt);
+            const bool again = TruckStillThere(peek, v1, "test_kind", oldId, v2, o);
+            check(there && otherId && unread && outOfWorld && otherWorld && otherKind && otherClass && again,
+                  "take-over check: the old truck is there with its id and kind and its chassis in the new truck's world; another id, no vehicle, a body out of "
+                  "the world (0) or in another, another kind or another body class is gone");
         }
         // while driven: a new id on the same vehicle takes the mode over, on another vehicle it is another truck; a first id is none
         TruckWatch d = {};

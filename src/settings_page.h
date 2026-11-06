@@ -15,7 +15,7 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the page was drawn
 };
 static const unsigned long long kPageCaptureMs = 8000;
-enum { kPageChanged = 1, kPageReload = 2 };
+enum { kPageChanged = 1, kPageReload = 2, kPageTruckOnly = 4, kPageTruckKind = 8 }; // kPageTruck...: the tick This truck only on, off
 
 // The Dear ImGui key as a virtual key, for the keys the panel key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -139,9 +139,23 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     PageTip("Tires roll harder on soft ground and when aired down. On by default.");
     ImGui::EndDisabled();
     changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
-    PageTip("The mode is saved by the truck kind's name in TirePressure.trucks.ini. It comes back the moment you drive that "
-            "truck again, without a sound or a wait, across map loads and game starts. A truck not driven since 1.3.1 starts "
-            "at Normal. Two trucks of one kind share it. Off: one mode for every truck, Normal at each game start.");
+    PageTip("The mode is saved per owned truck in TirePressure.trucks.ini. It comes back the moment you drive that truck "
+            "again, without a sound or a wait, across map loads and game starts. A truck not driven before starts in the "
+            "highest mode on offer (Increased, or Normal without it). Off: one mode for every truck, Normal at each game start.");
+    {
+        // the tick This truck only (as Next Gen Gameplay's): ticked, a mode chosen is this truck's own; unticked, every
+        // truck of its kind without a mode of its own shares it. Only for a truck whose id the game gives.
+        const bool can = s.perTruck && live.wheels > 0 && live.truck[0] && live.truckId[0] && live.truckLevel >= 0;
+        bool only = can && live.truckLevel != 1; // 1 = kTruckLevelKind (truck_modes.h): the kind's mode in force
+        ImGui::Indent();
+        ImGui::BeginDisabled(!can);
+        if (ImGui::Checkbox("This truck only", &only)) act |= only ? kPageTruckOnly : kPageTruckKind;
+        ImGui::EndDisabled();
+        ImGui::Unindent();
+        PageTip("Ticked: a mode you choose is this truck's alone, kept by the game's id for it. Unticked: it goes to every "
+                "truck of this kind without a mode of its own, and this truck's own is kept for when you tick it again. "
+                "Greyed out while no truck is driven or the game gives no id for it.");
+    }
     PageLabel("Outside temperature", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##outside", &s.ambientC, -40.0f, 50.0f, "%.0f C", ImGuiSliderFlags_AlwaysClamp));

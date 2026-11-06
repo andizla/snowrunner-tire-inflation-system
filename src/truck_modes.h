@@ -1,11 +1,21 @@
-// truck_modes.h: each truck's pressure mode, kept by the truck kind's name (PerTruck, since 1.3.1) in
-// TirePressure.trucks.ini next to the exe. One section per kind as the game's files name it ("western_star_6900xd";
-// "zetros/176593" for a truck from a mod) with Mode=Low, Reduced, Normal or Increased. Two trucks of one kind share
-// it. tire_pressure.cpp reads the kind from the game (TruckKindName) and calls these.
+// truck_modes.h: each truck's pressure mode (PerTruck, since 1.3.1) in TirePressure.trucks.ini next to the exe.
+// [<kind>] holds the mode of every truck of a kind, by the kind's name as the game's files name it ("western_star_6900xd";
+// "zetros/176593" for a truck from a mod). Since 1.3.4 [<kind>:<id>] holds one owned truck's, by the game's own id for
+// it ("{8E42BF0A-F7C6-40f9-B0F2-225DE74CE031}"), with Own=1 while it is in force (Own=0: kept, not in use; a section
+// without Own is in force). The mode in force: the truck's own, else the kind's, else the start mode (the highest
+// mode on offer). tire_pressure.cpp reads the kind and the id from the game (TruckKindName, TruckIdRead) and calls these.
+// The id, its shape and the take-over of a truck the game made anew under another id are read and done as Next Gen
+// Gameplay does (its src\truck.h lines 375 to 405, TruckIdentity, TruckIdText and TruckKey, and src\gauges.cpp's
+// TruckSuspTakeOver, TruckSuspSeen, TruckSuspPrune, SuspTrack and SuspAgainTakeOver, at its commit 88e1ba7), so both
+// mods name a truck alike. Tire Inflation runs without Gameplay: this is its own copy, not a call into it.
 #pragma once
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 #include <string>
+#include <vector>
+#include <utility>
+#include <algorithm>
 #include "panel.h"
 
 static const wchar_t *const kTruckModesFile = L"TirePressure.trucks.ini";
@@ -26,29 +36,313 @@ inline std::wstring TruckKindWide(const char *kind)
     return w;
 }
 
-// The mode saved for kind; false when none is saved or the word is no mode's name.
-inline bool TruckModeLoad(const std::wstring &file, const char *kind, int &mode)
+// The shape of the game's id of a truck: 38 characters, braces around hex digits in groups of 8, 4, 4, 4 and 12.
+// Gameplay's TruckIdText (src\truck.h at 88e1ba7), as it is.
+inline bool TruckIdText(const char *text, size_t length)
+{
+    if (length != 38 || text[0] != '{' || text[37] != '}') return false;
+    for (size_t i = 1; i < 37; i++)
+    {
+        const char c = text[i];
+        const bool dash = i == 9 || i == 14 || i == 19 || i == 24;
+        if (dash ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+// The game's id of the truck at vehicle, as Gameplay's TruckKey reads it (src\truck.h at 88e1ba7): the text in braces
+// behind the pointer at vehicle + 0x48, 38 characters and its end. "" where it is not read or has not the shape of one.
+// peek reads size bytes at an address of the game's into out, false where it cannot.
+template <class Peek> inline void TruckIdOf(Peek peek, uint64_t vehicle, char (&id)[40])
+{
+    id[0] = 0;
+    uint64_t chars = 0;
+    char text[39];
+    if (peek(vehicle + 0x48, &chars, sizeof chars) && chars >= 0x10000 && peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id, text, sizeof text);
+}
+
+// Which truck the mode goes by: its kind's name and the game's id for it ("" = not read). kind "" = none driven.
+struct TruckWho2 { char kind[96]; char id[40]; };
+inline bool TruckWhoSame(const TruckWho2 &a, const TruckWho2 &b) { return !strcmp(a.kind, b.kind) && !strcmp(a.id, b.id); }
+
+// A truck's section: the kind's, or with an id the owned truck's.
+inline std::wstring TruckSection(const char *kind, const char *id)
+{
+    return id && id[0] ? TruckKindWide(kind) + L":" + TruckKindWide(id) : TruckKindWide(kind);
+}
+
+// The mode a section holds; false when none is saved there or the word is no mode's name.
+inline bool TruckSectionMode(const std::wstring &file, const std::wstring &section, int &mode)
 {
     wchar_t buf[32] = {};
-    GetPrivateProfileStringW(TruckKindWide(kind).c_str(), L"Mode", L"", buf, 32, file.c_str());
+    GetPrivateProfileStringW(section.c_str(), L"Mode", L"", buf, 32, file.c_str());
     for (int m = 0; m < kModeCount; m++)
         if (buf[0] && !_wcsicmp(buf, kTruckModeNames[m])) { mode = m; return true; }
     return false;
 }
 
-// The mode for kind, into its section. A missing file is made first with a note at its head on what it is.
+// The mode saved for kind (the kind's section alone); false when none is saved or the word is no mode's name.
+inline bool TruckModeLoad(const std::wstring &file, const char *kind, int &mode) { return TruckSectionMode(file, TruckSection(kind, ""), mode); }
+
+// Where the mode in force comes from: the start mode (no section for the truck), the kind's section, the truck's own.
+enum { kTruckLevelStart, kTruckLevelKind, kTruckLevelOwn };
+struct TruckModeFound
+{
+    int mode;     // the mode in force; unset at kTruckLevelStart
+    int level;    // kTruckLevel...
+    bool ownKept; // the truck's own section is there with Own=0 (its mode kept, not in use)
+    int keptMode; // that section's mode
+};
+
+// The mode for the truck kind/id: its own section where it is in force, else the kind's, else none (the start mode).
+// id "": the kind's alone.
+inline TruckModeFound TruckModeFind(const std::wstring &file, const char *kind, const char *id)
+{
+    TruckModeFound f = { kNormal, kTruckLevelStart, false, kNormal };
+    if (id && id[0])
+    {
+        const std::wstring own = TruckSection(kind, id);
+        int m = kNormal;
+        if (TruckSectionMode(file, own, m))
+        {
+            if (GetPrivateProfileIntW(own.c_str(), L"Own", 1, file.c_str())) { f.mode = m; f.level = kTruckLevelOwn; return f; }
+            f.ownKept = true;
+            f.keptMode = m;
+        }
+    }
+    int m = kNormal;
+    if (TruckSectionMode(file, TruckSection(kind, ""), m)) { f.mode = m; f.level = kTruckLevelKind; }
+    return f;
+}
+
+// A missing file is made first with a note at its head on what it is.
+inline void TruckModesFileMake(const std::wstring &file)
+{
+    if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+    FILE *f = nullptr;
+    if (_wfopen_s(&f, file.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
+    {
+        fwprintf(f, L"; Each truck's pressure mode: [kind] for every truck of a kind, [kind:{id}] for one owned truck by the game's id\n"
+                    L"; for it (Own=1 in force, Own=0 kept). It is written when a mode is chosen and put back when that truck is\n"
+                    L"; driven again. TakenBy and TakenAt mark a truck the game made anew under another id. PerTruck=0 in\n"
+                    L"; TirePressure.ini turns this off.\n");
+        fclose(f);
+    }
+}
+
+// The mode for kind, into the kind's section. Key by key through the profile API.
 inline void TruckModeSave(const std::wstring &file, const char *kind, int mode)
 {
     if (mode < 0 || mode >= kModeCount) return;
-    if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES)
+    TruckModesFileMake(file);
+    WritePrivateProfileStringW(TruckSection(kind, "").c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
+}
+
+// The mode for one owned truck, into its own section with Own (1 = in force, 0 = kept).
+inline void TruckModeSaveOwn(const std::wstring &file, const char *kind, const char *id, int mode, bool own)
+{
+    if (mode < 0 || mode >= kModeCount || !id || !id[0]) return;
+    TruckModesFileMake(file);
+    const std::wstring sec = TruckSection(kind, id);
+    WritePrivateProfileStringW(sec.c_str(), L"Own", own ? L"1" : L"0", file.c_str());
+    WritePrivateProfileStringW(sec.c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
+}
+
+// A mode chosen in the panel for the truck kind/id, whose mode came from level: it goes where the mode in force comes
+// from. The kind's level writes the kind's; the truck's own level, or the start mode of a truck whose id is read,
+// writes the truck's own section (This truck only is ticked for a truck not driven before). The level now in force.
+inline int TruckModeChosen(const std::wstring &file, const char *kind, const char *id, int level, int mode)
+{
+    if (level == kTruckLevelKind || !id || !id[0])
     {
-        FILE *f = nullptr;
-        if (_wfopen_s(&f, file.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
-        {
-            fwprintf(f, L"; Each truck's pressure mode by the truck kind's name. It is written when a mode is chosen and put back when\n"
-                        L"; that truck is driven again. PerTruck=0 in TirePressure.ini turns this off.\n");
-            fclose(f);
-        }
+        TruckModeSave(file, kind, mode);
+        return kTruckLevelKind;
     }
-    WritePrivateProfileStringW(TruckKindWide(kind).c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
+    TruckModeSaveOwn(file, kind, id, mode, true);
+    return kTruckLevelOwn;
+}
+
+// The tick "This truck only" for the truck kind/id in mode (at f's level). On: the truck's own section in force; one it
+// kept with Own=0 comes back with its mode (keptMode is set, true returned), else the mode in force becomes its own.
+// Off: the mode in force goes into the kind's section, and the truck's own section stays with Own=0 (kept, not in
+// use, so ticking again brings it back), as Gameplay's This truck only does. Nothing for a truck whose id is not read.
+// False when the mode in force stays as it is.
+inline bool TruckOnlySet(const std::wstring &file, const char *kind, const char *id, const TruckModeFound &f, int mode, bool on, int &keptMode)
+{
+    if (!kind[0] || !id || !id[0]) return false;
+    if (on)
+    {
+        if (f.level == kTruckLevelOwn) return false;
+        if (f.ownKept)
+        {
+            TruckModeSaveOwn(file, kind, id, f.keptMode, true);
+            keptMode = f.keptMode;
+            return f.keptMode != mode;
+        }
+        TruckModeSaveOwn(file, kind, id, mode, true);
+        return false;
+    }
+    if (f.level == kTruckLevelKind) return false;
+    TruckModeSave(file, kind, mode);
+    if (f.level == kTruckLevelOwn) TruckModeSaveOwn(file, kind, id, mode, false);
+    return false;
+}
+
+// The take-over (Gameplay's TruckSuspTakeOver at 88e1ba7): the game made the driven truck anew under another id. The
+// old id's section is copied to the new id when the new one has none of its own (one it has means another truck of
+// the kind, which keeps its mode). The old section stays, marked TakenBy=<new id> and TakenAt=<when, in 100 ns since
+// 1601>; the mark goes when the old id is driven again (TruckModeSeen), and only the newest kTruckTakenKept marked
+// sections of the file are kept (TruckModePrune); an unmarked section is never dropped. Key by key through the
+// profile API. True when a mode was taken over.
+static const int kTruckTakenKept = 10;
+inline int TruckModePrune(const std::wstring &file);
+inline bool TruckModeTakeOver(const std::wstring &file, const char *kind, const char *oldId, const char *newId, unsigned long long at = 0)
+{
+    if (!kind[0] || !oldId[0] || !newId[0] || !strcmp(oldId, newId)) return false;
+    const std::wstring from = TruckSection(kind, oldId), to = TruckSection(kind, newId);
+    std::vector<wchar_t> keys(4096, L'\0'), mine(64, L'\0');
+    if (!GetPrivateProfileSectionW(from.c_str(), keys.data(), (DWORD)keys.size(), file.c_str())) return false;
+    if (GetPrivateProfileSectionW(to.c_str(), mine.data(), (DWORD)mine.size(), file.c_str())) return false;
+    bool any = false;
+    for (const wchar_t *k = keys.data(); *k; k += wcslen(k) + 1)
+    {
+        const wchar_t *eq = wcschr(k, L'=');
+        if (!eq) continue;
+        const std::wstring name(k, eq - k);
+        if (!_wcsicmp(name.c_str(), L"TakenBy") || !_wcsicmp(name.c_str(), L"TakenAt")) continue; // the new section is the truck's own, unmarked
+        any = WritePrivateProfileStringW(to.c_str(), name.c_str(), eq + 1, file.c_str()) || any;
+    }
+    if (!any) return false;
+    if (!at)
+    {
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        at = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    }
+    wchar_t when[32];
+    swprintf_s(when, L"%llu", at);
+    WritePrivateProfileStringW(from.c_str(), L"TakenBy", TruckKindWide(newId).c_str(), file.c_str());
+    WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, file.c_str());
+    TruckModePrune(file);
+    return true;
+}
+
+// An id driven again: its section's take-over mark goes (it is a truck in use, not a left-over).
+inline void TruckModeSeen(const std::wstring &file, const char *kind, const char *id)
+{
+    if (!kind[0] || !id[0]) return;
+    const std::wstring sec = TruckSection(kind, id);
+    wchar_t by[48] = {};
+    if (!GetPrivateProfileStringW(sec.c_str(), L"TakenBy", L"", by, 48, file.c_str())) return;
+    WritePrivateProfileStringW(sec.c_str(), L"TakenBy", nullptr, file.c_str());
+    WritePrivateProfileStringW(sec.c_str(), L"TakenAt", nullptr, file.c_str());
+}
+
+// The marked sections beyond the newest kTruckTakenKept go out of the file (one count for the whole file, as
+// Gameplay's per file). The count dropped.
+inline int TruckModePrune(const std::wstring &file)
+{
+    std::vector<wchar_t> names(65536, L'\0');
+    if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str())) return 0;
+    std::vector<std::pair<unsigned long long, std::wstring>> marked;
+    for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1)
+    {
+        if (!wcschr(n, L':')) continue;
+        wchar_t at[32] = {};
+        if (!GetPrivateProfileStringW(n, L"TakenAt", L"", at, 32, file.c_str())) continue;
+        marked.push_back({ _wcstoui64(at, nullptr, 10), n });
+    }
+    if ((int)marked.size() <= kTruckTakenKept) return 0;
+    std::sort(marked.begin(), marked.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    int dropped = 0;
+    for (size_t i = kTruckTakenKept; i < marked.size(); i++, dropped++) WritePrivateProfileStringW(marked[i].second.c_str(), nullptr, nullptr, file.c_str());
+    return dropped;
+}
+
+// The same kind under a new id while driven (no "none" between) is a take-over only on the vehicle the old id was
+// taken with; a new id on another vehicle is another truck of the kind (Gameplay's SuspAgainTakeOver at 88e1ba7).
+inline bool TruckAgainTakeOver(const char *oldId, uint64_t oldVehicle, const char *newId, uint64_t newVehicle)
+{
+    return oldId[0] && newId[0] && strcmp(oldId, newId) && oldVehicle && oldVehicle == newVehicle;
+}
+
+static const ULONGLONG kTruckTakeOverMs = 20000; // the take-over's window: the same kind back under a new id within 20 s
+
+// The take-over's watch (Gameplay's SuspTrack at 88e1ba7): the truck that went last with none driven since, and when.
+// At each change of the driven truck (or to none), TruckTrack says whether the truck now driven takes over the one
+// that went: the same kind under another id within 20 s, no other truck driven between. oldId gets the id that went.
+struct TruckTracker { TruckWho2 gone; ULONGLONG goneAt; };
+inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40])
+{
+    oldId[0] = 0;
+    if (was.kind[0] && !now.kind[0])
+    {
+        t.gone = was;
+        t.goneAt = at;
+        return false;
+    }
+    if (!now.kind[0]) return false;
+    const bool due = t.gone.kind[0] && !strcmp(t.gone.kind, now.kind) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kTruckTakeOverMs;
+    if (due) strcpy_s(oldId, t.gone.id);
+    t.gone = TruckWho2{};
+    return due;
+}
+
+// The driven truck from pass to pass: the one read last (kind "" = none driven) and its vehicle, and the take-over's watch.
+struct TruckWatch { TruckWho2 seen; uint64_t seenVehicle; TruckTracker track; };
+// What one pass's change of the driven truck comes to.
+struct TruckChange
+{
+    bool changed;      // another truck than on the last pass (another kind, or another id), or none
+    bool takeOver;     // the game made the truck that went anew under now's id: now takes oldId's mode over
+    bool whileDriven;  // that take-over is of a new id on the same vehicle while driven (else: back within 20 s)
+    char oldId[40];
+    ULONGLONG goneAt;  // when the truck that went was last read (for the log)
+};
+
+// One pass: now is the truck read on vehicle (kind "" when none is driven). An id not read on this pass leaves the last
+// one of the same vehicle and kind (as Gameplay's TruckWhoStep). The same kind under another id with no pass of none
+// between is a take-over on the same vehicle only, a first read of the id none (Gameplay's SuspAgainTakeOver); else
+// the watch decides (TruckTrack).
+inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle, ULONGLONG at)
+{
+    TruckChange c = {};
+    if (now.kind[0] && !now.id[0] && vehicle == w.seenVehicle && !strcmp(w.seen.kind, now.kind)) strcpy_s(now.id, w.seen.id);
+    if (TruckWhoSame(now, w.seen)) return c;
+    c.changed = true;
+    c.goneAt = w.track.goneAt;
+    if (w.seen.kind[0] && now.kind[0] && !strcmp(w.seen.kind, now.kind))
+    {
+        c.whileDriven = c.takeOver = TruckAgainTakeOver(w.seen.id, w.seenVehicle, now.id, vehicle);
+        if (c.takeOver) strcpy_s(c.oldId, w.seen.id);
+    }
+    else c.takeOver = TruckTrack(w.track, w.seen, now, at, c.oldId);
+    w.seen = now;
+    w.seenVehicle = now.kind[0] ? vehicle : 0;
+    return c;
+}
+
+// The mode in force for what f found: the start mode is the highest on offer (Increased where it is on, else Normal),
+// and a saved Increased with Increased off goes Normal. modeCount: the modes in use (3 or 4).
+inline int TruckModeInForce(const TruckModeFound &f, int modeCount)
+{
+    const int m = f.level == kTruckLevelStart ? modeCount - 1 : f.mode;
+    return m >= modeCount || m < 0 ? kNormal : m;
+}
+
+// A change of the driven truck to now (c from TruckWatchStep) while the mode in force goes by cur. With PerTruck on and
+// now another truck than cur: the take-over where it is due (taken is true when a mode was taken over), the take-over
+// mark of now's id goes, cur becomes now and f what TruckModeFind found for it; true then. PerTruck off: one mode for
+// all, cur follows the truck and nothing is read or written; false.
+inline bool TruckModeOnChange(const std::wstring &file, bool perTruck, TruckWho2 &cur, const TruckWho2 &now, const TruckChange &c, TruckModeFound &f, bool &taken)
+{
+    taken = false;
+    if (!c.changed || !now.kind[0]) return false;
+    if (!perTruck) { cur = now; return false; }
+    if (TruckWhoSame(now, cur)) return false;
+    taken = c.takeOver && TruckModeTakeOver(file, now.kind, c.oldId, now.id);
+    TruckModeSeen(file, now.kind, now.id);
+    cur = now;
+    f = TruckModeFind(file, cur.kind, cur.id);
+    return true;
 }

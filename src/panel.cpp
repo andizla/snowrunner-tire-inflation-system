@@ -142,6 +142,7 @@ static void OnPage()
     const int act = SettingsPage(s, live, st, PadButtons());
     if (act & kPageChanged) SettingsPut(s);
     if (act & kPageReload) SettingsReload();
+    if (act & (kPageTruckOnly | kPageTruckKind)) TruckOnlyPut((act & kPageTruckOnly) != 0);
 }
 
 bool PanelInit(HMODULE)

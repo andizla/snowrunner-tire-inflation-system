@@ -654,7 +654,8 @@ does not know.</p>
 
 def s_memory():
     rows = [['control (global)', '+0x8', 'the truck you drive', 'read'],
-            ['vehicle', '+0x60', 'model; its +0x230 is the chassis body (velocity +0x230, forward axis +0x170, position +0x1A0)', 'read'],
+            ['vehicle', '+0x48', "the game's id for the truck: a text in braces behind the pointer (as Next Gen Gameplay reads it)", 'read'],
+            ['vehicle', '+0x60', "model; its +0x230 is the chassis body (velocity +0x230, forward axis +0x170, position +0x1A0), its +0x588 the kind's name", 'read'],
             ['vehicle', '+0x68', 'truck action', 'read'],
             ['vehicle', '+0x108, +0x10C', 'damage sum and capacity', 'read'],
             ['vehicle', '+0x200, +0x208', 'wheel model array (at most 64)', 'read'],
@@ -842,7 +843,15 @@ menu is open, the game gets no mouse or keys and Spotter's hotkeys rest. While S
 does nothing.</li>
 <li>Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone.
 The log says which route the overlay takes. ReShade's <code>dxgi.dll</code> and <code>ReShade.ini</code> stay in the zip for RivaTuner users,
-whose game does not boot without it. The mods draw without it.</li></ul>
+whose game does not boot without it. The mods draw without it.</li>
+<li>The pressure mode is kept per owned truck, by the game's own id for it (read as Next Gen Gameplay reads it, so both mods name a
+truck alike). Two trucks of one kind each keep their own. <code>TirePressure.trucks.ini</code> holds <code>[kind:{{id}}]</code> with
+<code>Own=1</code> for one truck and <code>[kind]</code> for its kind. The mode in force is the truck's own, else the kind's, else the start
+mode. A truck not driven before starts in the highest mode on offer: Increased, or Normal with <code>Increased=0</code>. Under "Each truck
+keeps its own pressure" the tab has "This truck only". Ticked, a mode chosen is this truck's alone. Unticked, it goes to the kind's
+section and the truck's own is kept with <code>Own=0</code> until it is ticked again. When the game makes a truck anew under another id
+(a recovery, a garage), the new id takes the old one's mode over, as Next Gen Gameplay does, with one line in the log. A file from
+1.3.1 to 1.3.3 reads as before: its trucks go by their kind until This truck only is ticked.</li></ul>
 <h3>Changed in 1.3.3</h3>
 <ul><li>The step bindings are the plain d-pad left and right, <code>DPadLeft</code> and <code>DPadRight</code> by default (an ini's
 <code>LB+DPadLeft</code> becomes <code>DPadLeft</code>). They act only while the panel is open and no shoulder button is held. LB + d-pad

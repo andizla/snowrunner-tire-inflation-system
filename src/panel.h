@@ -64,7 +64,7 @@ struct TpSettings
     bool tireDamage;         // TireDamage: driving too fast for the pressure wears the tires (the modes' MinVel .. DamageTick)
     bool rollingRadius;      // RollingRadius: the gears make up for the flattened wheels, but for what a real tire loses
     bool standStill;         // StandStill: a pressure change only goes on while the truck stands still
-    bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini); 0 = one mode for all, Normal at every start
+    bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini: the owned truck's, else its kind's); 0 = one mode for all, Normal at every start
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
@@ -223,12 +223,15 @@ inline void PresetSettings(TpSettings &s)
 void SettingsGet(TpSettings &out);        // the settings in force (any thread)
 void SettingsPut(const TpSettings &in);   // edited settings: the mod applies them at once and saves the ini
 void SettingsReload();                    // read the ini again (the page's button)
+void TruckOnlyPut(bool on);               // the page's tick This truck only (truck_modes.h TruckOnlySet): the mod's thread applies it
 
 // What the settings page shows about the truck being driven.
 struct TpLive
 {
     int wheels;                  // 0 = no truck driven
     char truck[96];              // its kind's name ("western_star_6900xd"), "" = not read
+    char truckId[40];            // the game's id for it ("{8E42BF0A-...}"), "" = not read
+    int truckLevel;              // where its mode comes from (truck_modes.h kTruckLevel...: the start mode, the kind's, its own); -1 = none (PerTruck=0, no truck)
     float ground, asphalt, mud;  // the first wheel's own grip (from its tire file)
     float balance;               // the vanilla balance factor on that wheel (1 = untouched)
     int mode;                    // PressureMode

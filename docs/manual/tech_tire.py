@@ -293,6 +293,27 @@ offset then shrinks by the same share, so the deepest mode in use takes all the 
 <p class="where">Example, the test scout (<i>R</i> = 0.47 m, own offset 1.88 cm): FlattenLimit {SCOUT_LIMIT * 100:.1f} cm, room
 {SCOUT_ROOM * 100:.2f} cm. Low gets {lo * 100:.1f} cm and Reduced {re_ * 100:.1f} cm. The cylinder never goes below 40% of the
 radius, whatever the ini says. No offset goes past the room: in the cold Low's offset is carried past the deepest mode's (equation 3, up to 12 cm), and before 1.3.0 that went up to 1.2 times the room.</p>
+<h3>The stiff base</h3>
+<p>Each tire type has a softness preset (WheelSoftness in the trucks.xml of initial_templates): Stiff 0.02, Soft 0.03, ScoutSoft 0.1, Average
+and ScoutDefault 0.025. The game holds a wheel's own offset at wheel +0xB4 as the tire file's <code>RadiusOffset</code> times the wheel's
+Scale, which is the radius at +0x98: a Soft tire (0.03) on a wheel of radius 0.580 is held at 0.0174, and a Stiff one (0.02) on 0.420
+at 0.0084. With the base on the Soft one is kept at 0.0116, and the Stiff one stays. With <code>StiffBase=1</code> the mod keeps <i>o</i><sub>own</sub> = min(+0xB4, 0.02 × Scale), Stiff's offset in the same units,
+in equations (13) and (14) (<code>StiffKeptOffset</code>, stiff_probe.h). A held offset within 0.0005 of the cap is kept as held, so a Stiff tire is never written a hair off. The tire file's Radius is taken as 1: every vanilla
+TruckWheels file that sets one sets 1. Two figures are kept apart. The game's own stock, <i>R</i> − (+0xB4), still tells a fresh or a
+repaired shape. The base, <i>R</i> − <i>o</i><sub>own</sub>, is what is written, with the room and the worn tire's capture. Off, the
+two are the same, and every wheel the mod wrote gets the game's cylinder back on the next pass. Another tire on the wheel is told by its
+mesh's text at wheel model +0x060 → +0x010. It gives a new stock even where the frictions match the written ones. The log has a
+<code>stiff base: wheel</code> line for each wheel once a truck and tire, <code>stiff base: after 20 s rolling, wheel</code> lines with
+each wheel's sink, and at the start <code>stiff base: on (StiffBase=1), every tire at least</code> as stiff as the game's Stiff ones or
+<code>stiff base: off (StiffBase=0), each tire's own</code> softness.</p>
+<p>The field +0x120 is not SoftForceScale. On the wheels of one tire it held 1e12, −8e32, 0 and −1.9e33, never the file's figure. So the contact's softness is not written. A <code>soft force search (read only, +0x120 is not SoftForceScale):</code>
+looks for it once a truck and tire: the wheel object (0x800 bytes) and what it points to two steps on (0x200 bytes each), every float
+within 0.5 % of a preset's figure as it is, times the Scale, or as its reciprocal. Each <code>soft force search:</code> line is a place hit
+on every wheel, with each wheel's value.</p>
+<p>On some trucks the truck action's list of plain-ground frictions (vehicle +0x68, then +0x98 .. +0xA0) stays empty, so the modes'
+plain-ground factors (dirt, gravel, sand, rock) reach nothing there. Asphalt and mud are on the wheel object and work. Where the list is
+empty, <code>ground grip (read only): truck</code> and <code>ground grip (read only): wheel</code> lines give the action's words around
+it and each wheel's floats from +0x98 to +0xB4, once a truck, to find where the game keeps that friction then.</p>
 <h3>Tires that come soft</h3>
 <p>The game draws the squash from the distance <i>d</i> between the hub and the contact, not from the cylinder. Its wheel model update reads the contact at wheel model +0x21C and +0x220 and works out (Steam build, RVA 0xc239cc):</p>
 {eq('<i>d</i> = √(<i>x</i>² + <i>y</i>²),    squash = min( (<i>R</i> − <i>d</i>) · 1.5, 0.25 <i>R</i> ) + 0.02,  × wheel +0x128', 15)}
@@ -822,7 +843,8 @@ ground by about {(o0 - 1) * SCOUT_ROOM * 1000:.0f} and {(o25 - 1) * SCOUT_ROOM *
 <li><b>A tire that comes soft went far too flat at Low.</b> Its contact sinks inside the cylinder, which FlattenLimit did not count; now the sink is measured and taken off the room (Tires that come soft).</li>
 <li><b>The gear compensation fell short in the low gears.</b> Now each gear's top grows by roll exactly, equation (20).</li></ul>
 <h3>Changed in 1.3.4</h3>
-<ul><li>Rolling drag (<code>RollingDrag</code>, the Realism section's "Rolling drag", on by default, untick it or set <code>RollingDrag=0</code>
+<ul><li>Stiff base (<code>StiffBase</code>, the Realism section's "Stiff base", on by default; untick it or set <code>StiffBase=0</code> to turn it off): every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. A tire already stiffer keeps its own. The modes go on top as before. For now it sets how far the tire sits into its round shape. How soft its contact is stays the tire's own. Off, each wheel gets the game's own shape back.</li>
+<li>Rolling drag (<code>RollingDrag</code>, the Realism section's "Rolling drag", on by default, untick it or set <code>RollingDrag=0</code>
 to turn it off): tires roll harder on soft ground and when aired down. Each wheel on the ground gets a rolling resistance by its ground
 and the pressure, through its own damping, as the game drags a flat tire. Mud counts as dirt for now. The weight is the truck's as the
 game's physics has it, its gravity included, without cargo or a trailer. Hard mode and the insanity mode turn it on. Hard mode's fuel
@@ -899,6 +921,7 @@ def s_tests():
              'The balance: <i>f</i> at strength 1, <i>f</i>² at 2, in between at 1.5; a vanilla tire stays at 1.',
              'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, with fuel ×1.',
              'Rolling drag: at 10 m/s on paved at Normal the written word\'s torque within 1 % of Crr·N·r, with N by the Havok mass and not the files\'; the same at three times the spin; under the floor the torque falls to nothing; ice none, sand at Low ×1.49, no flag dirt; a broken wheel left alone; airborne, off and another truck get the stock back; a write over 2 % and on the game\'s word; no climb over 10 lost records; none while the probe holds; the probe\'s stock back in the truck update; no hook, off.',
+             'Stiff base: Soft on 0.580 and 0.640 is kept at 0.0116 and 0.0128, Stiff on 0.420 stays to the bit, a stiffer tire keeps its own; the base is written through ApplyWheel, a repair at the game\'s stock is still told, off gives the game\'s cylinder back; a tire change with a mode\'s grip still on the wheel keeps the grip\'s stock and takes the shape anew; the soft force search\'s targets and its places on every wheel.',
              'Shared state: the block is created, written and read back by name, every field at its offset.',
              'Sounds: WAV and ADPCM decoding, pak reading (zip and zip64), loop and ending cuts, made loops that join without a click and stay within level, the compressor starting on the right filling and stopping once, change times matching the passes.',
              'Game code, with a copy of the Steam image: every place found at its known address, and each of the three ways to the control global alone gives the same one.']

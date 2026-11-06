@@ -2,6 +2,7 @@
 
 ## [1.3.4]
 
+- Stiff base (`StiffBase`, the Realism section's "Stiff base", on by default; untick it or set `StiffBase=0` to turn it off): every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. A tire already stiffer keeps its own. The modes go on top as before. For now it sets how far the tire sits into its round shape. How soft its contact is stays the tire's own. Off, each wheel gets the game's own shape back.
 - Rolling drag (`RollingDrag`, the Realism section's "Rolling drag", on by default, untick it or set `RollingDrag=0` to turn it off): tires roll harder on soft ground and when aired down. Each wheel on the ground gets a rolling resistance by its ground and the pressure, through its own damping, as the game drags a flat tire. Mud counts as dirt for now. The weight is the truck's as the game's physics has it, its gravity included, without cargo or a trailer. Hard mode and the insanity mode turn it on. Hard mode's fuel factors are 1 now, as the engine burns more against the drag by itself.
 - The insanity mode's fuel factors are 1, as rolling drag now does what they did.
 - While rolling drag is on, every mode's fuel factor is 1: the drag makes a soft tire cost fuel by itself. The Fuel use row keeps its value and counts again with rolling drag off.

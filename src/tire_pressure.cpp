@@ -4005,6 +4005,17 @@ static bool TruckOwnTest()
         const TruckModeFound gb2 = TruckModeFind(file, k, idB);
         const bool bKept = gb2.level == kTruckLevelKind && gb2.ownKept && gb2.keptMode == kReduced;
         const bool noId = !TruckOnlySet(file, k, "", gk, kReduced, 4, true, now);
+        // the review's N3: at its own level with no section for the kind, unticking lifts the truck's mode up into the kind's
+        DeleteFileW(file.c_str());
+        TruckModeSaveOwn(file, k, idA, kLow, true);
+        const TruckModeFound gl = TruckModeFind(file, k, idA);
+        const bool stays = !TruckOnlySet(file, k, idA, gl, kLow, 4, false, now) && now == kLow;
+        int lifted = -1;
+        const TruckModeFound gl2 = TruckModeFind(file, k, idA);
+        const bool liftedOk = TruckModeLoad(file, k, lifted) && lifted == kLow && gl2.level == kTruckLevelKind && gl2.mode == kLow && gl2.ownKept &&
+                              TruckModeInForce(gl2, 4) == kLow;
+        check(stays && liftedOk, "This truck only off at the truck's own level with no section for the kind: its mode goes up into [kind] first, "
+                                 "so the mode in force and the pressure stay (Low, not the start mode)");
         check(ticked && offOk && offAgain && kindWritten && onBack && bTicked && bStays && bKept && noId,
               "This truck only: ticked unless the truck's own holds Own=0; off keeps the truck's with Own=0 and the kind's comes in force, a change then goes "
               "to the kind's; on brings the truck's own back; a truck with none unticked gets Own=0 and its mode, the kind's staying in force; nothing without an id");

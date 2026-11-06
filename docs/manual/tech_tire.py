@@ -850,7 +850,8 @@ truck alike). Two trucks of one kind each keep their own. A mode chosen in the p
 The mode in force is the truck's own, else the kind's, else the start mode. A truck not driven before starts in the highest mode on
 offer: Increased, or Normal with <code>Increased=0</code>. With <code>PerTruck=0</code> the first truck of a game start does too. Under
 "Each truck keeps its own pressure" the tab has "This truck only", ticked unless you untick it for a truck. Unticked, the truck's own is
-kept with <code>Own=0</code>, the kind's mode is in force and a change goes to the kind's section. When the game makes a truck anew under
+kept with <code>Own=0</code>, the kind's mode is in force and a change goes to the kind's section. Where the kind has no section yet,
+the truck's mode goes up into it first, so nothing moves. When the game makes a truck anew under
 another id (a recovery, a garage), the new id takes the old one's mode over, as Next Gen Gameplay does, with one line in the log. A file
 from 1.3.1 to 1.3.3 reads as before, and the first change to a truck writes its own section.</li></ul>
 <h3>Changed in 1.3.3</h3>

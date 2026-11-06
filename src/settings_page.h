@@ -153,7 +153,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         ImGui::EndDisabled();
         ImGui::Unindent();
         PageTip("Ticked (as it starts): a mode you choose is this truck's alone, kept by the game's id for it. Unticked: this "
-                "truck takes its kind's mode, a mode you choose goes to the kind, and its own is kept for when you tick it again. "
+                "truck takes its kind's mode (its own goes up to the kind where the kind has none yet), a mode you choose goes to the kind, and its own is kept "
+                "for when you tick it again. "
                 "Greyed out while no truck is driven or the game gives no id for it.");
     }
     PageLabel("Outside temperature", labelX);

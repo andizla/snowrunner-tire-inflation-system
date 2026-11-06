@@ -138,6 +138,9 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     changed(ImGui::Checkbox("Rolling drag", &e.rollingDrag));
     PageTip("Tires roll harder on soft ground and when aired down. On by default.");
     ImGui::EndDisabled();
+    changed(ImGui::Checkbox("Stiff base", &s.stiffBase));
+    PageTip("Every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. "
+            "A tire already stiffer keeps its own. Off: each tire's own softness. On by default.");
     changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
     PageTip("The mode is saved per owned truck in TirePressure.trucks.ini. It comes back the moment you drive that truck "
             "again, without a sound or a wait, across map loads and game starts. A truck not driven before starts in the "
@@ -297,7 +300,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     ImGui::SeparatorText("Controls");
     PageLabel("Panel key", labelX);
     KeyName(s.key, buf, sizeof buf);
-    if (ImGui::Button(st.capture == 0 ? "Press a key (Esc: keep)###key" : (strcat_s(buf, "###key"), buf), ImVec2(w, 0)))
+    if (ImGui::Button(st.capture == 0 ? "Press a key (Esc: keep)###key" : (strncat_s(buf, "###key", _TRUNCATE), buf), ImVec2(w, 0)))
         st.capture = st.capture == 0 ? -1 : 0;
     PageTip("Opens the panel and steps the pressure down.");
     if (st.capture == 0)
@@ -348,7 +351,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     {
         ImGui::PushID(i);
         PageLabel(padLabels[i], labelX);
-        sprintf_s(buf, "%s###bind", s.pad[i]);
+        _snprintf_s(buf, _TRUNCATE, "%s###bind", s.pad[i]);
         if (ImGui::Button(buf, ImVec2(w, 0)) && st.capture < 1)
         {
             st.capture = i + 1;
@@ -363,7 +366,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         ImGui::SameLine();
         if (ImGui::SmallButton("None###clear"))
         {
-            strcpy_s(s.pad[i], "None");
+            strncpy_s(s.pad[i], "None", _TRUNCATE);
             act |= kPageChanged;
         }
         ImGui::PopID();

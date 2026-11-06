@@ -109,8 +109,8 @@ static bool LoadRealVersion(HINSTANCE self, bool chained)
     }
     const int fromChain = ResolveExports(chain, system);
     wchar_t note[160];
-    if (chain) swprintf_s(note, L"version_chain.dll next to the exe (%d of %d exports; the rest from System32)", fromChain, kVerCount);
-    else swprintf_s(note, L"System32\\version.dll (%d of %d)%s", kVerCount - g_missingCount, kVerCount, chained ? L" (this file is a chain file itself)" : L"");
+    if (chain) _snwprintf_s(note, _TRUNCATE, L"version_chain.dll next to the exe (%d of %d exports; the rest from System32)", fromChain, kVerCount);
+    else _snwprintf_s(note, _TRUNCATE, L"System32\\version.dll (%d of %d)%s", kVerCount - g_missingCount, kVerCount, chained ? L" (this file is a chain file itself)" : L"");
     g_forwards = note;
     return true;
 }

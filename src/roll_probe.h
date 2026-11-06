@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include "text_cut.h"
 
 // A Havok half float back to a float: its 16 bits are a float's upper half. The mod writes them through HavokHalf,
 // which rounds up by 1.003906 first, so a value read back lies at most 0.4 % over the one meant.
@@ -90,14 +91,14 @@ inline void RollRuleText(RollRule r, int gear, char *out, size_t size)
 {
     switch (r)
     {
-    case kRuleGearUnknown: strcpy_s(out, size, "the gear not read"); break;
+    case kRuleGearUnknown: strncpy_s(out, size, "the gear not read", _TRUNCATE); break;
     case kRuleGear:
-        if (gear < 0) strcpy_s(out, size, "in reverse");
-        else sprintf_s(out, size, "in gear %d", gear);
+        if (gear < 0) strncpy_s(out, size, "in reverse", _TRUNCATE);
+        else _snprintf_s(out, size, _TRUNCATE, "in gear %d", gear);
         break;
-    case kRulePedal: strcpy_s(out, size, "the pedal"); break;
-    case kRuleBrake: strcpy_s(out, size, "the brake"); break;
-    case kRuleHandbrake: strcpy_s(out, size, "the handbrake"); break;
+    case kRulePedal: strncpy_s(out, size, "the pedal", _TRUNCATE); break;
+    case kRuleBrake: strncpy_s(out, size, "the brake", _TRUNCATE); break;
+    case kRuleHandbrake: strncpy_s(out, size, "the handbrake", _TRUNCATE); break;
     default: out[0] = 0;
     }
 }
@@ -171,7 +172,7 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
     if (r.phase == 0 && p.speed >= kRollFrom)
     {
         r.phase = 1;
-        strcpy_s(r.why, "");
+        strncpy_s(r.why, "", _TRUNCATE);
     }
     if (r.phase == 1)
     {
@@ -183,13 +184,13 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
         else if (p.speed >= kRollTo)
         {
             if (rule != kRuleOk) RollRuleText(rule, p.gear, r.why, sizeof r.why);
-            else strcpy_s(r.why, "from under 25 km/h");
+            else strncpy_s(r.why, "from under 25 km/h", _TRUNCATE);
         }
         else
         {
             out = RollCoastResult{};
             out.step = r.step;
-            strcpy_s(out.reason, r.why[0] ? r.why : "from under 25 km/h");
+            strncpy_s(out.reason, r.why[0] ? r.why : "from under 25 km/h", _TRUNCATE);
             r.phase = 0;
             return true;
         }
@@ -234,8 +235,8 @@ inline bool RollRunPass(RollRun &r, int steps, const RollPass &p, RollCoastResul
 // The step's name: "step 3" or "after" (the coasts after the run).
 inline void RollStepName(int step, int steps, char *out, size_t size)
 {
-    if (step >= steps) strcpy_s(out, size, "after");
-    else sprintf_s(out, size, "step %d", step + 1);
+    if (step >= steps) strncpy_s(out, size, "after", _TRUNCATE);
+    else _snprintf_s(out, size, _TRUNCATE, "step %d", step + 1);
 }
 
 // The coast's line for the log, after "probe roll: ".
@@ -245,19 +246,19 @@ inline void RollCoastText(const RollCoastResult &c, int steps, char *out, size_t
     RollStepName(c.step, steps, name, sizeof name);
     if (!c.numbers)
     {
-        sprintf_s(out, size, "%s, the coast did not count: %s", name, c.reason);
+        _snprintf_s(out, size, _TRUNCATE, "%s, the coast did not count: %s", name, c.reason);
         return;
     }
-    int n = sprintf_s(out, size, "%s, coast in N %.2f to %.2f m/s in %.2f s over %.1f m, height %+.2f m, decel by time %.3f m/s2, slope part %+.3f m/s2, flat decel by distance %.3f m/s2; "
+    int n = FmtCut(out, size, "%s, coast in N %.2f to %.2f m/s in %.2f s over %.1f m, height %+.2f m, decel by time %.3f m/s2, slope part %+.3f m/s2, flat decel by distance %.3f m/s2; "
                       "flag 1CE under a wheel %.2f of it; by wheel paved/gravel/sand/1CE", name, c.v0, c.v1, c.t, c.d, c.h1 - c.h0, c.decel, c.slope, c.flat, c.soil);
     for (int w = 0; w < c.wheels && n > 0 && n + 40 < (int)size; w++)
-        n += sprintf_s(out + n, size - n, " w%d %.2f/%.2f/%.2f/%.2f", w, c.share[0][w], c.share[1][w], c.share[2][w], c.share[3][w]);
-    if (c.once && n > 0 && n + 60 < (int)size) n += sprintf_s(out + n, size - n, "; the once word held in %d of %d wheels at its end", c.onceHeld, c.onceWritten);
+        n += FmtCut(out + n, size - n, " w%d %.2f/%.2f/%.2f/%.2f", w, c.share[0][w], c.share[1][w], c.share[2][w], c.share[3][w]);
+    if (c.once && n > 0 && n + 60 < (int)size) n += FmtCut(out + n, size - n, "; the once word held in %d of %d wheels at its end", c.onceHeld, c.onceWritten);
     if (n > 0 && n + 2 < (int)size)
     {
-        if (c.counted) sprintf_s(out + n, size - n, "; counted");
-        else if (c.step >= steps) sprintf_s(out + n, size - n, "; after the run%s%s", c.reason[0] ? ", " : "", c.reason);
-        else sprintf_s(out + n, size - n, "; not counted: %s", c.reason);
+        if (c.counted) _snprintf_s(out + n, size - n, _TRUNCATE, "; counted");
+        else if (c.step >= steps) _snprintf_s(out + n, size - n, _TRUNCATE, "; after the run%s%s", c.reason[0] ? ", " : "", c.reason);
+        else _snprintf_s(out + n, size - n, _TRUNCATE, "; not counted: %s", c.reason);
     }
 }
 
@@ -307,9 +308,9 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
 {
     b.lines = 0;
     RollBoxLine &title = RollBoxNext(b, kBoxWhite);
-    if (s.step >= s.steps) strcpy_s(title.text, "Done: the log has the results. ProbeRoll=0 to stop.");
-    else if (s.def.how == kRollStock) sprintf_s(title.text, "Step %d of %d: the stock damping", s.step + 1, s.steps);
-    else sprintf_s(title.text, "Step %d of %d: damping %g, %s", s.step + 1, s.steps, s.def.damping, s.def.how == kRollOnce ? "once" : "every frame");
+    if (s.step >= s.steps) strncpy_s(title.text, "Done: the log has the results. ProbeRoll=0 to stop.", _TRUNCATE);
+    else if (s.def.how == kRollStock) _snprintf_s(title.text, _TRUNCATE, "Step %d of %d: the stock damping", s.step + 1, s.steps);
+    else _snprintf_s(title.text, _TRUNCATE, "Step %d of %d: damping %g, %s", s.step + 1, s.steps, s.def.damping, s.def.how == kRollOnce ? "once" : "every frame");
     // the rules as the coast checks them
     RollBoxLine &rules = RollBoxNext(b, kBoxWhite);
     const RollRule rule = RollRuleOf(s.now);
@@ -321,28 +322,28 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
     rules.segs = 4;
     for (int i = 0; i < 4; i++)
     {
-        strcpy_s(rules.seg[i].text, r[i].text);
+        strncpy_s(rules.seg[i].text, r[i].text, _TRUNCATE);
         rules.seg[i].color = (uint8_t)(r[i].ok ? kBoxGreen : kBoxRed);
     }
     // the ground under the first wheel, flag 1CE in white (it keeps no coast from counting)
     RollBoxLine &ground = RollBoxNext(b, kBoxWhite);
     const RollGround g = s.now.wheels > 0 ? s.now.ground[0] : RollGround{};
     ground.segs = 2;
-    strcpy_s(ground.seg[0].text, "Ground:");
+    strncpy_s(ground.seg[0].text, "Ground:", _TRUNCATE);
     ground.seg[0].color = kBoxWhite;
-    sprintf_s(ground.seg[1].text, "flag 1CE %u", g.soil ? 1u : 0u);
+    _snprintf_s(ground.seg[1].text, _TRUNCATE, "flag 1CE %u", g.soil ? 1u : 0u);
     ground.seg[1].color = kBoxWhite;
     if (g.paved || g.gravel || g.sand)
     {
         ground.segs = 3;
-        sprintf_s(ground.seg[2].text, "%s%s%s", g.paved ? "paved " : "", g.gravel ? "gravel " : "", g.sand ? "sand " : "");
+        _snprintf_s(ground.seg[2].text, _TRUNCATE, "%s%s%s", g.paved ? "paved " : "", g.gravel ? "gravel " : "", g.sand ? "sand " : "");
         ground.seg[2].text[strlen(ground.seg[2].text) - 1] = 0;
         ground.seg[2].color = kBoxWhite;
     }
     RollBoxLine &speed = RollBoxNext(b, kBoxWhite);
-    sprintf_s(speed.text, "Speed %.0f km/h", s.now.speed * 3.6f);
+    _snprintf_s(speed.text, _TRUNCATE, "Speed %.0f km/h", s.now.speed * 3.6f);
     RollBoxLine &head = RollBoxNext(b, kBoxGrey);
-    strcpy_s(head.text, s.coasts ? "Coasts, the newest first:" : "No coast yet: shift to N from 25 km/h, no pedal, no brake");
+    strncpy_s(head.text, s.coasts ? "Coasts, the newest first:" : "No coast yet: shift to N from 25 km/h, no pedal, no brake", _TRUNCATE);
     for (int i = 0; i < s.coasts; i++)
     {
         const RollCoastResult &c = s.last[i];
@@ -350,16 +351,16 @@ inline void RollBoxText(const RollBoxState &s, RollBox &b)
         RollStepName(c.step, s.steps, name, sizeof name);
         name[0] = (char)(name[0] - 'a' + 'A');
         RollBoxLine &l = RollBoxNext(b, (uint8_t)(c.counted ? kBoxGreen : kBoxGrey));
-        if (!c.numbers) sprintf_s(l.text, "%s: not counted: %s", name, c.reason);
+        if (!c.numbers) _snprintf_s(l.text, _TRUNCATE, "%s: not counted: %s", name, c.reason);
         else
         {
             char end[64];
-            if (c.counted && c.step == 0) strcpy_s(end, "counted (stock)");
-            else if (c.counted && s.stockCounted && s.stockFlat > 0.0f) sprintf_s(end, "counted, x%.2f of stock", c.flat / s.stockFlat);
-            else if (c.counted) strcpy_s(end, "counted, no stock coast yet");
-            else if (c.step >= s.steps) strcpy_s(end, c.reason[0] ? c.reason : "after the run");
-            else sprintf_s(end, "not counted: %s", c.reason);
-            sprintf_s(l.text, "%s: %.0f to %.0f km/h, flat %.2f m/s2, flag 1CE %.2f, %s", name, c.v0 * 3.6f, c.v1 * 3.6f, c.flat, c.soil, end);
+            if (c.counted && c.step == 0) strncpy_s(end, "counted (stock)", _TRUNCATE);
+            else if (c.counted && s.stockCounted && s.stockFlat > 0.0f) _snprintf_s(end, _TRUNCATE, "counted, x%.2f of stock", c.flat / s.stockFlat);
+            else if (c.counted) strncpy_s(end, "counted, no stock coast yet", _TRUNCATE);
+            else if (c.step >= s.steps) strncpy_s(end, c.reason[0] ? c.reason : "after the run", _TRUNCATE);
+            else _snprintf_s(end, _TRUNCATE, "not counted: %s", c.reason);
+            _snprintf_s(l.text, _TRUNCATE, "%s: %.0f to %.0f km/h, flat %.2f m/s2, flag 1CE %.2f, %s", name, c.v0 * 3.6f, c.v1 * 3.6f, c.flat, c.soil, end);
         }
     }
 }

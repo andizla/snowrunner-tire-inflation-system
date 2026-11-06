@@ -67,6 +67,7 @@ struct TpSettings
     bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini: the owned truck's, else its kind's); 0 = one mode for all, the highest on offer at every start
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
+    bool stiffBase;          // StiffBase: every tire starts at least as stiff as the game's Stiff preset (stiff_probe.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
     bool insaneMode;         // InsaneMode: a hardcore set harder than real tires (InsaneSettings) in the same place; it wins over HardMode
@@ -113,7 +114,7 @@ inline void SettingsDefaults(TpSettings &s)
     // the open binding with LB, as plain d-pad presses open the game's own screens and move through its menus; the
     // step bindings act only while the panel is open, and LB with the d-pad is for gears
     static const char *pads[5] = { "LB+DPadDown", kPadStepDefaults[0], kPadStepDefaults[1], "A", "B" };
-    for (int i = 0; i < 5; i++) strcpy_s(s.pad[i], pads[i]);
+    for (int i = 0; i < 5; i++) strncpy_s(s.pad[i], pads[i], _TRUNCATE);
     s.padCurve[0] = s.padCurve[1] = 2.0f; // both triggers shaped: half the trigger gives a quarter (the author's choice after a pad drive, 2026-10-24)
     s.base[0] = s.base[1] = s.base[2] = 1.0f;
     s.vanillaBalance = false;
@@ -127,6 +128,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.perTruck = true;
     s.temperature = true;
     s.rollingDrag = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
+    s.stiffBase = true;
     s.ambientC = 15.0f;
     s.hardMode = false;
     s.insaneMode = false;
@@ -353,10 +355,10 @@ inline void PadName(uint32_t mask, char *out, size_t size)
     for (int i : order)
         if ((mask & kPadButtons[i].mask) && strlen(out) + strlen(kPadButtons[i].name) + 2 <= size) // a name that does not fit is left out
         {
-            if (out[0]) strcat_s(out, size, "+");
-            strcat_s(out, size, kPadButtons[i].name);
+            if (out[0]) strncat_s(out, size, "+", _TRUNCATE);
+            strncat_s(out, size, kPadButtons[i].name, _TRUNCATE);
         }
-    if (!out[0]) strcpy_s(out, size, "None");
+    if (!out[0]) strncpy_s(out, size, "None", _TRUNCATE);
 }
 
 // A step binding's text without its shoulder button ("LB+DPadLeft" -> "DPadLeft"; shoulders alone -> fallback).
@@ -366,7 +368,7 @@ inline bool PadStepFix(char *text, size_t size, const char *fallback)
     const uint32_t m = PadParse(text);
     if (!(m & kPadShoulders)) return false;
     if (PadStepMask(m)) PadName(PadStepMask(m), text, size);
-    else strcpy_s(text, size, fallback);
+    else strncpy_s(text, size, fallback, _TRUNCATE);
     return true;
 }
 
@@ -378,12 +380,12 @@ inline void KeyName(int vk, char *out, size_t size)
         { VK_NEXT, "Page Down" }, { VK_UP, "Up" }, { VK_DOWN, "Down" }, { VK_LEFT, "Left" }, { VK_RIGHT, "Right" },
         { VK_PAUSE, "Pause" }, { VK_SCROLL, "Scroll Lock" }, { VK_TAB, "Tab" }, { VK_SPACE, "Space" }, { VK_BACK, "Backspace" },
         { VK_RETURN, "Enter" } };
-    if (vk >= VK_F1 && vk <= VK_F24) sprintf_s(out, size, "F%d", vk - VK_F1 + 1);
-    else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) sprintf_s(out, size, "%c", (char)vk);
-    else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) sprintf_s(out, size, "Num %d", vk - VK_NUMPAD0);
+    if (vk >= VK_F1 && vk <= VK_F24) _snprintf_s(out, size, _TRUNCATE, "F%d", vk - VK_F1 + 1);
+    else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) _snprintf_s(out, size, _TRUNCATE, "%c", (char)vk);
+    else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) _snprintf_s(out, size, _TRUNCATE, "Num %d", vk - VK_NUMPAD0);
     else
     {
-        sprintf_s(out, size, "Key %d", vk);
-        for (const auto &n : names) if (n.vk == vk) strcpy_s(out, size, n.name);
+        _snprintf_s(out, size, _TRUNCATE, "Key %d", vk);
+        for (const auto &n : names) if (n.vk == vk) strncpy_s(out, size, n.name, _TRUNCATE);
     }
 }

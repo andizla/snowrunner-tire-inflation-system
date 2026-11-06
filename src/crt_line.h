@@ -129,13 +129,13 @@ inline void Set(void (*out)(const char *), bool game, wchar_t *said, size_t size
             const SignalHandlerFn was = sig(SIGABRT, Abort<kGame>);
             g_rt[kGame].abortBefore = was == SIG_ERR ? SIG_DFL : was;
             g_rt[kGame].set = true;
-            swprintf_s(gameSaid, L"ucrtbase.dll's%s", g_rt[kGame].before ? L" (the game's own handler stays, called after the line)" : L"");
+            _snwprintf_s(gameSaid, _TRUNCATE, L"ucrtbase.dll's%s", g_rt[kGame].before ? L" (the game's own handler stays, called after the line)" : L"");
         }
         else
-            swprintf_s(gameSaid, L"not ucrtbase.dll's (%s)", u ? L"its two functions were not found" : L"it is not loaded");
+            _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's (%s)", u ? L"its two functions were not found" : L"it is not loaded");
     }
     else if (!game)
-        swprintf_s(gameSaid, L"not ucrtbase.dll's (Gauges.asi has them)");
+        _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's (Gauges.asi has them)");
     if (!g_rt[kOwn].set)
     {
         g_rt[kOwn].before = _set_invalid_parameter_handler(InvalidParameter<kOwn>);
@@ -144,6 +144,6 @@ inline void Set(void (*out)(const char *), bool game, wchar_t *said, size_t size
         g_rt[kOwn].set = true;
     }
     if (said && size)
-        swprintf_s(said, size, L"the C runtime's invalid parameters and abort are named in this log: the mod's own runtime's handlers set, %s", gameSaid);
+        _snwprintf_s(said, size, _TRUNCATE, L"the C runtime's invalid parameters and abort are named in this log: the mod's own runtime's handlers set, %s", gameSaid);
 }
 } // namespace crtline

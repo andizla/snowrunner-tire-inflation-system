@@ -77,7 +77,7 @@ static int g_slot = -1;
 static void SharedJoin()
 {
     wchar_t name[64];
-    swprintf_s(name, L"Local\\NextGen.Menu.%lu", GetCurrentProcessId());
+    _snwprintf_s(name, _TRUNCATE, L"Local\\NextGen.Menu.%lu", GetCurrentProcessId());
     const HANDLE map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(NgShared), name);
     NgShared *s = map ? (NgShared *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(NgShared)) : nullptr;
     if (s)
@@ -146,7 +146,7 @@ static bool IniPath(wchar_t *path, size_t size)
     const DWORD n = GetModuleFileNameW(nullptr, path, (DWORD)size);
     wchar_t *slash = n && n < size ? wcsrchr(path, L'\\') : nullptr;
     if (!slash || (size_t)(slash + 1 - path) + 12 >= size) return false;
-    wcscpy_s(slash + 1, size - (size_t)(slash + 1 - path), L"NextGen.ini");
+    wcsncpy_s(slash + 1, size - (size_t)(slash + 1 - path), L"NextGen.ini", _TRUNCATE);
     return true;
 }
 
@@ -167,7 +167,7 @@ static void KeySave(int vk, bool picked)
         CloseHandle(f);
     }
     wchar_t text[16];
-    swprintf_s(text, L"%d", vk);
+    _snwprintf_s(text, _TRUNCATE, L"%d", vk);
     WritePrivateProfileStringW(L"Menu", L"Key", text, path);
     if (picked) WritePrivateProfileStringW(L"Menu", L"Picked", L"1", path);
 }
@@ -309,7 +309,7 @@ static HANDLE SlotLock()
     if (!lock)
     {
         wchar_t name[64];
-        swprintf_s(name, L"Local\\NextGen.Slots.%lu", GetCurrentProcessId());
+        _snwprintf_s(name, _TRUNCATE, L"Local\\NextGen.Slots.%lu", GetCurrentProcessId());
         const HANDLE h = CreateMutexW(nullptr, FALSE, name);
         if (h && InterlockedCompareExchangePointer(&lock, h, nullptr) != nullptr) CloseHandle(h);
     }
@@ -597,7 +597,7 @@ static int DiTake(int &tables)
     wchar_t path[MAX_PATH] = {};
     const UINT n = GetSystemDirectoryW(path, MAX_PATH);
     if (!n || n > MAX_PATH - 16) return 0;
-    wcscat_s(path, L"\\dinput8.dll");
+    wcsncat_s(path, L"\\dinput8.dll", _TRUNCATE);
     const HMODULE m = LoadLibraryW(path);
     const DiCreateFn create = m ? (DiCreateFn)GetProcAddress(m, "DirectInput8Create") : nullptr;
     if (!create) return 0;
@@ -771,7 +771,7 @@ static void FontsAdd()
         for (int i = 0; i < 2; i++)
         {
             wchar_t path[MAX_PATH + 64];
-            swprintf_s(path, L"%s\\%s", dir, names[i]);
+            _snwprintf_s(path, _TRUNCATE, L"%s\\%s", dir, names[i]);
             char path8[(MAX_PATH + 64) * 3];
             if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES || !WideCharToMultiByte(CP_UTF8, 0, path, -1, path8, sizeof(path8), nullptr, nullptr)) continue;
             *fonts[i] = io.Fonts->AddFontFromFileTTF(path8, kNgTextPx);
@@ -934,7 +934,7 @@ static void GraphicsLook(ULONGLONG now)
         const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
         wchar_t *cut = n && n < MAX_PATH ? wcsrchr(path, L'\\') : nullptr;
         if (!cut) return;
-        wcscpy_s(cut + 1, path + MAX_PATH + 16 - (cut + 1), L"hid.dll");
+        wcsncpy_s(cut + 1, path + MAX_PATH + 16 - (cut + 1), L"hid.dll", _TRUNCATE);
         if (!NgGraphicsFrom(GetModuleHandleW(path))) return;
     }
     for (int i = 0; i < kNgSlots; i++)
@@ -1806,7 +1806,7 @@ static void SwapChainOwn(IDXGISwapChain *sc)
     if (!to || why.atStart)
     {
         ModuleOf(from, in, MAX_PATH);
-        if (wcscmp(in, L"?") == 0) wcscpy_s(in, L"memory of no module");
+        if (wcscmp(in, L"?") == 0) wcsncpy_s(in, L"memory of no module", _TRUNCATE);
         ModuleOf(from[8], has, MAX_PATH);
     }
     if (!to)
@@ -1950,7 +1950,7 @@ bool NgOverlayStart(const NgClient &client)
     wchar_t dxgi[MAX_PATH + 16] = L"";
     const DWORD n = GetModuleFileNameW(nullptr, dxgi, MAX_PATH);
     wchar_t *cut = n && n < MAX_PATH ? wcsrchr(dxgi, L'\\') : nullptr;
-    if (cut) wcscpy_s(cut + 1, dxgi + MAX_PATH + 16 - (cut + 1), L"dxgi.dll");
+    if (cut) wcsncpy_s(cut + 1, dxgi + MAX_PATH + 16 - (cut + 1), L"dxgi.dll", _TRUNCATE);
     NgReShadeCheck(viaReShade, reshade, cut ? dxgi : nullptr);
     if (viaReShade)
     {

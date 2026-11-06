@@ -25,6 +25,7 @@
 #include <math.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "panel.h"
 #include "ng_overlay.h"
@@ -108,10 +109,13 @@ static long long g_watchA = -1, g_watchB = -1, g_watchC = -1;
 // game can draw this tire flatter than it comes (FlattenLimit less the tire's own offset); radius: the tire's radius.
 // worn: its grip was taken away as worn out (ApplyWornWheel), until a repair. sink: how far the contact sits inside
 // the cylinder, smoothed (SinkStep); sinkUsed: the same in 5 mm steps, what Cylinder takes off the room.
-struct Stock { float body, asphalt, substance, cylinder; Mode written; float writtenCylinder, room, radius; bool worn = false; float sink = 0.0f, sinkUsed = 0.0f; };
+// cylinder: the base the modes start from (with StiffBase the radius less at most 0.02 x Scale, stiff_probe.h); mesh:
+// the key of the tire's mesh text, so another tire on the wheel gives a new stock (0: not read).
+struct Stock { float body, asphalt, substance, cylinder; Mode written; float writtenCylinder, room, radius; bool worn = false; float sink = 0.0f, sinkUsed = 0.0f; uint64_t mesh = 0; };
 static std::unordered_map<uint64_t, Stock> g_wheels; // wheel object -> its stock values and the factors written to it
 static float g_deepest = 0.0f; // the largest AdditionalRadiusOffset among the modes
 static bool g_rollingRadius = true; // ini RollingRadius (RollFactor)
+static bool g_stiffBase = true;     // ini StiffBase (stiff_probe.h)
 static bool g_standStill = true;    // ini StandStill: a pressure change only goes on while the truck stands still
 static bool g_perTruck = true;      // ini PerTruck: each truck keeps its own pressure mode (truck_modes.h)
 static bool g_temperature = true;   // ini Temperature: the tires feel the outside temperature (outside.h)
@@ -174,7 +178,16 @@ static void CrashLineOut(const char *text)
     SYSTEMTIME st;
     GetLocalTime(&st);
     char line[1400];
-    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    if (n < 0)
+    {
+        // too long: the line lands cut, ended by its line end in the last two places (review N3)
+        n = (int)strnlen(line, sizeof line);
+        if (n > (int)sizeof line - 3) n = (int)sizeof line - 3;
+        line[n++] = '\r';
+        line[n++] = '\n';
+        line[n] = 0;
+    }
     DWORD wrote = 0;
     if (n > 0) WriteFile(g_crashFile, line, (DWORD)n, &wrote, nullptr);
     FlushFileBuffers(g_crashFile);
@@ -266,8 +279,8 @@ static void WriteIni(const TpSettings &s)
     // "%g" values go in with the fewest digits that read back as the same float (20 km/h is 5.555556 m/s)
     auto put = [&](const wchar_t *section, const std::wstring &key, const wchar_t *fmt, double v) {
         wchar_t b[32];
-        swprintf_s(b, fmt, v);
-        for (int digits = 7; digits <= 9 && !wcscmp(fmt, L"%g") && (float)_wtof(b) != (float)v; digits++) swprintf_s(b, L"%.*g", digits, v);
+        _snwprintf_s(b, _TRUNCATE, fmt, v);
+        for (int digits = 7; digits <= 9 && !wcscmp(fmt, L"%g") && (float)_wtof(b) != (float)v; digits++) _snwprintf_s(b, _TRUNCATE, L"%.*g", digits, v);
         WritePrivateProfileStringW(section, key.c_str(), b, ini.c_str());
     };
     const wchar_t *T = L"TirePressure";
@@ -293,6 +306,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"PerTruck", L"%.0f", s.perTruck ? 1 : 0);
     put(T, L"Temperature", L"%.0f", s.temperature ? 1 : 0);
     put(T, L"RollingDrag", L"%.0f", s.rollingDrag ? 1 : 0);
+    put(T, L"StiffBase", L"%.0f", s.stiffBase ? 1 : 0);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
     put(T, L"InsaneMode", L"%.0f", s.insaneMode ? 1 : 0);
@@ -345,7 +359,9 @@ static void ReadIni(TpSettings &s)
                         L"; StandStill=1: a pressure change only goes on while the truck stands still. Temperature=1: the tires feel\n"
                         L"; the outside temperature (AmbientC, or a gauge mod's by map and hour while it runs): cold air is less\n"
                         L"; pressure in them, cold rubber less grip. RollingDrag=1 (on by default): the tires roll harder on soft ground and when aired\n"
-                        L"; down (rolling resistance by ground and pressure, in the wheels' damping). HardMode=1: the realistic numbers and options in place of the\n"
+                        L"; down (rolling resistance by ground and pressure, in the wheels' damping). StiffBase=1 (on by default): every tire starts\n"
+                        L"; at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode; 0 = each tire's own.\n"
+                        L"; HardMode=1: the realistic numbers and options in place of the\n"
                         L"; grip, mode and damage keys and Seconds (WornGrip 10 there); the keys here keep your own.\n"
                         L"; PerTruck=1: each truck keeps its own pressure mode in TirePressure.trucks.ini, put back when that truck is driven\n"
                         L"; again: [kind:{id}] for one owned truck (by the game's id for it, Own=1), else [kind] for its kind; a truck not\n"
@@ -375,17 +391,17 @@ static void ReadIni(TpSettings &s)
         s.beep = false;
         WritePrivateProfileStringW(T, L"Beep", L"0", ini.c_str());
         wchar_t b[32];
-        swprintf_s(b, L"%g", s.seconds);
+        _snwprintf_s(b, _TRUNCATE, L"%g", s.seconds);
         WritePrivateProfileStringW(T, L"Seconds", b, ini.c_str());
         // and the 15 seconds a choice waited before it confirmed itself: that wait is how the keyboard confirms, so it
         // is shorter now (ConfirmSeconds is read further down, from the file as it then is)
         if (IniFloat(T, L"ConfirmSeconds", kConfirmBefore, ini) == kConfirmBefore)
         {
-            swprintf_s(b, L"%g", kConfirmDefault);
+            _snwprintf_s(b, _TRUNCATE, L"%g", kConfirmDefault);
             WritePrivateProfileStringW(T, L"ConfirmSeconds", b, ini.c_str());
             Log(L"settings: an ini from before 1.1.0 where a choice confirms itself after %g s: it does after %g s now", kConfirmBefore, kConfirmDefault);
         }
-        swprintf_s(b, L"%d", kIniVersion);
+        _snwprintf_s(b, _TRUNCATE, L"%d", kIniVersion);
         WritePrivateProfileStringW(T, L"IniVersion", b, ini.c_str());
     }
     s.soundVolume = min(100.0f, max(0.0f, IniFloat(T, L"SoundVolume", s.soundVolume, ini)));
@@ -405,7 +421,7 @@ static void ReadIni(TpSettings &s)
     for (int i = 1; i <= 2; i++)
     {
         char was[sizeof s.pad[i]];
-        strcpy_s(was, s.pad[i]);
+        strncpy_s(was, s.pad[i], _TRUNCATE);
         if (!PadStepFix(s.pad[i], sizeof s.pad[i], kPadStepDefaults[i - 1])) continue;
         WritePrivateProfileStringW(T, Wide(kPadKeys[i]).c_str(), Wide(s.pad[i]).c_str(), ini.c_str());
         Log(L"pad: %hs %hs becomes %hs: LB + d-pad is for gears", kPadKeys[i], was, s.pad[i]);
@@ -422,6 +438,7 @@ static void ReadIni(TpSettings &s)
     s.perTruck = GetPrivateProfileIntW(T, L"PerTruck", s.perTruck ? 1 : 0, ini.c_str()) != 0;
     s.temperature = GetPrivateProfileIntW(T, L"Temperature", s.temperature ? 1 : 0, ini.c_str()) != 0;
     s.rollingDrag = GetPrivateProfileIntW(T, L"RollingDrag", s.rollingDrag ? 1 : 0, ini.c_str()) != 0;
+    s.stiffBase = GetPrivateProfileIntW(T, L"StiffBase", s.stiffBase ? 1 : 0, ini.c_str()) != 0;
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
     s.insaneMode = GetPrivateProfileIntW(T, L"InsaneMode", s.insaneMode ? 1 : 0, ini.c_str()) != 0;
@@ -461,6 +478,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_balanceStrength = s.balanceStrength;
     g_tireDamage = s.tireDamage;
     g_rollingRadius = s.rollingRadius;
+    g_stiffBase = s.stiffBase;
     Mode &normal = g_modes[kNormal];
     normal.body = normal.asphalt = normal.substance = normal.fuel = normal.steering = normal.gravel = normal.sand = normal.rock = 1.0f;
     normal.radiusOffset = 0.0f;
@@ -514,6 +532,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     if (log) Log(L"a worn out tire keeps %g percent of its grip (WornGrip)", s.wornGrip);
     if (log) Log(L"rolling radius: %s", s.rollingRadius ? L"the gears make up for the flattened wheels, but for what a real tire loses" : L"off, the smaller wheel as it is");
     if (log) Log(L"modes: Low, Reduced, Normal%s", s.increased ? L", Increased" : L"");
+    if (log) Log(s.stiffBase ? L"stiff base: on (StiffBase=1), every tire at least as stiff as the game's Stiff ones" : L"stiff base: off (StiffBase=0), each tire's own softness");
     g_standStill = s.standStill;
     g_perTruck = s.perTruck;
     g_temperature = s.temperature;
@@ -606,7 +625,7 @@ static void LoadIni()
         for (int i = 0; i < g_rollValueCount; i++)
         {
             wchar_t v[24];
-            swprintf_s(v, L"%s%g", i ? L", " : L"", g_rollValues[i]);
+            _snwprintf_s(v, _TRUNCATE, L"%s%g", i ? L", " : L"", g_rollValues[i]);
             list += v;
         }
         Log(L"probe: the probe box is drawn top centre while a truck is driven and the game's function menu is down. This mod reads no place for the "
@@ -755,8 +774,9 @@ static float Cylinder(const Stock &s, const Mode &m, float radius)
 // How far a wheel's contact sits inside its collision cylinder. The game draws the tire by the distance from the hub
 // to the contact (the wheel model's update, RVA 0xc235f0, from model+0x21C and +0x220), not by the cylinder, and a
 // soft tire's contact can sit inside the cylinder: each wheel carries a Havok soft contact built with its
-// SoftForceScale (wheel+0x120). The hub is then lower than the cylinder says and the tread is drawn that much deeper,
-// so a tire that comes soft went far too flat at Low (a tester's modded tire, 2026-10-18). A vanilla tire sinks
+// SoftForceScale. The hub is then lower than the cylinder says and the tread is drawn that much deeper,
+// so a tire that comes soft went far too flat at Low (a tester's modded tire, 2026-10-18). (+0x120 is not
+// SoftForceScale, the drive of 2026-11-06 20:52: its place is still looked for, SoftForceSearch.) A vanilla tire sinks
 // next to nothing: the scout of 2026-10-04 sank exactly as deep at 10 cm as FlattenLimit's formula says with no sink.
 // d: the distance read this pass. A reading outside 85% to 102% of the cylinder is not taken (a wheel in the air, a
 // field moved by a game update); the sink is smoothed over about two seconds and used in 5 mm steps, so the cylinder
@@ -803,6 +823,21 @@ static float RollFactor(const Stock &s)
 // then writes the mode's.
 static float WornGroundFactor(bool worn, float factor) { return worn ? g_wornGrip : factor; }
 
+// The tire's mesh at wheel model+0x060 -> +0x010, the game's 0x20-byte text (stiff_probe.h): empty where it is not read.
+static std::string TireMesh(uint64_t model)
+{
+    uint64_t at = 0;
+    uint8_t t[0x20];
+    if (!Read(model + 0x60, at) || at < 0x10000 || !Read(at + 0x10, t)) return {};
+    std::string chars;
+    uint64_t pointer = 0, length = 0;
+    if (!GameTextLayout(t, chars, pointer, length)) return {};
+    if (!pointer) return chars;
+    uint8_t buf[96] = {};
+    if (!ReadProcessMemory(GetCurrentProcess(), (void *)pointer, buf, (size_t)length + 1, nullptr) || !PlainText(buf, sizeof buf, chars) || chars.size() != length) return {};
+    return chars;
+}
+
 static bool ApplyWornWheel(const WheelRef &w)
 {
     float asphalt, substance, cylinder, radius, offset;
@@ -817,7 +852,8 @@ static bool ApplyWornWheel(const WheelRef &w)
     if (it == g_wheels.end())
     {
         if (!(radius > 0.05f && radius < 5.0f) || !(offset >= 0.0f && offset <= radius * 0.3f) || !(asphalt > 0.0f && asphalt <= 10.5f) || !(substance >= 0.0f && substance <= 10.5f)) return false;
-        it = g_wheels.insert_or_assign(w.wheel, Stock{ 0.0f, asphalt, substance, radius - offset, kStockMode, cylinder, max(0.0f, FlattenLimit(radius) - offset), radius }).first;
+        const float kept = StiffKeptOffset(offset, radius, g_stiffBase);
+        it = g_wheels.insert_or_assign(w.wheel, Stock{ 0.0f, asphalt, substance, radius - kept, kStockMode, cylinder, max(0.0f, FlattenLimit(radius) - kept), radius }).first;
     }
     Stock &s = it->second;
     // and drawn flat: the game's break leaves the wheel round at its broken radius (+0x94, the cylinder the same), so
@@ -859,16 +895,34 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
     if (!Read(w.model + 0x328, broken)) return false;
     if (broken) return ApplyWornWheel(w);
     if (!Read(w.wheel + 0xA4, asphalt) || !Read(w.wheel + 0xA0, substance) || !Read(w.shape + 0x28, cylinder) || !Read(w.wheel + 0x94, radius) || !Read(w.wheel + 0xB4, offset)) return false;
-    // the stock cylinder is known without a capture: the wheel object keeps the radius and offset it was built from
+    // the stock cylinder is known without a capture: the wheel object keeps the radius and offset it was built from.
+    // Two figures (BRIEF_drive_2052_fixes.md F2): the game's own stock tells the game's shapes (a fresh wheel, a
+    // repaired one); the base is what the modes start from and what is written, with StiffBase the radius less at
+    // most 0.02 x Scale (stiff_probe.h). Off, the two are the same.
     const float stockCylinder = radius - offset;
     if (!(radius > 0.05f && radius < 5.0f) || !(offset >= 0.0f && offset <= radius * 0.3f)) return false;
+    float scale = radius;
+    Read(w.wheel + 0x98, scale);
+    const float kept = StiffKeptOffset(offset, scale, g_stiffBase), base = radius - kept, room = max(0.0f, FlattenLimit(radius) - kept);
+    const uint64_t mesh = TextKey(TireMesh(w.model));
     auto it = g_wheels.find(w.wheel);
     if (it != g_wheels.end())
     {
         Stock &s = it->second;
         const Mode &o = s.written;
         if (!Near(asphalt, s.asphalt * o.asphalt) || !Near(substance, s.substance * o.substance)) it = g_wheels.end();
-        else if (!Near(cylinder, s.writtenCylinder))
+        else
+        {
+        // another tire on the wheel (its mesh) whose frictions still hold the mod's word: the grip's stock stays the
+        // old tire's (taken anew it would be the mode's word, scaled again on the next write; review F1), and the shape
+        // is taken anew below, as a repair's is
+        if (mesh && s.mesh && mesh != s.mesh)
+        {
+            static int said = 0;
+            if (said++ < 16) Log(L"wheel %p: a tire change with the frictions still at the mod's word, the old tire's grip stock kept", (void *)w.wheel);
+            s.mesh = mesh;
+        }
+        if (!Near(cylinder, s.writtenCylinder))
         {
             // The frictions are the ones written, the cylinder is not: the wheel has another shape. A tire the game
             // repaired (RVA 0xc25ad0 builds the shape anew) comes back with a cylinder of the stock size and the
@@ -877,10 +931,12 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
             // The same holds for another wheel the game built at this address with the same grip values, so the
             // tire's size is taken again as well.
             if (!Near(cylinder, stockCylinder)) return false;
-            s.cylinder = s.writtenCylinder = stockCylinder;
+            s.cylinder = base;
+            s.writtenCylinder = stockCylinder; // what is on the wheel now: the base goes on below
             s.written.radiusOffset = 0.0f;
-            s.room = max(0.0f, FlattenLimit(radius) - offset);
+            s.room = room;
             s.radius = radius;
+        }
         }
     }
     if (it == g_wheels.end())
@@ -894,10 +950,17 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
             g_wheels.erase(w.wheel);
             return false;
         }
-        it = g_wheels.insert_or_assign(w.wheel, Stock{ 0.0f, asphalt, substance, stockCylinder, kStockMode, stockCylinder,
-                                                       max(0.0f, FlattenLimit(radius) - offset), radius }).first;
+        it = g_wheels.insert_or_assign(w.wheel, Stock{ 0.0f, asphalt, substance, base, kStockMode, stockCylinder, room, radius }).first;
     }
     Stock &s = it->second;
+    if (!s.mesh) s.mesh = mesh;
+    // StiffBase turned on or off: the base moves, and the write below puts the mode on the new one (off: the game's
+    // own cylinder back on every wheel the mod wrote)
+    if (s.cylinder != base)
+    {
+        s.cylinder = base;
+        s.room = room;
+    }
     const Mode &o = s.written;
     SinkStep(w, s);
     // the cylinder goes by the radius written last, not by the mode's offset: the share of it a tire gets changes
@@ -938,7 +1001,7 @@ struct Scaled { float stock, written; };
 // then had its scaled gear speeds taken for stock and scaled again, so every gear's top climbed with each rebuild
 // until the truck ran away in a high gear (a tester's heavy trucks, 2026-10-24). The 21 October build, without the
 // restart, had none of it.
-struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; };
+struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; bool groundSaid = false; };
 static std::unordered_map<uint64_t, VehicleStock> g_vehicles;
 
 // What a gear's number gets on top of its number x roll, so that the gear's top, 2a + 5 (a + 2 in the high gear),
@@ -1014,6 +1077,13 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
         else Log(L"vehicle %p gear speeds NOT found: action %p, list %p .. %p", (void *)vehicle, (void *)action, (void *)gearBegin, (void *)gearEnd);
         if (groundOk) Log(L"vehicle %p ground grip of %zu wheels, the first: %.3f (stock %.3f)", (void *)vehicle, wheelCount, v.ground[0].written, v.ground[0].stock);
         else Log(L"vehicle %p ground grip NOT found: action %p, list %p .. %p for %zu wheels", (void *)vehicle, (void *)action, (void *)begin, (void *)end, wheelCount);
+        v.groundSaid = groundOk;
+    }
+    // the list is often filled a moment after the truck's first pass (BRIEF_drive_2052_fixes.md N2): said once when found
+    else if (groundOk && !v.groundSaid)
+    {
+        v.groundSaid = true;
+        Log(L"vehicle %p ground grip found: %zu wheels, the first %.3f (stock %.3f), written from now on", (void *)vehicle, wheelCount, v.ground[0].written, v.ground[0].stock);
     }
 }
 
@@ -1187,7 +1257,7 @@ static bool UnbreakWheel(const WheelRef &w)
     float radius = 0, offset = 0, damping = 0;
     BYTE broken = 0;
     if (!Read(w.model + 0x328, broken) || !broken || !Read(w.wheel + 0x98, radius) || !Read(w.wheel + 0xB4, offset) || !Read(w.wheel + 0xAC, damping) || !(radius > 0.05f && radius < 5.0f)) return false;
-    return StillThere(w) && Write(w.wheel + 0x94, radius) && Write(w.shape + 0x28, radius - offset) && WriteAs(w.body + 0x216, HavokHalf(damping)) &&
+    return StillThere(w) && Write(w.wheel + 0x94, radius) && Write(w.shape + 0x28, radius - StiffKeptOffset(offset, radius, g_stiffBase)) && WriteAs(w.body + 0x216, HavokHalf(damping)) &&
            WriteAs(w.model + 0x329, broken) && WriteAs(w.model + 0x328, (BYTE)0);
 }
 
@@ -1660,7 +1730,7 @@ static void RollScanSecond(BYTE flag, const float *now, const float *before)
     {
         if (!RollUnit(now[i]) || !RollUnit(before[i]) || fabsf(now[i] - before[i]) < 0.005f) continue;
         wchar_t one[48];
-        swprintf_s(one, L" +0x%X %.3f", kRollScanFrom + i * 4, now[i]);
+        _snwprintf_s(one, _TRUNCATE, L" +0x%X %.3f", kRollScanFrom + i * 4, now[i]);
         list += one;
     }
     Log(L"probe roll: flag 1CE %u, floats changed in the second:%s", flag, list.empty() ? L" none" : list.c_str());
@@ -1676,7 +1746,7 @@ static void RollScanFlip(BYTE was, BYTE flag, const float *before, const float *
     {
         const int i = idx[k];
         wchar_t one[64];
-        swprintf_s(one, L" +0x%X %.3f>%.3f%s", kRollScanFrom + i * 4, before[i], now[i], (before[i] < 0.5f) != (now[i] < 0.5f) ? L" (crossed 0.5)" : L"");
+        _snwprintf_s(one, _TRUNCATE, L" +0x%X %.3f>%.3f%s", kRollScanFrom + i * 4, before[i], now[i], (before[i] < 0.5f) != (now[i] < 0.5f) ? L" (crossed 0.5)" : L"");
         list += one;
     }
     Log(L"probe roll: flag 1CE flips %u to %u, the candidates (crossed 0.5 or moved over 0.05 since the pass before):%s", was, flag, list.empty() ? L" none" : list.c_str());
@@ -1840,7 +1910,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
     {
         sampleAt = passAt + 100;
         wchar_t one[48];
-        swprintf_s(one, L" %.2f %.2f %.3f", (float)(passAt - stepAt) / 1000.0f, speed, height);
+        _snwprintf_s(one, _TRUNCATE, L" %.2f %.2f %.3f", (float)(passAt - stepAt) / 1000.0f, speed, height);
         samples += one;
         if (++sampleCount >= 10 || speed <= 0.05f)
         {
@@ -1890,7 +1960,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             const int axle = RollAxle(b.inv);
             wheelSum += Inverse(b.inv[3]);
             wchar_t one[160];
-            swprintf_s(one, L"; w%d 1/w %.1f kg, 1/x 1/y 1/z %.3f %.3f %.3f kg m2, axle %c, r %.3f", w.index, Inverse(b.inv[3]), Inverse(b.inv[0]), Inverse(b.inv[1]),
+            _snwprintf_s(one, _TRUNCATE, L"; w%d 1/w %.1f kg, 1/x 1/y 1/z %.3f %.3f %.3f kg m2, axle %c, r %.3f", w.index, Inverse(b.inv[3]), Inverse(b.inv[0]), Inverse(b.inv[1]),
                        Inverse(b.inv[2]), axle < 0 ? L'?' : (wchar_t)(L'x' + axle), r);
             list += one;
         }
@@ -1908,7 +1978,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
                 const float v = HalfToFloat(h[k]);
                 if (!(v >= 0.1f && v <= 10.0f)) continue;
                 wchar_t one[32];
-                swprintf_s(one, L" +0x%X %.3f", 0x250 + k * 2, v);
+                _snwprintf_s(one, _TRUNCATE, L" +0x%X %.3f", 0x250 + k * 2, v);
                 out += one;
             }
             return out.empty() ? std::wstring(L" none") : out;
@@ -1940,19 +2010,19 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
         BYTE flag1CE = 0;
         Read(w.wheel + 0x1CE, flag1CE);
         wchar_t one[360];
-        swprintf_s(one, L"; w%d c%u b%u 1CE %u AC %.4f A8 %.4f body %.4f (%04X%s) time %.4f (%04X) bytes %02X %02X, spin x y z %.2f %.2f %.2f, axle %c %.2f, v/r %.2f", w.index, contact,
+        _snwprintf_s(one, _TRUNCATE, L"; w%d c%u b%u 1CE %u AC %.4f A8 %.4f body %.4f (%04X%s) time %.4f (%04X) bytes %02X %02X, spin x y z %.2f %.2f %.2f, axle %c %.2f, v/r %.2f", w.index, contact,
                    flat, flag1CE, stock, broken, HalfToFloat(b.damping), b.damping, b.damping == HavokHalf(stock) ? L" =AC" : b.damping == HavokHalf(broken) ? L" =A8" : L"",
                    HalfToFloat(b.time), b.time, b.bytes[0], b.bytes[1], RollSpin(b, 0), RollSpin(b, 1), RollSpin(b, 2), axle < 0 ? L'?' : (wchar_t)(L'x' + axle),
                    RollSpin(b, axle), r > 0.0f ? speed / r : 0.0f);
         list += one;
     }
     wchar_t head[160];
-    if (onceOn) swprintf_s(head, L", held %d of the %d written once", held, written);
-    else if (g_rollFrameWord >= 0) swprintf_s(head, L", %ld frames, %ld wheel writes", (long)g_rollFrames, (long)g_rollFrameWrites);
+    if (onceOn) _snwprintf_s(head, _TRUNCATE, L", held %d of the %d written once", held, written);
+    else if (g_rollFrameWord >= 0) _snwprintf_s(head, _TRUNCATE, L", %ld frames, %ld wheel writes", (long)g_rollFrames, (long)g_rollFrameWrites);
     else head[0] = 0;
     char name[32];
-    if (run.step >= steps) strcpy_s(name, "after the run");
-    else sprintf_s(name, "step %d of %d", run.step + 1, steps);
+    if (run.step >= steps) strncpy_s(name, "after the run", _TRUNCATE);
+    else _snprintf_s(name, _TRUNCATE, "step %d of %d", run.step + 1, steps);
     Log(L"probe roll: %S, %.2f m/s%s%s", name, speed, head, list.c_str());
 }
 
@@ -2006,14 +2076,14 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
         float wheelSum = 0.0f;
         for (int i = 0; i < s.count && i < kRollWheelsMost; i++)
         {
-            swprintf_s(one, L"%sw%d %.1f", i ? L", " : L"", s.w[i].index, s.w[i].mass);
+            _snwprintf_s(one, _TRUNCATE, L"%sw%d %.1f", i ? L", " : L"", s.w[i].index, s.w[i].mass);
             wheelsText += one;
             wheelSum += s.w[i].mass;
         }
         wchar_t gravity[160];
-        if (g_dragGravityKnown) swprintf_s(gravity, L"the chassis's gravity factor %.2f (body+0x%X)", s.gravity, kDragGravityAt);
+        if (g_dragGravityKnown) _snwprintf_s(gravity, _TRUNCATE, L"the chassis's gravity factor %.2f (body+0x%X)", s.gravity, kDragGravityAt);
         else
-            swprintf_s(gravity, L"the gravity factor taken as 1, as its place is not confirmed (body+0x%X, Havok's place for it, reads %.3f on the chassis)", kDragGravityAt,
+            _snwprintf_s(gravity, _TRUNCATE, L"the gravity factor taken as 1, as its place is not confirmed (body+0x%X, Havok's place for it, reads %.3f on the chassis)", kDragGravityAt,
                        s.gravityRead);
         Log(L"rolling drag: truck %p, the chassis's own body 1/w %.1f kg, the files' sum of its bodies %.0f kg (model+0x784), the wheels %s (%.1f kg); %s; "
             L"N %.0f N a wheel on %d on the ground, the mass %.0f kg; cargo and a trailer not in it; the first wheel I %.2f kg m2 about its axle, r %.3f m, "
@@ -2028,10 +2098,10 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
     {
         const DragWheelStat &w = s.w[i];
         wchar_t one[200];
-        if (w.broken) swprintf_s(one, L"; w%d broken, the game's own", w.index);
-        else if (!w.grounded) swprintf_s(one, L"; w%d off the ground, stock %.3f", w.index, w.stock);
+        if (w.broken) _snwprintf_s(one, _TRUNCATE, L"; w%d broken, the game's own", w.index);
+        else if (!w.grounded) _snwprintf_s(one, _TRUNCATE, L"; w%d off the ground, stock %.3f", w.index, w.stock);
         else
-            swprintf_s(one, L"; w%d %S Crr %.3f, c %.3f (stock %.3f), spin %.1f rad/s, torque %.1f against %.1f N m", w.index, kRdGroundNames[w.ground], w.crr * s.factor,
+            _snwprintf_s(one, _TRUNCATE, L"; w%d %S Crr %.3f, c %.3f (stock %.3f), spin %.1f rad/s, torque %.1f against %.1f N m", w.index, kRdGroundNames[w.ground], w.crr * s.factor,
                        w.c, w.stock, w.spin, w.inertia * (w.c - w.stock) * fabsf(w.spin), w.crr * s.factor * s.n * w.r);
         list += one;
     }
@@ -2199,9 +2269,9 @@ static void FuelCompare()
             const bool litres = a >= 1.0f && a <= 5000.0f && d > 0.001f && d < 30.0f, share = g_probeFuel > 1 && a > 0.001f && a <= 1.0f && d > 0.0005f && d < 0.3f;
             if (!litres && !share) continue;
             wchar_t path[96];
-            if (s.a < 0) swprintf_s(path, L"vehicle+0x%zX", off);
-            else if (s.b < 0) swprintf_s(path, L"[vehicle+0x%X]+0x%zX", s.a, off);
-            else swprintf_s(path, L"[[vehicle+0x%X]+0x%X]+0x%zX", s.a, s.b, off);
+            if (s.a < 0) _snwprintf_s(path, _TRUNCATE, L"vehicle+0x%zX", off);
+            else if (s.b < 0) _snwprintf_s(path, _TRUNCATE, L"[vehicle+0x%X]+0x%zX", s.a, off);
+            else _snwprintf_s(path, _TRUNCATE, L"[[vehicle+0x%X]+0x%X]+0x%zX", s.a, s.b, off);
             Log(L"probe: fuel candidate %s: %.5f -> %.5f -> %.5f", path, a, b, c);
             lines++;
         }
@@ -2284,108 +2354,149 @@ static bool CopyOwnImage(std::vector<uint8_t> &out)
     return true;
 }
 
-// Stiff base, read only (stiff_probe.h): each wheel's RadiusOffset (+0xB4) and SoftForceScale (+0x120) with the tire's
-// radius (+0x98), logged once per truck and when a pair changes; the first wheel's object and model searched once per
-// truck for texts (the tire's name has no known place yet); and after 20 s of driving each wheel's sink under its
-// cylinder (SinkUpdate), which the write's proof compares. Nothing is written.
-// collect: the lines go there instead of the log (the test).
-static void StiffSearchTexts(const wchar_t *what, uint64_t root, size_t size, int &lines, std::vector<std::wstring> *collect = nullptr)
+// The SoftForceScale search, read only (stiff_probe.h, SoftTargets): the wheel object (0x800 bytes) and what it points
+// to two steps on (0x200 bytes each), every float within 0.5 % of a preset's figure, as it is or times the Scale, or
+// its reciprocal. The log keeps the places hit on every wheel of the truck; one that moves with a tire change, at
+// the same place on both sizes, is the field.
+static void SoftForceSearch(const WheelRef &w, std::vector<SoftHit> &hits)
 {
-    std::vector<BYTE> block;
-    if (!ReadBlock(root, block, size)) return;
-    std::vector<std::string> seen;
-    auto say = [&](const std::string &text, const wchar_t *how, size_t a, int b) {
-        for (const std::string &t : seen) if (t == text) return;
-        seen.push_back(text);
-        if (lines >= 60) return;
-        lines++;
-        wchar_t line[256];
-        if (b < 0) swprintf_s(line, L"stiff base (read only): %s+0x%03zX %s \"%S\"", what, a, how, text.c_str());
-        else swprintf_s(line, L"stiff base (read only): %s+0x%03zX -> +0x%03X %s \"%S\"", what, a, b, how, text.c_str());
-        if (collect) collect->push_back(line);
-        else Log(L"%s", line);
-    };
-    auto textAt = [&](const uint8_t *t, size_t a, int b) {
-        std::string chars;
-        uint64_t pointer = 0, length = 0;
-        if (!GameTextLayout(t, chars, pointer, length)) return false;
-        if (!pointer) { say(chars, L"text", a, b); return true; }
-        uint8_t buf[96] = {};
-        if (!ReadProcessMemory(GetCurrentProcess(), (void *)pointer, buf, (size_t)length + 1, nullptr) || !PlainText(buf, sizeof buf, chars) || chars.size() != length) return false;
-        say(chars, L"text", a, b);
-        return true;
-    };
-    for (size_t a = 0; a + 8 <= block.size(); a += 8)
-    {
-        if (a + 0x20 <= block.size() && textAt(block.data() + a, a, -1)) continue;
-        uint64_t q = 0;
-        memcpy(&q, block.data() + a, 8);
-        if (q < 0x10000 || (q & 7)) continue;
-        uint8_t direct[96] = {};
-        std::string chars;
-        if (ReadProcessMemory(GetCurrentProcess(), (void *)q, direct, sizeof direct, nullptr) && PlainText(direct, sizeof direct, chars)) { say(chars, L"chars", a, -1); continue; }
-        std::vector<BYTE> inner;
-        if (!ReadBlock(q, inner, 0x100)) continue;
-        for (size_t b = 0; b + 8 <= inner.size(); b += 8)
+    float scale = 0.0f;
+    Read(w.wheel + 0x98, scale);
+    SoftTarget t[kSoftTargets];
+    const int n = SoftTargets(scale, t);
+    std::unordered_set<uint64_t> seen = { w.wheel };
+    auto fresh = [&](uint64_t p) { return p >= 0x10000 && p <= 0x7FFFFFFFFFFFULL && !(p & 7) && seen.insert(p).second; };
+    auto scan = [&](const std::vector<BYTE> &block, const char *way) {
+        for (size_t at = 0; at + 4 <= block.size() && hits.size() < 600; at += 4)
         {
-            if (b + 0x20 <= inner.size() && textAt(inner.data() + b, a, (int)b)) continue;
-            uint64_t r = 0;
-            memcpy(&r, inner.data() + b, 8);
-            if (r < 0x10000) continue;
-            uint8_t chars2[96] = {};
-            if (ReadProcessMemory(GetCurrentProcess(), (void *)r, chars2, sizeof chars2, nullptr) && PlainText(chars2, sizeof chars2, chars)) say(chars, L"chars", a, (int)b);
+            float v;
+            memcpy(&v, block.data() + at, 4);
+            const int i = SoftTargetHit(v, t, n);
+            if (i < 0) continue;
+            char path[96];
+            snprintf(path, sizeof path, "%s+0x%03zX", way, at);
+            hits.push_back(SoftHit{ path, t[i].what, v });
+        }
+    };
+    std::vector<BYTE> b0, b1, b2;
+    if (!ReadBlock(w.wheel, b0, 0x800)) return;
+    scan(b0, "wheel");
+    for (size_t a = 0; a + 8 <= b0.size(); a += 8)
+    {
+        uint64_t p = 0;
+        memcpy(&p, b0.data() + a, 8);
+        if (!fresh(p) || !ReadBlock(p, b1, 0x200)) continue;
+        char way1[48];
+        snprintf(way1, sizeof way1, "wheel+0x%03zX -> ", a);
+        scan(b1, way1);
+        for (size_t c = 0; c + 8 <= b1.size(); c += 8)
+        {
+            uint64_t q = 0;
+            memcpy(&q, b1.data() + c, 8);
+            if (!fresh(q) || !ReadBlock(q, b2, 0x200)) continue;
+            char way2[64];
+            snprintf(way2, sizeof way2, "wheel+0x%03zX -> +0x%03zX -> ", a, c);
+            scan(b2, way2);
         }
     }
 }
 
-static void StiffProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool rolling, ULONGLONG now)
+// The stiff base's lines (stiff_probe.h), once per truck and again when a wheel's tire or object changes: each wheel's
+// RadiusOffset as the game holds it (+0xB4), its Scale (+0x98, the file's Radius taken as 1), what the base keeps, the
+// game's cylinder, the base and the cylinder now; the SoftForceScale search; and after 20 s of rolling each wheel's
+// sink under its cylinder (SinkUpdate).
+static void StiffBasePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool rolling, ULONGLONG now)
 {
     static uint64_t seenVehicle = 0;
-    static std::vector<SoftPair> said;
+    static std::vector<uint64_t> seenMesh, seenWheel;
     static ULONGLONG rolledMs = 0, lastAt = 0;
     static bool sinkSaid = false;
-    static int truckLines = 0;
+    static int lines = 0;
     if (!vehicle || wheels.empty()) { lastAt = 0; return; }
-    std::vector<SoftPair> now2;
+    std::vector<uint64_t> mesh, wheelAt;
+    std::vector<std::string> meshText;
     for (const WheelRef &w : wheels)
     {
-        SoftPair p;
-        p.wheel = w.wheel;
-        if (!Read(w.wheel + 0xB4, p.radiusOffset) || !Read(w.wheel + 0x120, p.softForceScale) || !Read(w.wheel + 0x98, p.radius)) return;
-        now2.push_back(p);
+        meshText.push_back(TireMesh(w.model));
+        mesh.push_back(TextKey(meshText.back()));
+        wheelAt.push_back(w.wheel);
     }
-    char kind[96] = {};
-    TruckKindName(vehicle, kind);
     const bool newTruck = vehicle != seenVehicle;
-    if (newTruck || SoftPairsChanged(said, now2))
+    if (newTruck || mesh != seenMesh || wheelAt != seenWheel)
     {
-        if (truckLines < 400)
+        char kind[96] = {};
+        TruckKindName(vehicle, kind);
+        if (lines < 600)
         {
-            Log(L"stiff base (read only, nothing written): truck %S, %zu wheels%s", kind[0] ? kind : "(kind not read)", now2.size(), newTruck ? L"" : L", a pair changed");
-            for (size_t i = 0; i < now2.size(); i++)
+            Log(L"stiff base (StiffBase=%d): truck %S, %zu wheels%s", g_stiffBase ? 1 : 0, kind[0] ? kind : "(kind not read)", wheels.size(),
+                newTruck ? L"" : L", a tire or a wheel changed");
+            lines++;
+            for (size_t i = 0; i < wheels.size(); i++)
             {
-                const SoftPair &p = now2[i];
-                float cylinder = 0.0f, broken = 0.0f;
+                float held = 0.0f, scale = 0.0f, radius = 0.0f, cylinder = 0.0f;
+                Read(wheels[i].wheel + 0xB4, held);
+                Read(wheels[i].wheel + 0x98, scale);
+                Read(wheels[i].wheel + 0x94, radius);
                 Read(wheels[i].shape + 0x28, cylinder);
-                Read(wheels[i].wheel + 0x94, broken);
-                bool scaled = false;
-                const char *preset = SoftPresetName(p.radiusOffset, p.softForceScale, 0.0f, scaled);
-                Log(L"stiff base (read only): wheel %zu (%p): RadiusOffset +0xB4 %.4f, SoftForceScale +0x120 %.4f, radius +0x98 %.4f, +0x94 %.4f, cylinder %.4f; %S",
-                    i, (void *)p.wheel, p.radiusOffset, p.softForceScale, p.radius, broken, cylinder, preset ? preset : "no preset matches at a Scale of 1");
-                truckLines++;
+                const float kept = StiffKeptOffset(held, scale, g_stiffBase);
+                Log(L"stiff base: wheel %zu (%p), tire %S: RadiusOffset held %.4f at a Scale of %.3f (the file's Radius taken as 1), kept %.4f; the game's cylinder %.4f, "
+                    L"the base %.4f, the cylinder now %.4f", i, (void *)wheels[i].wheel, meshText[i].empty() ? "(mesh not read)" : meshText[i].c_str(), held, scale, kept,
+                    radius - held, radius - kept, cylinder);
+                lines++;
+            }
+            // the plain-ground grip (BRIEF_drive_2052_fixes.md F3, read only): where the truck action's list at +0x98 ..
+            // +0xA0 is empty, the wheel object's floats beside the asphalt (+0xA4) and mud (+0xA0) frictions the mod
+            // writes, against the tire file's BodyFriction, and the action's words around the list
+            uint64_t action = 0, begin = 0, end = 0;
+            Read(vehicle + 0x68, action);
+            const bool listEmpty = !Read(action + 0x98, begin) || !Read(action + 0xA0, end) || end <= begin;
+            if (listEmpty)
+            {
+                uint64_t words[6] = {};
+                Read(action + 0x88, words);
+                Log(L"ground grip (read only): truck %S, the action's list at +0x98 .. +0xA0 is empty (%p .. %p); the action's +0x88 .. +0xB0: %p %p %p %p %p %p",
+                    kind[0] ? kind : "(kind not read)", (void *)begin, (void *)end, (void *)words[0], (void *)words[1], (void *)words[2], (void *)words[3],
+                    (void *)words[4], (void *)words[5]);
+                lines++;
+                for (size_t i = 0; i < wheels.size(); i++)
+                {
+                    float f[8] = {};
+                    Read(wheels[i].wheel + 0x98, f);
+                    Log(L"ground grip (read only): wheel %zu floats +0x98 .. +0xB4: %.4f %.4f (mud +0xA0) %.4f (asphalt +0xA4) %.4f %.4f %.4f %.4f %.4f", i, f[0], f[1],
+                        f[2], f[3], f[4], f[5], f[6], f[7]);
+                    lines++;
+                }
+            }
+            std::vector<std::vector<SoftHit>> hits(wheels.size());
+            for (size_t i = 0; i < wheels.size(); i++) SoftForceSearch(wheels[i], hits[i]);
+            const std::vector<std::string> every = SoftHitsOnEvery(hits);
+            Log(L"soft force search (read only, +0x120 is not SoftForceScale): %zu places hit on every wheel, %zu hits on the first wheel", every.size(), hits[0].size());
+            lines++;
+            for (size_t k = 0; k < every.size() && k < 30; k++)
+            {
+                std::string values, what;
+                for (size_t i = 0; i < hits.size(); i++)
+                    for (const SoftHit &h : hits[i])
+                        if (h.path == every[k])
+                        {
+                            char v[24];
+                            snprintf(v, sizeof v, " %.4f", h.value);
+                            values += v;
+                            if (!i) what = h.what;
+                            break;
+                        }
+                Log(L"soft force search: %S:%S (%S)", every[k].c_str(), values.c_str(), what.c_str());
+                lines++;
             }
         }
         if (newTruck)
         {
-            int lines = 0;
-            StiffSearchTexts(L"wheel", wheels[0].wheel, 0x300, lines);
-            StiffSearchTexts(L"wheel model", wheels[0].model, 0x600, lines);
-            Log(L"stiff base (read only): %d texts found on the first wheel's object and model (60 at most)", lines);
             rolledMs = 0;
             sinkSaid = false;
         }
         seenVehicle = vehicle;
-        said = now2;
+        seenMesh = mesh;
+        seenWheel = wheelAt;
     }
     if (rolling && lastAt && now > lastAt) rolledMs += now - lastAt < 500 ? now - lastAt : 500;
     lastAt = now;
@@ -2396,8 +2507,8 @@ static void StiffProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels
         {
             const auto it = g_wheels.find(wheels[i].wheel);
             if (it == g_wheels.end()) continue;
-            Log(L"stiff base (read only): after 20 s rolling, wheel %zu sinks %.4f under its cylinder %.4f (in use %.3f), SoftForceScale %.4f", i, it->second.sink,
-                it->second.writtenCylinder, it->second.sinkUsed, now2[i].softForceScale);
+            Log(L"stiff base: after 20 s rolling, wheel %zu sinks %.4f under its cylinder %.4f (in use %.3f)", i, it->second.sink, it->second.writtenCylinder,
+                it->second.sinkUsed);
         }
     }
 }
@@ -2408,7 +2519,7 @@ static DWORD WINAPI Run(void *)
     // left under another name) would take the first one's values for the game's own and scale them again, 20 times a
     // second. The mutex is the process's; the second copy adds its line to the first one's log and ends.
     wchar_t once[64];
-    swprintf_s(once, L"Local\\SnowRunnerTirePressure-%lu", GetCurrentProcessId());
+    _snwprintf_s(once, _TRUNCATE, L"Local\\SnowRunnerTirePressure-%lu", GetCurrentProcessId());
     if (CreateMutexW(nullptr, FALSE, once) && GetLastError() == ERROR_ALREADY_EXISTS)
     {
         wchar_t file[MAX_PATH] = {};
@@ -2453,7 +2564,7 @@ static DWORD WINAPI Run(void *)
     {
         std::vector<uint8_t> copy;
         wchar_t name[64];
-        swprintf_s(name, L"TirePressure_image_%08lx.bin", stamp);
+        _snwprintf_s(name, _TRUNCATE, L"TirePressure_image_%08lx.bin", stamp);
         FILE *f = nullptr;
         if (CopyOwnImage(copy) && _wfopen_s(&f, (g_dir + name).c_str(), L"wb") == 0 && f)
         {
@@ -2684,7 +2795,7 @@ static DWORD WINAPI Run(void *)
         if (vehicle && vehicle != kindOf)
         {
             char name[96];
-            if (TruckKindName(vehicle, name)) { kindOf = vehicle; strcpy_s(kindRead, name); }
+            if (TruckKindName(vehicle, name)) { kindOf = vehicle; strncpy_s(kindRead, name, _TRUNCATE); }
             else if (!kindSaid) { kindSaid = true; Log(L"truck: its kind's name was not read, so this truck shares the mode in force"); }
         }
         if (!vehicle) kindOf = 0; // read again when a truck is found
@@ -2693,7 +2804,7 @@ static DWORD WINAPI Run(void *)
             TruckWho2 driven = {}; // none driven while vehicle is 0
             if (vehicle)
             {
-                strcpy_s(driven.kind, kindRead);
+                strncpy_s(driven.kind, kindRead, _TRUNCATE);
                 TruckIdRead(vehicle, driven.id);
             }
             const TruckChange c = TruckWatchStep(watch, driven, vehicle, GetTickCount64());
@@ -2938,7 +3049,7 @@ static DWORD WINAPI Run(void *)
             }
         }
         rolling = speedOk && speed > (rolling ? 0.25f : 0.5f);
-        StiffProbePass(vehicle, wheels, rolling, passAt);
+        StiffBasePass(vehicle, wheels, rolling, passAt);
         // the ground under each wheel picks its ground grip factor; a worn out tire (the game's broken flag on its
         // wheel model, see ApplyWornWheel) keeps WornGrip of its own
         std::vector<float> groundFactor(wheels.size(), 1.0f);
@@ -3111,8 +3222,8 @@ static DWORD WINAPI Run(void *)
         {
             TpLive live = {};
             live.wheels = (int)wheels.size();
-            if (!wheels.empty() && kindOf == vehicle) strcpy_s(live.truck, kindRead);
-            if (!wheels.empty() && kindOf == vehicle && TruckWhoSame(cur, watch.seen)) strcpy_s(live.truckId, cur.id);
+            if (!wheels.empty() && kindOf == vehicle) strncpy_s(live.truck, kindRead, _TRUNCATE);
+            if (!wheels.empty() && kindOf == vehicle && TruckWhoSame(cur, watch.seen)) strncpy_s(live.truckId, cur.id, _TRUNCATE);
             live.truckLevel = curDriven ? curLevel : -1;
             live.truckKept = curDriven && curKept ? 1 : 0;
             live.mode = g_mode;
@@ -3210,7 +3321,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
 {
     bool same = a.key == b.key && a.beep == b.beep && a.seconds == b.seconds && a.soundVolume == b.soundVolume && a.ui == b.ui && a.uiScale == b.uiScale &&
                 a.confirmSeconds == b.confirmSeconds && a.vanillaBalance == b.vanillaBalance && a.balanceStrength == b.balanceStrength &&
-                a.standStill == b.standStill && a.perTruck == b.perTruck && a.temperature == b.temperature && a.rollingDrag == b.rollingDrag && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
+                a.standStill == b.standStill && a.perTruck == b.perTruck && a.temperature == b.temperature && a.rollingDrag == b.rollingDrag && a.stiffBase == b.stiffBase && a.ambientC == b.ambientC && a.hardMode == b.hardMode &&
                 a.insaneMode == b.insaneMode;
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
@@ -3452,7 +3563,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.uiScale = 1.25f;
     c.confirmSeconds = 0.0f;
     static const char *pads[5] = { "RB+DPadUp", "None", "X+Y", "LS", "Back" };
-    for (int i = 0; i < 5; i++) strcpy_s(c.pad[i], pads[i]);
+    for (int i = 0; i < 5; i++) strncpy_s(c.pad[i], pads[i], _TRUNCATE);
     c.padCurve[0] = 2.2f;
     c.padCurve[1] = 1.6f;
     c.base[0] = 0.8f;
@@ -3468,6 +3579,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.standStill = false;
     c.perTruck = false;
     c.temperature = false;
+    c.stiffBase = false;
     c.rollingDrag = false;
     c.ambientC = -3.0f;
     c.hardMode = true;
@@ -3838,8 +3950,8 @@ static bool TruckOwnTest()
     {
         TruckWatch w = {};
         TruckWho2 cur = {}, a = {}, b = {}, nobody = {};
-        strcpy_s(a.kind, k), strcpy_s(a.id, idA);
-        strcpy_s(b.kind, k), strcpy_s(b.id, idB);
+        strncpy_s(a.kind, k, _TRUNCATE), strncpy_s(a.id, idA, _TRUNCATE);
+        strncpy_s(b.kind, k, _TRUNCATE), strncpy_s(b.id, idB, _TRUNCATE);
         bool taken = false, firstShared = false;
         TruckModeFound got = {};
         int level = kTruckLevelStart;
@@ -3886,11 +3998,11 @@ static bool TruckOwnTest()
         const char *id1 = "{11111111-1111-1111-1111-111111111111}", *id2 = "{22222222-2222-2222-2222-222222222222}",
                    *id3 = "{33333333-3333-3333-3333-333333333333}", *id4 = "{44444444-4444-4444-4444-444444444444}";
         TruckWho2 a1 = {}, a2 = {}, a3 = {}, a4 = {}, b1 = {}, nobody = {};
-        strcpy_s(a1.kind, k), strcpy_s(a1.id, id1);
-        strcpy_s(a2.kind, k), strcpy_s(a2.id, id2);
-        strcpy_s(a3.kind, k), strcpy_s(a3.id, id3);
-        strcpy_s(a4.kind, k), strcpy_s(a4.id, id4);
-        strcpy_s(b1.kind, "test_other"), strcpy_s(b1.id, idB);
+        strncpy_s(a1.kind, k, _TRUNCATE), strncpy_s(a1.id, id1, _TRUNCATE);
+        strncpy_s(a2.kind, k, _TRUNCATE), strncpy_s(a2.id, id2, _TRUNCATE);
+        strncpy_s(a3.kind, k, _TRUNCATE), strncpy_s(a3.id, id3, _TRUNCATE);
+        strncpy_s(a4.kind, k, _TRUNCATE), strncpy_s(a4.id, id4, _TRUNCATE);
+        strncpy_s(b1.kind, "test_other", _TRUNCATE), strncpy_s(b1.id, idB, _TRUNCATE);
         TruckModeSaveOwn(file, k, id1, kLow, true);
         TruckWatch w = {};
         TruckWho2 cur = {};
@@ -3958,8 +4070,8 @@ static bool TruckOwnTest()
         for (int i = 0; i < 12; i++)
         {
             char o[40], n[40];
-            sprintf_s(o, "{%08X-0000-0000-0000-000000000000}", 0x10 + i);
-            sprintf_s(n, "{%08X-0000-0000-0000-000000000000}", 0x100 + i);
+            _snprintf_s(o, _TRUNCATE, "{%08X-0000-0000-0000-000000000000}", 0x10 + i);
+            _snprintf_s(n, _TRUNCATE, "{%08X-0000-0000-0000-000000000000}", 0x100 + i);
             TruckModeSaveOwn(file, k, o, kReduced, true);
             TruckModeTakeOver(file, k, o, n, 1000ull + i);
         }
@@ -3968,7 +4080,7 @@ static bool TruckOwnTest()
         for (int i = 0; i < 12; i++)
         {
             char o[40];
-            sprintf_s(o, "{%08X-0000-0000-0000-000000000000}", 0x10 + i);
+            _snprintf_s(o, _TRUNCATE, "{%08X-0000-0000-0000-000000000000}", 0x10 + i);
             int m = -1;
             const bool there = TruckSectionMode(file, TruckSection(k, o), m);
             marked += there;
@@ -4251,7 +4363,7 @@ static bool RollCoastTest()
     RollBoxAdd(st, s3);
     RollCoastResult no = {};
     no.step = 2;
-    strcpy_s(no.reason, "in gear 3");
+    strncpy_s(no.reason, "in gear 3", _TRUNCATE);
     RollBoxAdd(st, no);
     RollBoxText(st, b);
     const bool coasts = !strcmp(b.line[5].text, "Step 3: not counted: in gear 3") && !strcmp(b.line[6].text, "Step 3: 36 to 3 km/h, flat 1.08 m/s2, flag 1CE 0.00, counted, x1.08 of stock") &&
@@ -4468,9 +4580,9 @@ static bool RollingDragTest()
     }
     const bool noHook = g_dragOn == 0 && text.find("rolling drag: off, as the game's truck update is not hooked") != std::string::npos;
     char sumLine[200];
-    sprintf_s(sumLine, "the chassis's own body 1/w 1000.0 kg, the files' sum of its bodies 1200 kg (model+0x784), the wheels w0 50.0, w1 50.0, w2 50.0, w3 50.0 (200.0 kg)");
+    _snprintf_s(sumLine, _TRUNCATE, "the chassis's own body 1/w 1000.0 kg, the files' sum of its bodies 1200 kg (model+0x784), the wheels w0 50.0, w1 50.0, w2 50.0, w3 50.0 (200.0 kg)");
     char gravityLine[160];
-    sprintf_s(gravityLine, "the chassis's gravity factor %.2f (body+0x282); N %.0f N", withGravity.gravity, heavy);
+    _snprintf_s(gravityLine, _TRUNCATE, "the chassis's gravity factor %.2f (body+0x282); N %.0f N", withGravity.gravity, heavy);
     summed = summed && text.find(sumLine) != std::string::npos && text.find(gravityLine) != std::string::npos && text.find("the mass 1400 kg") != std::string::npos;
     delete c;
     g_foregroundReal = hookWas;
@@ -4937,66 +5049,144 @@ static int SoundLoops(int argc, wchar_t **argv)
     return ok ? 0 : 1;
 }
 
-// The stiff base's read-only step: the presets named, a changed pair seen, texts found where the game keeps them.
-static bool StiffProbeTest()
+// The stiff base (BRIEF_drive_2052_fixes.md F2): the kept offset in held units, by the game's own presets (the held
+// offset is the preset times the radius: a Soft 0.03 on a wheel of 0.580 is held 0.0174); the base written through
+// ApplyWheel and the game's stock still telling a repaired shape; off giving the game's cylinder back; a tire change
+// with the mod's grip still on the wheel keeping the grip's stock and taking the shape anew (review F1); the
+// SoftForceScale search's targets and its places on every wheel.
+static bool StiffBaseTest()
 {
-    bool scaled = false;
-    const char *stiff = SoftPresetName(0.02f, 0.32f, 0.0f, scaled);
-    const bool stiffOk = stiff && !strcmp(stiff, "Stiff") && !scaled;
-    const char *soft = SoftPresetName(0.03f, 0.12f, 0.0f, scaled);
-    const bool softOk = soft && !strcmp(soft, "Soft");
-    const char *atScale = SoftPresetName(0.02f * 0.575f, 0.32f, 0.575f, scaled);
-    const bool scaledOk = atScale && !strcmp(atScale, "Stiff") && scaled;
-    const bool ownOk = !SoftPresetName(0.02f, 0.5f, 0.0f, scaled);
-    std::vector<SoftPair> a(2), b(2);
-    a[0].wheel = b[0].wheel = 1;
-    a[1].wheel = b[1].wheel = 2;
-    a[0].softForceScale = b[0].softForceScale = 0.12f;
-    const bool sameOk = !SoftPairsChanged(a, b);
-    b[0].softForceScale = 0.32f;
-    const bool movedOk = SoftPairsChanged(a, b);
-    b[0].softForceScale = 0.12f;
-    b[1].wheel = 3;
-    const bool otherOk = SoftPairsChanged(a, b);
-    b.pop_back();
-    const bool countOk = SoftPairsChanged(a, b);
-    std::string t;
-    const bool plainOk = PlainText((const uint8_t *)"Made-up Trail Tire", 32, t) && t == "Made-up Trail Tire" && !PlainText((const uint8_t *)"ab\x01", 4, t) &&
-                         !PlainText((const uint8_t *)"12", 3, t);
-    // a search over a block of our own: an inline text at +0x10, a text behind a pointer at +0x40, plain characters
-    // behind a pointer at +0x68 and a record whose text is one step further, at +0x70 -> +0x08
-    static const char longName[] = "tire_madeup_trail_20_single";
-    static const char plain[] = "Made-up Trail Tire";
-    alignas(8) static uint8_t record[0x100] = {};
-    alignas(8) static uint8_t root[0x300] = {};
-    auto lay = [](uint8_t *at, const char *chars, uint64_t pointer, uint64_t length, uint64_t room) {
-        memset(at, 0, 0x20);
-        if (chars) memcpy(at, chars, (size_t)length);
-        else memcpy(at, &pointer, 8);
-        memcpy(at + 0x10, &length, 8);
-        memcpy(at + 0x18, &room, 8);
+    // Soft on 0.580 and 0.640 goes to the cap, 0.0116 and 0.0128; Stiff on 0.420 is at the cap and stays to the bit;
+    // round figures: Soft on 0.5 to 0.01, Stiff on 0.5 stays, a tire stiffer than Stiff stays; off, as held
+    const bool keptOk = Near(StiffKeptOffset(0.0174f, 0.580f, true), 0.0116f) && Near(StiffKeptOffset(0.0192f, 0.640f, true), 0.0128f) &&
+                        StiffKeptOffset(0.0084f, 0.420f, true) == 0.0084f && Near(StiffKeptOffset(0.015f, 0.5f, true), 0.01f) &&
+                        StiffKeptOffset(0.01f, 0.5f, true) == 0.01f && StiffKeptOffset(0.005f, 0.5f, true) == 0.005f &&
+                        StiffKeptOffset(0.0174f, 0.580f, false) == 0.0174f;
+    static uint8_t wheel[0x400], body[0x40], shape[0x40], model[0x400], mesh[0x40];
+    const Build saved = g_buildFound;
+    const bool stiffWas = g_stiffBase;
+    g_buildFound.wheelVtable = 0x100;
+    g_buildFound.cylinderVtable = 0x200;
+    const uint64_t wheelVt = g_base + 0x100, shapeVt = g_base + 0x200, at[4] = { (uint64_t)body, (uint64_t)shape, (uint64_t)wheel, (uint64_t)mesh };
+    memcpy(wheel, &wheelVt, 8);
+    memcpy(shape, &shapeVt, 8);
+    memcpy(wheel + 0x18, &at[0], 8);
+    memcpy(body + 0x20, &at[1], 8);
+    memcpy(model + 0x2C8, &at[2], 8);
+    memcpy(model + 0x60, &at[3], 8);
+    auto put = [](uint8_t *o, size_t k, float v) { memcpy(o + k, &v, 4); };
+    auto get = [](const uint8_t *o, size_t k) { float v; memcpy(&v, o + k, 4); return v; };
+    auto tire = [&](const char *name, float radius, float held) {
+        memset(mesh, 0, sizeof mesh);
+        const uint64_t length = strlen(name), room = 15;
+        memcpy(mesh + 0x10, name, (size_t)length);
+        memcpy(mesh + 0x20, &length, 8);
+        memcpy(mesh + 0x28, &room, 8);
+        put(wheel, 0x94, radius);
+        put(wheel, 0x98, radius);
+        put(wheel, 0xB4, held);
+        put(shape, 0x28, radius - held); // the game's fresh shape
     };
-    lay(root + 0x10, "Stiff", 0, 5, 15);
-    lay(root + 0x40, nullptr, (uint64_t)longName, sizeof longName - 1, 31);
-    const uint64_t plainAt = (uint64_t)plain, recordAt = (uint64_t)record;
-    memcpy(root + 0x68, &plainAt, 8);
-    memcpy(root + 0x70, &recordAt, 8);
-    lay(record + 0x08, "Soft", 0, 4, 15);
-    int lines = 0;
-    std::vector<std::wstring> got;
-    StiffSearchTexts(L"wheel", (uint64_t)root, sizeof root, lines, &got);
-    auto has = [&](const wchar_t *needle) {
-        for (const std::wstring &l : got) if (l.find(needle) != std::wstring::npos) return true;
-        return false;
-    };
-    const bool searchOk = lines == 4 && has(L"wheel+0x010 text \"Stiff\"") && has(L"wheel+0x040 text \"tire_madeup_trail_20_single\"") &&
-                          has(L"wheel+0x068 chars \"Made-up Trail Tire\"") && has(L"wheel+0x070 -> +0x008 text \"Soft\"");
-    if (!searchOk) for (const std::wstring &l : got) printf("     %ls\n", l.c_str());
-    const bool ok = stiffOk && softOk && scaledOk && ownOk && sameOk && movedOk && otherOk && countOk && plainOk && searchOk;
-    printf("%s stiff base, read only: Stiff %s, Soft %s, Stiff at Scale 0.575 %s, 0.5 no preset %s; a pair changed: same %s, moved %s, another wheel %s, "
-           "a count %s; texts %s; the search found %d (inline, behind a pointer, plain, a record's) %s\n",
-           ok ? "ok  " : "FAIL", stiffOk ? "named" : "NOT", softOk ? "named" : "NOT", scaledOk ? "named, scaled" : "NOT", ownOk ? "yes" : "NO", sameOk ? "no" : "YES",
-           movedOk ? "yes" : "NO", otherOk ? "yes" : "NO", countOk ? "yes" : "NO", plainOk ? "ok" : "WRONG", lines, searchOk ? "ok" : "WRONG");
+    Mode low = kStockMode;
+    low.name = L"test low";
+    low.asphalt = 0.76f;
+    low.substance = 0.8f;
+    const WheelRef w = { (uint64_t)wheel, (uint64_t)body, (uint64_t)shape, (uint64_t)model, 0 };
+    g_wheels.erase(w.wheel);
+    put(wheel, 0xA4, 2.0f);
+    put(wheel, 0xA0, 3.0f);
+    tire("tire_soft", 0.580f, 0.0174f); // Soft on 0.580: the game's cylinder 0.5626, the base 0.5684
+    g_stiffBase = true;
+    const bool wrote = ApplyWheel(w, kStockMode, false, false);
+    const float first = get(shape, 0x28);
+    const bool again = !ApplyWheel(w, kStockMode, false, false) && get(shape, 0x28) == first;
+    // the game repairs the tire: its shape comes back at the game's own stock, which is still told, and the base goes on again
+    put(shape, 0x28, 0.580f - 0.0174f);
+    const bool repaired = ApplyWheel(w, kStockMode, false, false) && Near(get(shape, 0x28), 0.5684f);
+    // off: the game's cylinder back
+    g_stiffBase = false;
+    const bool offWrote = ApplyWheel(w, kStockMode, false, false);
+    const float off = get(shape, 0x28);
+    g_stiffBase = true;
+    ApplyWheel(w, kStockMode, false, false);
+    const float on = get(shape, 0x28);
+    // review F1: at a mode with grip factors, a tire change (another mesh, the new tire's fresh shape) with the frictions
+    // left at the mode's word: the next pass writes stock x the factor, not its square; Normal gives the old stock back
+    ApplyWheel(w, low, false, false);
+    const float lowAsphalt = get(wheel, 0xA4), lowMud = get(wheel, 0xA0);
+    tire("tire_stiffer", 0.580f, 0.0058f); // a tire stiffer than Stiff: the base is its own, 0.5742
+    ApplyWheel(w, low, false, false);
+    const float changeAsphalt = get(wheel, 0xA4), changeMud = get(wheel, 0xA0), stiffer = get(shape, 0x28);
+    const auto rec = g_wheels.find(w.wheel);
+    const bool kept = rec != g_wheels.end() && Near(rec->second.asphalt, 2.0f) && Near(rec->second.substance, 3.0f) && Near(rec->second.cylinder, 0.5742f) &&
+                      rec->second.mesh == TextKey("tire_stiffer");
+    ApplyWheel(w, kStockMode, false, false);
+    const bool back = Near(get(wheel, 0xA4), 2.0f) && Near(get(wheel, 0xA0), 3.0f);
+    const bool changeOk = Near(lowAsphalt, 1.52f) && Near(lowMud, 2.4f) && Near(changeAsphalt, 1.52f) && Near(changeMud, 2.4f) && Near(stiffer, 0.5742f) && kept && back;
+    // another size: Soft on 0.640, the base 0.6272
+    tire("tire_big", 0.640f, 0.0192f);
+    ApplyWheel(w, kStockMode, false, false);
+    const float big = get(shape, 0x28);
+    // a Stiff tire at the cap (0.02 x 0.42): no write, the game's cylinder stays to the bit
+    tire("tire_stiff", 0.420f, 0.0084f);
+    const float stiffWasAt = get(shape, 0x28);
+    const bool stiffNone = !ApplyWheel(w, kStockMode, false, false) && get(shape, 0x28) == stiffWasAt;
+    g_wheels.erase(w.wheel);
+    g_stiffBase = stiffWas;
+    g_buildFound = saved;
+    const bool baseOk = wrote && Near(first, 0.5684f) && again && repaired && offWrote && Near(off, 0.5626f) && Near(on, 0.5684f) && changeOk &&
+                        Near(big, 0.6272f) && stiffNone;
+    // the search's targets: 0.20 at a Scale of 0.5 (0.10) and its reciprocal (10), and the places on every wheel
+    SoftTarget t[kSoftTargets];
+    const int n = SoftTargets(0.5f, t);
+    const int a = SoftTargetHit(0.1001f, t, n), b = SoftTargetHit(9.98f, t, n), c = SoftTargetHit(0.2f, t, n);
+    const bool targetsOk = n == kSoftTargets && a >= 0 && !strcmp(t[a].what, "0.20 x Scale") && b >= 0 && !strcmp(t[b].what, "1/(0.20 x Scale)") && c >= 0 &&
+                           !strcmp(t[c].what, "0.20") && SoftTargetHit(0.107f, t, n) < 0 && SoftTargetHit(-0.2f, t, n) < 0;
+    std::vector<std::vector<SoftHit>> hits(2);
+    hits[0] = { { "wheel+0x120", "0.20", 0.2f }, { "wheel+0x018 -> +0x040", "0.20 x Scale", 0.1f } };
+    hits[1] = { { "wheel+0x018 -> +0x040", "0.20 x Scale", 0.1f } };
+    const std::vector<std::string> every = SoftHitsOnEvery(hits);
+    const bool everyOk = every.size() == 1 && every[0] == "wheel+0x018 -> +0x040";
+    std::string text;
+    const bool plainOk = PlainText((const uint8_t *)"wheels_tire_made_up_mesh_20", 64, text) && !PlainText((const uint8_t *)"ab\x01", 4, text) &&
+                         TextKey("") == 0 && TextKey("a") != TextKey("b");
+    const bool ok = keptOk && baseOk && targetsOk && everyOk && plainOk;
+    printf("%s stiff base: Soft on 0.580 and 0.640 kept 0.0116 and 0.0128, Stiff on 0.420 at the cap to the bit, stiffer kept %s; the base %.4f written, "
+           "again nothing %s, a repair at the game's stock taken %s, off gives %.4f back %s, on %.4f; a tire change with Low's grip on it keeps the grip's "
+           "stock (asphalt %.3f, not %.3f) and takes the shape %.4f %s; on 0.640 %.4f, Stiff not written %s; soft force targets %s, on every wheel %s, texts %s\n",
+           ok ? "ok  " : "FAIL", keptOk ? "ok" : "WRONG", first, again ? "ok" : "WRONG", repaired ? "ok" : "WRONG", off, offWrote ? "ok" : "NOT WRITTEN", on,
+           changeAsphalt, 2.0f * 0.76f * 0.76f, stiffer, changeOk ? "ok" : "WRONG", big, stiffNone ? "ok" : "WRONG", targetsOk ? "ok" : "WRONG",
+           everyOk ? "ok" : "WRONG", plainOk ? "ok" : "WRONG");
+    return ok;
+}
+
+// F0 of BRIEF_drive_2052_fixes.md: a text built from game texts longer than its buffer is cut, never fatal. The kind's
+// name into a 96 of the truck record (strncpy_s with _TRUNCATE, as TruckKindName fills it), a mesh 80 characters long
+// into the wheel line's pieces (FmtCut), and the rolling probe's coast line at its longest in its real 512.
+static bool TextCutTest()
+{
+    const char *mesh = "wheels_tire_a_mod_tire_mesh_name_of_eighty_characters_as_a_mod_can_name_it_0123";
+    char kind[96];
+    std::string longKind(300, 'k');
+    strncpy_s(kind, longKind.c_str(), _TRUNCATE);
+    const bool kindOk = strlen(kind) == sizeof kind - 1;
+    char line[64];
+    int used = 0;
+    for (int i = 0; i < 3; i++) used += FmtCut(line + used, sizeof line - used, "%s%s", i ? " | " : "", mesh);
+    const bool lineOk = used == (int)sizeof line - 1 && strlen(line) == sizeof line - 1;
+    RollCoastResult c = {};
+    c.numbers = true;
+    c.wheels = kRollWheelsMost;
+    c.once = true;
+    c.v0 = c.v1 = c.t = c.d = c.h1 = c.decel = c.slope = c.flat = c.soil = 1.0e30f;
+    for (int k = 0; k < 4; k++)
+        for (int w = 0; w < kRollWheelsMost; w++) c.share[k][w] = 1.0e30f;
+    char coast[1400];
+    RollCoastText(c, 5, coast, sizeof coast);
+    const bool coastOk = strnlen(coast, sizeof coast) < sizeof coast;
+    const bool ok = kindOk && lineOk && coastOk;
+    printf("%s text cut: a 300 character kind in 96, three 80 character meshes in 64 (%d), the coast line at its longest in its real 1400: cut and ended, never fatal\n",
+           ok ? "ok  " : "FAIL", used);
     return ok;
 }
 
@@ -5023,7 +5213,8 @@ int wmain(int argc, wchar_t **argv)
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
-    if (!StiffProbeTest()) return 1;
+    if (!StiffBaseTest()) return 1;
+    if (!TextCutTest()) return 1;
     {
         // the fuel while rolling drag is in force (review F1): 1 from a row of 1.5; the row with it off or with no hook;
         // a toggle puts it in again on the next pass

@@ -225,7 +225,7 @@ inline bool TruckModeTakeOver(const std::wstring &file, const char *kind, const 
         at = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     }
     wchar_t when[32];
-    swprintf_s(when, L"%llu", at);
+    _snwprintf_s(when, _TRUNCATE, L"%llu", at);
     WritePrivateProfileStringW(from.c_str(), L"TakenBy", TruckKindWide(newId).c_str(), file.c_str());
     WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, file.c_str());
     TruckModePrune(file);
@@ -288,7 +288,7 @@ inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &n
     }
     if (!now.kind[0]) return false;
     const bool due = t.gone.kind[0] && !strcmp(t.gone.kind, now.kind) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kTruckTakeOverMs;
-    if (due) strcpy_s(oldId, t.gone.id);
+    if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
     t.gone = TruckWho2{};
     return due;
 }
@@ -312,14 +312,14 @@ struct TruckChange
 inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle, ULONGLONG at)
 {
     TruckChange c = {};
-    if (now.kind[0] && !now.id[0] && vehicle == w.seenVehicle && !strcmp(w.seen.kind, now.kind)) strcpy_s(now.id, w.seen.id);
+    if (now.kind[0] && !now.id[0] && vehicle == w.seenVehicle && !strcmp(w.seen.kind, now.kind)) strncpy_s(now.id, w.seen.id, _TRUNCATE);
     if (TruckWhoSame(now, w.seen)) return c;
     c.changed = true;
     c.goneAt = w.track.goneAt;
     if (w.seen.kind[0] && now.kind[0] && !strcmp(w.seen.kind, now.kind))
     {
         c.whileDriven = c.takeOver = TruckAgainTakeOver(w.seen.id, w.seenVehicle, now.id, vehicle);
-        if (c.takeOver) strcpy_s(c.oldId, w.seen.id);
+        if (c.takeOver) strncpy_s(c.oldId, w.seen.id, _TRUNCATE);
     }
     else c.takeOver = TruckTrack(w.track, w.seen, now, at, c.oldId);
     w.seen = now;

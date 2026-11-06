@@ -141,19 +141,19 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
     PageTip("The mode is saved per owned truck in TirePressure.trucks.ini. It comes back the moment you drive that truck "
             "again, without a sound or a wait, across map loads and game starts. A truck not driven before starts in the "
-            "highest mode on offer (Increased, or Normal without it). Off: one mode for every truck, Normal at each game start.");
+            "highest mode on offer (Increased, or Normal without it). Off: one mode for every truck, the highest on offer at each game start.");
     {
-        // the tick This truck only (as Next Gen Gameplay's): ticked, a mode chosen is this truck's own; unticked, every
-        // truck of its kind without a mode of its own shares it. Only for a truck whose id the game gives.
+        // the tick This truck only (as Next Gen Gameplay's): ticked, a mode chosen is this truck's own; unticked (its own
+        // section holds Own=0), the kind's mode is in force and a change goes there. Only for a truck whose id the game gives.
         const bool can = s.perTruck && live.wheels > 0 && live.truck[0] && live.truckId[0] && live.truckLevel >= 0;
-        bool only = can && live.truckLevel != 1; // 1 = kTruckLevelKind (truck_modes.h): the kind's mode in force
+        bool only = can && !live.truckKept;
         ImGui::Indent();
         ImGui::BeginDisabled(!can);
         if (ImGui::Checkbox("This truck only", &only)) act |= only ? kPageTruckOnly : kPageTruckKind;
         ImGui::EndDisabled();
         ImGui::Unindent();
-        PageTip("Ticked: a mode you choose is this truck's alone, kept by the game's id for it. Unticked: it goes to every "
-                "truck of this kind without a mode of its own, and this truck's own is kept for when you tick it again. "
+        PageTip("Ticked (as it starts): a mode you choose is this truck's alone, kept by the game's id for it. Unticked: this "
+                "truck takes its kind's mode, a mode you choose goes to the kind, and its own is kept for when you tick it again. "
                 "Greyed out while no truck is driven or the game gives no id for it.");
     }
     PageLabel("Outside temperature", labelX);

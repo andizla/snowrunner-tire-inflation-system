@@ -845,13 +845,14 @@ does nothing.</li>
 The log says which route the overlay takes. ReShade's <code>dxgi.dll</code> and <code>ReShade.ini</code> stay in the zip for RivaTuner users,
 whose game does not boot without it. The mods draw without it.</li>
 <li>The pressure mode is kept per owned truck, by the game's own id for it (read as Next Gen Gameplay reads it, so both mods name a
-truck alike). Two trucks of one kind each keep their own. <code>TirePressure.trucks.ini</code> holds <code>[kind:{{id}}]</code> with
-<code>Own=1</code> for one truck and <code>[kind]</code> for its kind. The mode in force is the truck's own, else the kind's, else the start
-mode. A truck not driven before starts in the highest mode on offer: Increased, or Normal with <code>Increased=0</code>. Under "Each truck
-keeps its own pressure" the tab has "This truck only". Ticked, a mode chosen is this truck's alone. Unticked, it goes to the kind's
-section and the truck's own is kept with <code>Own=0</code> until it is ticked again. When the game makes a truck anew under another id
-(a recovery, a garage), the new id takes the old one's mode over, as Next Gen Gameplay does, with one line in the log. A file from
-1.3.1 to 1.3.3 reads as before: its trucks go by their kind until This truck only is ticked.</li></ul>
+truck alike). Two trucks of one kind each keep their own. A mode chosen in the panel goes into <code>[kind:{{id}}]</code> of
+<code>TirePressure.trucks.ini</code> with <code>Own=1</code>. <code>[kind]</code> holds what a truck of that kind no one has changed reads.
+The mode in force is the truck's own, else the kind's, else the start mode. A truck not driven before starts in the highest mode on
+offer: Increased, or Normal with <code>Increased=0</code>. With <code>PerTruck=0</code> the first truck of a game start does too. Under
+"Each truck keeps its own pressure" the tab has "This truck only", ticked unless you untick it for a truck. Unticked, the truck's own is
+kept with <code>Own=0</code>, the kind's mode is in force and a change goes to the kind's section. When the game makes a truck anew under
+another id (a recovery, a garage), the new id takes the old one's mode over, as Next Gen Gameplay does, with one line in the log. A file
+from 1.3.1 to 1.3.3 reads as before, and the first change to a truck writes its own section.</li></ul>
 <h3>Changed in 1.3.3</h3>
 <ul><li>The step bindings are the plain d-pad left and right, <code>DPadLeft</code> and <code>DPadRight</code> by default (an ini's
 <code>LB+DPadLeft</code> becomes <code>DPadLeft</code>). They act only while the panel is open and no shoulder button is held. LB + d-pad

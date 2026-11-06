@@ -148,12 +148,12 @@ inline void TruckModeSaveOwn(const std::wstring &file, const char *kind, const c
     WritePrivateProfileStringW(sec.c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
 }
 
-// A mode chosen in the panel for the truck kind/id, whose mode came from level: it goes where the mode in force comes
-// from. The kind's level writes the kind's; the truck's own level, or the start mode of a truck whose id is read,
-// writes the truck's own section (This truck only is ticked for a truck not driven before). The level now in force.
-inline int TruckModeChosen(const std::wstring &file, const char *kind, const char *id, int level, int mode)
+// A mode chosen in the panel for the truck kind/id: it goes into the truck's own section (Own=1), unless This truck only
+// is unticked for it (ownKept: its own section holds Own=0), or its id is not read; then into the kind's. So the kind's
+// section is only what a truck no one has changed reads (the lead's call on the review's F1). The level now in force.
+inline int TruckModeChosen(const std::wstring &file, const char *kind, const char *id, bool ownKept, int mode)
 {
-    if (level == kTruckLevelKind || !id || !id[0])
+    if (ownKept || !id || !id[0])
     {
         TruckModeSave(file, kind, mode);
         return kTruckLevelKind;
@@ -162,30 +162,29 @@ inline int TruckModeChosen(const std::wstring &file, const char *kind, const cha
     return kTruckLevelOwn;
 }
 
-// The tick "This truck only" for the truck kind/id in mode (at f's level). On: the truck's own section in force; one it
-// kept with Own=0 comes back with its mode (keptMode is set, true returned), else the mode in force becomes its own.
-// Off: the mode in force goes into the kind's section, and the truck's own section stays with Own=0 (kept, not in
-// use, so ticking again brings it back), as Gameplay's This truck only does. Nothing for a truck whose id is not read.
-// False when the mode in force stays as it is.
-inline bool TruckOnlySet(const std::wstring &file, const char *kind, const char *id, const TruckModeFound &f, int mode, bool on, int &keptMode)
+inline int TruckModeInForce(const TruckModeFound &f, int modeCount);
+
+// The tick "This truck only" for the truck kind/id in mode (f as TruckModeFind found it). It shows unticked only where
+// the truck's own section holds Own=0. On: that section is in force again with its mode (Gameplay's This truck only
+// brings a kept set back). Off: the truck's own section holds Own=0, written with the mode in force where it had none,
+// and the kind's mode is in force (the start mode where the kind has none). Nothing for a truck whose id is not read.
+// True when the mode in force changes: newMode is then the one now in force. modeCount: the modes in use (3 or 4).
+inline bool TruckOnlySet(const std::wstring &file, const char *kind, const char *id, const TruckModeFound &f, int mode, int modeCount, bool on, int &newMode)
 {
+    newMode = mode;
     if (!kind[0] || !id || !id[0]) return false;
     if (on)
     {
-        if (f.level == kTruckLevelOwn) return false;
-        if (f.ownKept)
-        {
-            TruckModeSaveOwn(file, kind, id, f.keptMode, true);
-            keptMode = f.keptMode;
-            return f.keptMode != mode;
-        }
-        TruckModeSaveOwn(file, kind, id, mode, true);
-        return false;
+        if (!f.ownKept) return false;
+        TruckModeSaveOwn(file, kind, id, f.keptMode, true);
+        newMode = f.keptMode < modeCount ? f.keptMode : kNormal;
+        return newMode != mode;
     }
-    if (f.level == kTruckLevelKind) return false;
-    TruckModeSave(file, kind, mode);
-    if (f.level == kTruckLevelOwn) TruckModeSaveOwn(file, kind, id, mode, false);
-    return false;
+    if (f.ownKept) return false;
+    if (f.level == kTruckLevelOwn) WritePrivateProfileStringW(TruckSection(kind, id).c_str(), L"Own", L"0", file.c_str());
+    else TruckModeSaveOwn(file, kind, id, mode, false);
+    newMode = TruckModeInForce(TruckModeFind(file, kind, id), modeCount);
+    return newMode != mode;
 }
 
 // The take-over (Gameplay's TruckSuspTakeOver at 88e1ba7): the game made the driven truck anew under another id. The
@@ -333,12 +332,19 @@ inline int TruckModeInForce(const TruckModeFound &f, int modeCount)
 // A change of the driven truck to now (c from TruckWatchStep) while the mode in force goes by cur. With PerTruck on and
 // now another truck than cur: the take-over where it is due (taken is true when a mode was taken over), the take-over
 // mark of now's id goes, cur becomes now and f what TruckModeFind found for it; true then. PerTruck off: one mode for
-// all, cur follows the truck and nothing is read or written; false.
-inline bool TruckModeOnChange(const std::wstring &file, bool perTruck, TruckWho2 &cur, const TruckWho2 &now, const TruckChange &c, TruckModeFound &f, bool &taken)
+// all, cur follows the truck and nothing is read or written; false. firstShared: PerTruck off and this is the first
+// truck of the game start (cur was none), which then starts in the start mode, the highest on offer (the review's N1).
+inline bool TruckModeOnChange(const std::wstring &file, bool perTruck, TruckWho2 &cur, const TruckWho2 &now, const TruckChange &c, TruckModeFound &f, bool &taken,
+                              bool &firstShared)
 {
-    taken = false;
+    taken = firstShared = false;
     if (!c.changed || !now.kind[0]) return false;
-    if (!perTruck) { cur = now; return false; }
+    if (!perTruck)
+    {
+        firstShared = !cur.kind[0];
+        cur = now;
+        return false;
+    }
     if (TruckWhoSame(now, cur)) return false;
     taken = c.takeOver && TruckModeTakeOver(file, now.kind, c.oldId, now.id);
     TruckModeSeen(file, now.kind, now.id);

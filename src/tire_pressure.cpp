@@ -349,7 +349,7 @@ static void ReadIni(TpSettings &s)
                         L"; grip, mode and damage keys and Seconds (WornGrip 10 there); the keys here keep your own.\n"
                         L"; PerTruck=1: each truck keeps its own pressure mode in TirePressure.trucks.ini, put back when that truck is driven\n"
                         L"; again: [kind:{id}] for one owned truck (by the game's id for it, Own=1), else [kind] for its kind; a truck not\n"
-                        L"; driven before starts in the highest mode on offer. 0 = one mode for all trucks, Normal at every start.\n"
+                        L"; driven before starts in the highest mode on offer. 0 = one mode for all trucks, the highest on offer at each start.\n"
                         L"; DumpImage=1 writes the game's code as the mod sees it into TirePressure_image_<stamp>.bin next to the\n"
                         L"; exe at the next start, for a report when the mod stands down on your build. Take it out again after.\n");
             fclose(f);
@@ -2677,6 +2677,7 @@ static DWORD WINAPI Run(void *)
         static char kindRead[96] = ""; // that name
         static TruckWho2 cur = {};     // the truck the mode in force goes by, kind "" = not read
         static int curLevel = kTruckLevelStart; // where its mode came from (kTruckLevel...)
+        static bool curKept = false;   // its own section holds Own=0: This truck only is unticked for it
         static TruckWatch watch = {};  // the truck read on the last pass and the take-over's watch (TruckWatchStep)
         static bool kindSaid = false;
         const std::wstring trucksFile = g_dir + kTruckModesFile;
@@ -2697,37 +2698,51 @@ static DWORD WINAPI Run(void *)
             }
             const TruckChange c = TruckWatchStep(watch, driven, vehicle, GetTickCount64());
             TruckModeFound f = {};
-            bool taken = false;
-            if (TruckModeOnChange(trucksFile, g_perTruck, cur, watch.seen, c, f, taken))
+            bool taken = false, firstShared = false;
+            const bool read = TruckModeOnChange(trucksFile, g_perTruck, cur, watch.seen, c, f, taken, firstShared);
+            if (firstShared)
+            {
+                // PerTruck=0: the first truck of this game start starts in the start mode, the highest on offer
+                g_mode = g_modeCount - 1;
+                g_pressure = kModePressure[g_mode];
+                moving = false;
+                Log(L"truck %S: one mode for every truck (PerTruck=0), the first of this start, so %s", cur.kind, g_modes[g_mode].name);
+            }
+            if (read)
             {
                 if (taken && c.whileDriven) Log(L"truck %S: the take-over: under its new id %S it takes over the mode of %S (while driven, the same vehicle)", cur.kind, cur.id, c.oldId);
                 else if (taken) Log(L"truck %S: the take-over: under its new id %S it takes over the mode of %S (back %.0f s after it went)", cur.kind, cur.id, c.oldId,
                                     (GetTickCount64() - c.goneAt) / 1000.0);
                 curLevel = f.level;
+                curKept = f.ownKept;
                 g_mode = TruckModeInForce(f, g_modeCount);
                 g_pressure = kModePressure[g_mode];
                 moving = false;
                 const char *idWords = cur.id[0] ? cur.id : "(its id not read)";
                 if (f.level == kTruckLevelOwn) Log(L"truck %S %S: its own %s put back (%s)", cur.kind, idWords, g_modes[g_mode].name, kTruckModesFile);
-                else if (f.level == kTruckLevelKind) Log(L"truck %S %S: the kind's %s put back (%s)", cur.kind, idWords, g_modes[g_mode].name, kTruckModesFile);
+                else if (f.level == kTruckLevelKind) Log(L"truck %S %S: the kind's %s put back (%s%s)", cur.kind, idWords, g_modes[g_mode].name, kTruckModesFile,
+                                                         f.ownKept ? L", This truck only unticked" : L"");
                 else Log(L"truck %S %S: not driven before, so %s", cur.kind, idWords, g_modes[g_mode].name);
             }
         }
         const bool curDriven = g_perTruck && cur.kind[0] && vehicle && kindOf == vehicle && TruckWhoSame(cur, watch.seen); // cur is this truck
-        // the settings page's tick "This truck only" (TruckOnlyPut): on puts the truck's own section in force, off the kind's
+        // the settings page's tick "This truck only" (TruckOnlyPut): on puts the truck's own section in force again, off
+        // keeps it with Own=0 and puts the kind's mode in force
         if (const LONG asked = InterlockedExchange(&g_truckOnlyAsked, 0))
         {
             if (curDriven && cur.id[0])
             {
                 const TruckModeFound f = TruckModeFind(trucksFile, cur.kind, cur.id);
-                int kept = g_mode;
-                if (TruckOnlySet(trucksFile, cur.kind, cur.id, f, g_mode, asked == 1, kept))
+                int inForce = g_mode;
+                if (TruckOnlySet(trucksFile, cur.kind, cur.id, f, g_mode, g_modeCount, asked == 1, inForce))
                 {
-                    g_mode = kept < g_modeCount ? kept : kNormal;
+                    g_mode = inForce;
                     moving = true;
                 }
-                curLevel = TruckModeFind(trucksFile, cur.kind, cur.id).level;
-                Log(asked == 1 ? L"truck %S %S: This truck only: its own mode in force (%s)" : L"truck %S %S: This truck only off: the kind's mode in force, a mode of its own kept with Own=0 (%s)",
+                const TruckModeFound after = TruckModeFind(trucksFile, cur.kind, cur.id);
+                curLevel = after.level;
+                curKept = after.ownKept;
+                Log(asked == 1 ? L"truck %S %S: This truck only: its own mode in force (%s)" : L"truck %S %S: This truck only off: its own mode kept with Own=0, the kind's in force (%s)",
                     cur.kind, cur.id, g_modes[g_mode].name);
             }
         }
@@ -2785,7 +2800,7 @@ static DWORD WINAPI Run(void *)
         {
             g_mode = chosen;
             Log(L"mode %s, %zu wheels", g_modes[g_mode].name, wheels.size());
-            if (curDriven) curLevel = TruckModeChosen(trucksFile, cur.kind, cur.id, curLevel, g_mode); // the truck's own, or the kind's where that is in force
+            if (curDriven) curLevel = TruckModeChosen(trucksFile, cur.kind, cur.id, curKept, g_mode); // the truck's own, or the kind's while This truck only is unticked
             // once for Normal, twice for Reduced, three times for Low, high for Increased
             if (g_beep && g_mode == kIncreased) BeepLater(1320, 120);
             else if (g_beep) for (int i = g_mode; i <= kNormal; i++) BeepLater(880, 70, 60);
@@ -3099,6 +3114,7 @@ static DWORD WINAPI Run(void *)
             if (!wheels.empty() && kindOf == vehicle) strcpy_s(live.truck, kindRead);
             if (!wheels.empty() && kindOf == vehicle && TruckWhoSame(cur, watch.seen)) strcpy_s(live.truckId, cur.id);
             live.truckLevel = curDriven ? curLevel : -1;
+            live.truckKept = curDriven && curKept ? 1 : 0;
             live.mode = g_mode;
             live.balance = wheels.empty() ? 1.0f : balance[0];
             live.speed = speedOk ? speed * 3.6f : 0.0f;
@@ -3824,20 +3840,20 @@ static bool TruckOwnTest()
         TruckWho2 cur = {}, a = {}, b = {}, nobody = {};
         strcpy_s(a.kind, k), strcpy_s(a.id, idA);
         strcpy_s(b.kind, k), strcpy_s(b.id, idB);
-        bool taken = false;
+        bool taken = false, firstShared = false;
         TruckModeFound got = {};
         int level = kTruckLevelStart;
         auto drive = [&](const TruckWho2 &t, uint64_t on, ULONGLONG at) {
             const TruckChange c = TruckWatchStep(w, t, on, at);
-            const bool read = TruckModeOnChange(file, true, cur, w.seen, c, got, taken);
+            const bool read = TruckModeOnChange(file, true, cur, w.seen, c, got, taken, firstShared);
             if (read) level = got.level;
             return read;
         };
         const bool aRead = drive(a, 0x1000, 0) && level == kTruckLevelStart;
-        level = TruckModeChosen(file, k, a.id, level, kLow); // a mode chosen for A, at the start mode: A's own
+        level = TruckModeChosen(file, k, a.id, got.ownKept, kLow); // a mode chosen for A, at the start mode: A's own
         const bool aOwn = level == kTruckLevelOwn;
         const bool bRead = drive(b, 0x2000, 1000) && level == kTruckLevelStart && TruckModeInForce(got, 4) == kIncreased;
-        level = TruckModeChosen(file, k, b.id, level, kReduced);
+        level = TruckModeChosen(file, k, b.id, got.ownKept, kReduced);
         const bool aAgain = drive(a, 0x1000, 2000) && level == kTruckLevelOwn && got.mode == kLow;
         const bool same = !drive(a, 0x1000, 2500); // the same truck on the next pass: nothing read
         const bool bAgain = drive(b, 0x2000, 3000) && level == kTruckLevelOwn && got.mode == kReduced;
@@ -3846,15 +3862,22 @@ static bool TruckOwnTest()
         bNoId.id[0] = 0;
         const bool idKept = !drive(bNoId, 0x2000, 3500) && !strcmp(w.seen.id, idB);
         const bool away = !drive(nobody, 0, 4000) && !drive(b, 0x2000, 4500) && !strcmp(cur.id, idB);
-        // PerTruck=0: cur follows the truck, nothing is read or written
+        // PerTruck=0: cur follows the truck, nothing is read or written; the first truck of the start is marked for the
+        // start mode (the review's N1), the next one not
         DeleteFileW(file.c_str());
         TruckWatch w0 = {};
         TruckWho2 cur0 = {};
         const TruckChange c0 = TruckWatchStep(w0, a, 0x1000, 0);
-        const bool off = !TruckModeOnChange(file, false, cur0, w0.seen, c0, got, taken) && TruckWhoSame(cur0, a) && GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES;
-        check(aRead && aOwn && bRead && aAgain && same && bAgain && idKept && away && off,
+        bool first0 = false, first1 = true;
+        const bool off = !TruckModeOnChange(file, false, cur0, w0.seen, c0, got, taken, first0) && TruckWhoSame(cur0, a) && GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES;
+        const TruckChange c1 = TruckWatchStep(w0, b, 0x2000, 1000);
+        const bool off1 = !TruckModeOnChange(file, false, cur0, w0.seen, c1, got, taken, first1) && TruckWhoSame(cur0, b);
+        check(aRead && aOwn && bRead && aAgain && same && bAgain && idKept && away && off && off1,
               "A to B to A between two trucks of one kind: each id is read again and keeps its own mode (Low, Reduced), the second truck starts at Increased; "
               "a pass without the id keeps it; PerTruck=0 reads and writes nothing");
+        const TruckModeFound fresh0 = {};
+        check(first0 && !first1 && TruckModeInForce(fresh0, 4) == kIncreased && TruckModeInForce(fresh0, 3) == kNormal,
+              "PerTruck=0: the first truck of a game start starts in the highest mode on offer (Increased, Normal without it), the next truck keeps the mode in force");
         DeleteFileW(file.c_str());
     }
 
@@ -3877,7 +3900,8 @@ static bool TruckOwnTest()
         cur = a1;
         const TruckChange gone = TruckWatchStep(w, nobody, 0, 1000);
         const TruckChange back = TruckWatchStep(w, a2, 0x3000, 6000);
-        const bool read = TruckModeOnChange(file, true, cur, w.seen, back, got, taken);
+        bool firstShared = false;
+        const bool read = TruckModeOnChange(file, true, cur, w.seen, back, got, taken, firstShared);
         wchar_t by[48] = {}, at[32] = {};
         GetPrivateProfileStringW(TruckSection(k, id1).c_str(), L"TakenBy", L"", by, 48, file.c_str());
         GetPrivateProfileStringW(TruckSection(k, id1).c_str(), L"TakenAt", L"", at, 32, file.c_str());
@@ -3925,7 +3949,7 @@ static bool TruckOwnTest()
         TruckWatchStep(fresh, a0, 0x3000, 0);
         const TruckChange first = TruckWatchStep(fresh, a2, 0x3000, 100);
         cur = a2;
-        const bool drivenRead = TruckModeOnChange(file, true, cur, d.seen, onSame, got, taken) && taken && got.mode == kLow;
+        const bool drivenRead = TruckModeOnChange(file, true, cur, d.seen, onSame, got, taken, firstShared) && taken && got.mode == kLow;
         check(onSame.takeOver && onSame.whileDriven && !strcmp(onSame.oldId, id2) && !onOther.takeOver && onOther.changed && first.changed && !first.takeOver && drivenRead,
               "take-over: a new id while driven takes the mode over on the same vehicle only, and a first read of the id is none");
         // only the newest 10 marked sections of the file are kept; an unmarked one never goes
@@ -3955,31 +3979,40 @@ static bool TruckOwnTest()
         DeleteFileW(file.c_str());
     }
 
-    // the tick This truck only, as Gameplay's: off puts the mode into the kind's section and keeps the truck's with Own=0;
-    // on brings that back; a chosen mode goes where the mode in force comes from
+    // the tick This truck only (the lead's call on the review's F1): it shows unticked only where the truck's own section
+    // holds Own=0. Off keeps the truck's own with Own=0 (written with the mode in force where it had none) and puts the
+    // kind's mode in force; a change then goes to the kind's; on brings the truck's own back with its mode
     {
         TruckModeSave(file, k, kNormal);
         TruckModeSaveOwn(file, k, idA, kLow, true);
-        int keptMode = -1;
+        int now = -1;
         TruckModeFound g = TruckModeFind(file, k, idA);
-        const bool offSame = !TruckOnlySet(file, k, idA, g, kLow, false, keptMode);
+        const bool ticked = !g.ownKept;
+        const bool offMoves = TruckOnlySet(file, k, idA, g, kLow, 4, false, now) && now == kNormal; // the kind's Normal now in force
         g = TruckModeFind(file, k, idA);
         wchar_t ownWord[8] = {};
         GetPrivateProfileStringW(TruckSection(k, idA).c_str(), L"Own", L"", ownWord, 8, file.c_str());
-        const bool offOk = offSame && g.level == kTruckLevelKind && g.mode == kLow && g.ownKept && g.keptMode == kLow && !wcscmp(ownWord, L"0");
-        const int lvl = TruckModeChosen(file, k, idA, g.level, kReduced); // unticked: a change writes the kind's
+        const bool offOk = offMoves && g.level == kTruckLevelKind && g.mode == kNormal && g.ownKept && g.keptMode == kLow && !wcscmp(ownWord, L"0");
+        const bool offAgain = !TruckOnlySet(file, k, idA, g, kNormal, 4, false, now);
+        const int lvl = TruckModeChosen(file, k, idA, g.ownKept, kReduced); // unticked: a change writes the kind's
         const TruckModeFound gk = TruckModeFind(file, k, idA);
         const bool kindWritten = lvl == kTruckLevelKind && gk.level == kTruckLevelKind && gk.mode == kReduced && gk.keptMode == kLow;
-        const bool onBack = TruckOnlySet(file, k, idA, gk, kReduced, true, keptMode) && keptMode == kLow && TruckModeFind(file, k, idA).level == kTruckLevelOwn;
-        const bool otherKind = TruckModeFind(file, k, idB).level == kTruckLevelKind && TruckModeFind(file, k, idB).mode == kReduced;
-        const bool noId = !TruckOnlySet(file, k, "", gk, kReduced, true, keptMode);
-        check(offOk && kindWritten && onBack && otherKind && noId,
-              "This truck only: off writes the kind's and keeps the truck's with Own=0, a change then goes to the kind's; on brings the truck's own back; "
-              "nothing without an id");
+        const bool onBack = TruckOnlySet(file, k, idA, gk, kReduced, 4, true, now) && now == kLow && TruckModeFind(file, k, idA).level == kTruckLevelOwn;
+        // a truck with no section of its own, unticked: Own=0 and its mode there, the kind's stays in force, nothing moves
+        const TruckModeFound gb = TruckModeFind(file, k, idB);
+        const bool bTicked = !gb.ownKept && gb.level == kTruckLevelKind;
+        const bool bStays = !TruckOnlySet(file, k, idB, gb, kReduced, 4, false, now) && now == kReduced;
+        const TruckModeFound gb2 = TruckModeFind(file, k, idB);
+        const bool bKept = gb2.level == kTruckLevelKind && gb2.ownKept && gb2.keptMode == kReduced;
+        const bool noId = !TruckOnlySet(file, k, "", gk, kReduced, 4, true, now);
+        check(ticked && offOk && offAgain && kindWritten && onBack && bTicked && bStays && bKept && noId,
+              "This truck only: ticked unless the truck's own holds Own=0; off keeps the truck's with Own=0 and the kind's comes in force, a change then goes "
+              "to the kind's; on brings the truck's own back; a truck with none unticked gets Own=0 and its mode, the kind's staying in force; nothing without an id");
         DeleteFileW(file.c_str());
     }
 
-    // an old file (1.3.1 to 1.3.3) with only kind sections reads as before: the kind's mode, and a change goes there
+    // an old file (1.3.1 to 1.3.3) with only kind sections: its trucks read the kind's mode as before, and the first change
+    // writes the truck's own [kind:{id}], the kind's section staying for the trucks no one has changed
     {
         FILE *o = nullptr;
         if (_wfopen_s(&o, file.c_str(), L"w, ccs=UTF-16LE") == 0 && o)
@@ -3990,16 +4023,20 @@ static bool TruckOwnTest()
         }
         int m = -1;
         const TruckModeFound g = TruckModeFind(file, k, idA), gNoId = TruckModeFind(file, k, ""), g2 = TruckModeFind(file, "test_other", idB);
-        const bool asBefore = TruckModeLoad(file, k, m) && m == kReduced && g.level == kTruckLevelKind && g.mode == kReduced && gNoId.mode == kReduced &&
+        const bool asBefore = TruckModeLoad(file, k, m) && m == kReduced && g.level == kTruckLevelKind && g.mode == kReduced && !g.ownKept && gNoId.mode == kReduced &&
                               g2.level == kTruckLevelKind && TruckModeInForce(g2, 3) == kNormal;
-        const int lvl = TruckModeChosen(file, k, idA, g.level, kLow);
-        int after = -1;
+        const int lvl = TruckModeChosen(file, k, idA, g.ownKept, kLow);
+        int kindAfter = -1;
+        const TruckModeFound mine = TruckModeFind(file, k, idA), theirs = TruckModeFind(file, k, idB);
         std::vector<wchar_t> names(4096, L'\0');
         GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str());
         int sections = 0;
         for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1) sections++;
-        check(asBefore && lvl == kTruckLevelKind && TruckModeLoad(file, k, after) && after == kLow && sections == 2,
-              "an old file with only kind sections reads as before (a saved Increased with it off goes Normal), and a change there goes to the kind's section");
+        const bool noIdKind = TruckModeChosen(file, k, "", false, kReduced) == kTruckLevelKind;
+        check(asBefore && lvl == kTruckLevelOwn && mine.level == kTruckLevelOwn && mine.mode == kLow && TruckModeLoad(file, k, kindAfter) && kindAfter == kReduced &&
+                  theirs.level == kTruckLevelKind && theirs.mode == kReduced && sections == 3 && noIdKind,
+              "upgrade: an old file with only kind sections reads the kind's mode as before; the first change writes the truck's own [kind:{id}], the kind's stays "
+              "for the others; a truck whose id is not read writes the kind's");
         DeleteFileW(file.c_str());
     }
     return all;

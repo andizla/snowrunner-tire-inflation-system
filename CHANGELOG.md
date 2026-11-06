@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.4]
 
 - Rolling drag (`RollingDrag`, the Realism section's "Rolling drag", on by default, untick it or set `RollingDrag=0` to turn it off): tires roll harder on soft ground and when aired down. Each wheel on the ground gets a rolling resistance by its ground and the pressure, through its own damping, as the game drags a flat tire. Mud counts as dirt for now. The weight is the truck's as the game's physics has it, its gravity included, without cargo or a trailer. Hard mode and the insanity mode turn it on. Hard mode's fuel factors are 1 now, as the engine burns more against the drag by itself.
 - The insanity mode's fuel factors are 1, as rolling drag now does what they did.

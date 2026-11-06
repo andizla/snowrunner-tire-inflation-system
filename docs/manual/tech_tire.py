@@ -91,7 +91,7 @@ def s_intro():
 <div class="part break">Part 2. Technical reference</div>
 <p class="intro">This part is for readers who want the workings. It gives each model as the code has it, the formulas with every
 constant, where a number comes from when the code says so, how the mod gets into the game and what it reads and writes there, and
-what it cannot do. The numbers are those of version 1.3.3. File and line references (<code>tire_pressure.cpp:813</code>) point
+what it cannot do. The numbers are those of version 1.3.4. File and line references (<code>tire_pressure.cpp:813</code>) point
 into the mod's source. "The Steam build" is the game build of 22 July 2026 (time stamp <code>6a607c05</code>), the one the mod
 was made on; an RVA is an offset from the start of <code>SnowRunner.exe</code> in memory, in that build.</p>
 <div class="box"><b>Notation.</b> <i>P</i> is the tire pressure as a share of Normal's, so Normal is 1. Modes are numbered
@@ -820,6 +820,29 @@ offset is carried past 10 cm, up to 12 cm from about −18 °C down (default num
 ground by about {(o0 - 1) * SCOUT_ROOM * 1000:.0f} and {(o25 - 1) * SCOUT_ROOM * 1000:.0f} mm, less the 0.005 <i>R</i> let through. Now no offset goes past the room.</li>
 <li><b>A tire that comes soft went far too flat at Low.</b> Its contact sinks inside the cylinder, which FlattenLimit did not count; now the sink is measured and taken off the room (Tires that come soft).</li>
 <li><b>The gear compensation fell short in the low gears.</b> Now each gear's top grows by roll exactly, equation (20).</li></ul>
+<h3>Changed in 1.3.4</h3>
+<ul><li>Rolling drag (<code>RollingDrag</code>, the Realism section's "Rolling drag", on by default, untick it or set <code>RollingDrag=0</code>
+to turn it off): tires roll harder on soft ground and when aired down. Each wheel on the ground gets a rolling resistance by its ground
+and the pressure, through its own damping, as the game drags a flat tire. Mud counts as dirt for now. The weight is the truck's as the
+game's physics has it, its gravity included, without cargo or a trailer. Hard mode and the insanity mode turn it on. Hard mode's fuel
+factors are 1 now, as the engine burns more against the drag by itself.</li>
+<li>The insanity mode's fuel factors are 1, as rolling drag now does what they did.</li>
+<li>While rolling drag is on, every mode's fuel factor is 1: the drag makes a soft tire cost fuel by itself. The Fuel use row keeps its
+value and counts again with rolling drag off.</li>
+<li>The panel's pad and key controls wait while the game's function menu is up. The mod then hides no button from the menu, so the
+d-pad and A work it with the panel open.</li>
+<li>The last start's log is kept as <code>TirePressure.prev.log</code>.</li>
+<li><code>TirePressure.log</code> names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409). With
+Next Gen Gameplay in, its log names the game's and this one names the mod's own.</li>
+<li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>.
+Before, the mods never loaded there, and with that option the game would not start.</li>
+<li>With Spotter installed (its draw API, version 1 or later), the overlay draws through Spotter's frame hook instead of a hook of its
+own, where ReShade has not taken it as an add-on. <code>NextGen.ini</code> <code>[Overlay] Spotter=0</code> turns it off. While the NEXT GEN
+menu is open, the game gets no mouse or keys and Spotter's hotkeys rest. While Spotter's own menu or big map is open, the menu's key
+does nothing.</li>
+<li>Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone.
+The log says which route the overlay takes. ReShade's <code>dxgi.dll</code> and <code>ReShade.ini</code> stay in the zip for RivaTuner users,
+whose game does not boot without it. The mods draw without it.</li></ul>
 <h3>Changed in 1.3.3</h3>
 <ul><li>The step bindings are the plain d-pad left and right, <code>DPadLeft</code> and <code>DPadRight</code> by default (an ini's
 <code>LB+DPadLeft</code> becomes <code>DPadLeft</code>). They act only while the panel is open and no shoulder button is held. LB + d-pad

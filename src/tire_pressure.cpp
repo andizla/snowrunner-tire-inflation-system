@@ -38,6 +38,7 @@
 #include "roll_probe.h"
 #include "rolling_drag.h"
 #include "crt_line.h"
+#include "stiff_probe.h"
 
 // Where the few places lie that are elsewhere in every build of the game's exe (build_find.h has what each is). Run
 // looks for them in the running exe at the start and stands down when it does not find every one.
@@ -2272,6 +2273,124 @@ static bool CopyOwnImage(std::vector<uint8_t> &out)
     return true;
 }
 
+// Stiff base, read only (stiff_probe.h): each wheel's RadiusOffset (+0xB4) and SoftForceScale (+0x120) with the tire's
+// radius (+0x98), logged once per truck and when a pair changes; the first wheel's object and model searched once per
+// truck for texts (the tire's name has no known place yet); and after 20 s of driving each wheel's sink under its
+// cylinder (SinkUpdate), which the write's proof compares. Nothing is written.
+// collect: the lines go there instead of the log (the test).
+static void StiffSearchTexts(const wchar_t *what, uint64_t root, size_t size, int &lines, std::vector<std::wstring> *collect = nullptr)
+{
+    std::vector<BYTE> block;
+    if (!ReadBlock(root, block, size)) return;
+    std::vector<std::string> seen;
+    auto say = [&](const std::string &text, const wchar_t *how, size_t a, int b) {
+        for (const std::string &t : seen) if (t == text) return;
+        seen.push_back(text);
+        if (lines >= 60) return;
+        lines++;
+        wchar_t line[256];
+        if (b < 0) swprintf_s(line, L"stiff base (read only): %s+0x%03zX %s \"%S\"", what, a, how, text.c_str());
+        else swprintf_s(line, L"stiff base (read only): %s+0x%03zX -> +0x%03X %s \"%S\"", what, a, b, how, text.c_str());
+        if (collect) collect->push_back(line);
+        else Log(L"%s", line);
+    };
+    auto textAt = [&](const uint8_t *t, size_t a, int b) {
+        std::string chars;
+        uint64_t pointer = 0, length = 0;
+        if (!GameTextLayout(t, chars, pointer, length)) return false;
+        if (!pointer) { say(chars, L"text", a, b); return true; }
+        uint8_t buf[96] = {};
+        if (!ReadProcessMemory(GetCurrentProcess(), (void *)pointer, buf, (size_t)length + 1, nullptr) || !PlainText(buf, sizeof buf, chars) || chars.size() != length) return false;
+        say(chars, L"text", a, b);
+        return true;
+    };
+    for (size_t a = 0; a + 8 <= block.size(); a += 8)
+    {
+        if (a + 0x20 <= block.size() && textAt(block.data() + a, a, -1)) continue;
+        uint64_t q = 0;
+        memcpy(&q, block.data() + a, 8);
+        if (q < 0x10000 || (q & 7)) continue;
+        uint8_t direct[96] = {};
+        std::string chars;
+        if (ReadProcessMemory(GetCurrentProcess(), (void *)q, direct, sizeof direct, nullptr) && PlainText(direct, sizeof direct, chars)) { say(chars, L"chars", a, -1); continue; }
+        std::vector<BYTE> inner;
+        if (!ReadBlock(q, inner, 0x100)) continue;
+        for (size_t b = 0; b + 8 <= inner.size(); b += 8)
+        {
+            if (b + 0x20 <= inner.size() && textAt(inner.data() + b, a, (int)b)) continue;
+            uint64_t r = 0;
+            memcpy(&r, inner.data() + b, 8);
+            if (r < 0x10000) continue;
+            uint8_t chars2[96] = {};
+            if (ReadProcessMemory(GetCurrentProcess(), (void *)r, chars2, sizeof chars2, nullptr) && PlainText(chars2, sizeof chars2, chars)) say(chars, L"chars", a, (int)b);
+        }
+    }
+}
+
+static void StiffProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool rolling, ULONGLONG now)
+{
+    static uint64_t seenVehicle = 0;
+    static std::vector<SoftPair> said;
+    static ULONGLONG rolledMs = 0, lastAt = 0;
+    static bool sinkSaid = false;
+    static int truckLines = 0;
+    if (!vehicle || wheels.empty()) { lastAt = 0; return; }
+    std::vector<SoftPair> now2;
+    for (const WheelRef &w : wheels)
+    {
+        SoftPair p;
+        p.wheel = w.wheel;
+        if (!Read(w.wheel + 0xB4, p.radiusOffset) || !Read(w.wheel + 0x120, p.softForceScale) || !Read(w.wheel + 0x98, p.radius)) return;
+        now2.push_back(p);
+    }
+    char kind[96] = {};
+    TruckKindName(vehicle, kind);
+    const bool newTruck = vehicle != seenVehicle;
+    if (newTruck || SoftPairsChanged(said, now2))
+    {
+        if (truckLines < 400)
+        {
+            Log(L"stiff base (read only, nothing written): truck %S, %zu wheels%s", kind[0] ? kind : "(kind not read)", now2.size(), newTruck ? L"" : L", a pair changed");
+            for (size_t i = 0; i < now2.size(); i++)
+            {
+                const SoftPair &p = now2[i];
+                float cylinder = 0.0f, broken = 0.0f;
+                Read(wheels[i].shape + 0x28, cylinder);
+                Read(wheels[i].wheel + 0x94, broken);
+                bool scaled = false;
+                const char *preset = SoftPresetName(p.radiusOffset, p.softForceScale, 0.0f, scaled);
+                Log(L"stiff base (read only): wheel %zu (%p): RadiusOffset +0xB4 %.4f, SoftForceScale +0x120 %.4f, radius +0x98 %.4f, +0x94 %.4f, cylinder %.4f; %S",
+                    i, (void *)p.wheel, p.radiusOffset, p.softForceScale, p.radius, broken, cylinder, preset ? preset : "no preset matches at a Scale of 1");
+                truckLines++;
+            }
+        }
+        if (newTruck)
+        {
+            int lines = 0;
+            StiffSearchTexts(L"wheel", wheels[0].wheel, 0x300, lines);
+            StiffSearchTexts(L"wheel model", wheels[0].model, 0x600, lines);
+            Log(L"stiff base (read only): %d texts found on the first wheel's object and model (60 at most)", lines);
+            rolledMs = 0;
+            sinkSaid = false;
+        }
+        seenVehicle = vehicle;
+        said = now2;
+    }
+    if (rolling && lastAt && now > lastAt) rolledMs += now - lastAt < 500 ? now - lastAt : 500;
+    lastAt = now;
+    if (!sinkSaid && rolledMs >= 20000)
+    {
+        sinkSaid = true;
+        for (size_t i = 0; i < wheels.size(); i++)
+        {
+            const auto it = g_wheels.find(wheels[i].wheel);
+            if (it == g_wheels.end()) continue;
+            Log(L"stiff base (read only): after 20 s rolling, wheel %zu sinks %.4f under its cylinder %.4f (in use %.3f), SoftForceScale %.4f", i, it->second.sink,
+                it->second.writtenCylinder, it->second.sinkUsed, now2[i].softForceScale);
+        }
+    }
+}
+
 static DWORD WINAPI Run(void *)
 {
     // One copy of the mod per game: the loader loads every .asi in the folder, and a second file of this mod (a copy
@@ -2757,6 +2876,7 @@ static DWORD WINAPI Run(void *)
             }
         }
         rolling = speedOk && speed > (rolling ? 0.25f : 0.5f);
+        StiffProbePass(vehicle, wheels, rolling, passAt);
         // the ground under each wheel picks its ground grip factor; a worn out tire (the game's broken flag on its
         // wheel model, see ApplyWornWheel) keeps WornGrip of its own
         std::vector<float> groundFactor(wheels.size(), 1.0f);
@@ -4437,6 +4557,69 @@ static int SoundLoops(int argc, wchar_t **argv)
     return ok ? 0 : 1;
 }
 
+// The stiff base's read-only step: the presets named, a changed pair seen, texts found where the game keeps them.
+static bool StiffProbeTest()
+{
+    bool scaled = false;
+    const char *stiff = SoftPresetName(0.02f, 0.32f, 0.0f, scaled);
+    const bool stiffOk = stiff && !strcmp(stiff, "Stiff") && !scaled;
+    const char *soft = SoftPresetName(0.03f, 0.12f, 0.0f, scaled);
+    const bool softOk = soft && !strcmp(soft, "Soft");
+    const char *atScale = SoftPresetName(0.02f * 0.575f, 0.32f, 0.575f, scaled);
+    const bool scaledOk = atScale && !strcmp(atScale, "Stiff") && scaled;
+    const bool ownOk = !SoftPresetName(0.02f, 0.5f, 0.0f, scaled);
+    std::vector<SoftPair> a(2), b(2);
+    a[0].wheel = b[0].wheel = 1;
+    a[1].wheel = b[1].wheel = 2;
+    a[0].softForceScale = b[0].softForceScale = 0.12f;
+    const bool sameOk = !SoftPairsChanged(a, b);
+    b[0].softForceScale = 0.32f;
+    const bool movedOk = SoftPairsChanged(a, b);
+    b[0].softForceScale = 0.12f;
+    b[1].wheel = 3;
+    const bool otherOk = SoftPairsChanged(a, b);
+    b.pop_back();
+    const bool countOk = SoftPairsChanged(a, b);
+    std::string t;
+    const bool plainOk = PlainText((const uint8_t *)"Made-up Trail Tire", 32, t) && t == "Made-up Trail Tire" && !PlainText((const uint8_t *)"ab\x01", 4, t) &&
+                         !PlainText((const uint8_t *)"12", 3, t);
+    // a search over a block of our own: an inline text at +0x10, a text behind a pointer at +0x40, plain characters
+    // behind a pointer at +0x68 and a record whose text is one step further, at +0x70 -> +0x08
+    static const char longName[] = "tire_madeup_trail_20_single";
+    static const char plain[] = "Made-up Trail Tire";
+    alignas(8) static uint8_t record[0x100] = {};
+    alignas(8) static uint8_t root[0x300] = {};
+    auto lay = [](uint8_t *at, const char *chars, uint64_t pointer, uint64_t length, uint64_t room) {
+        memset(at, 0, 0x20);
+        if (chars) memcpy(at, chars, (size_t)length);
+        else memcpy(at, &pointer, 8);
+        memcpy(at + 0x10, &length, 8);
+        memcpy(at + 0x18, &room, 8);
+    };
+    lay(root + 0x10, "Stiff", 0, 5, 15);
+    lay(root + 0x40, nullptr, (uint64_t)longName, sizeof longName - 1, 31);
+    const uint64_t plainAt = (uint64_t)plain, recordAt = (uint64_t)record;
+    memcpy(root + 0x68, &plainAt, 8);
+    memcpy(root + 0x70, &recordAt, 8);
+    lay(record + 0x08, "Soft", 0, 4, 15);
+    int lines = 0;
+    std::vector<std::wstring> got;
+    StiffSearchTexts(L"wheel", (uint64_t)root, sizeof root, lines, &got);
+    auto has = [&](const wchar_t *needle) {
+        for (const std::wstring &l : got) if (l.find(needle) != std::wstring::npos) return true;
+        return false;
+    };
+    const bool searchOk = lines == 4 && has(L"wheel+0x010 text \"Stiff\"") && has(L"wheel+0x040 text \"tire_madeup_trail_20_single\"") &&
+                          has(L"wheel+0x068 chars \"Made-up Trail Tire\"") && has(L"wheel+0x070 -> +0x008 text \"Soft\"");
+    if (!searchOk) for (const std::wstring &l : got) printf("     %ls\n", l.c_str());
+    const bool ok = stiffOk && softOk && scaledOk && ownOk && sameOk && movedOk && otherOk && countOk && plainOk && searchOk;
+    printf("%s stiff base, read only: Stiff %s, Soft %s, Stiff at Scale 0.575 %s, 0.5 no preset %s; a pair changed: same %s, moved %s, another wheel %s, "
+           "a count %s; texts %s; the search found %d (inline, behind a pointer, plain, a record's) %s\n",
+           ok ? "ok  " : "FAIL", stiffOk ? "named" : "NOT", softOk ? "named" : "NOT", scaledOk ? "named, scaled" : "NOT", ownOk ? "yes" : "NO", sameOk ? "no" : "YES",
+           movedOk ? "yes" : "NO", otherOk ? "yes" : "NO", countOk ? "yes" : "NO", plainOk ? "ok" : "WRONG", lines, searchOk ? "ok" : "WRONG");
+    return ok;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     // "probe_test find <exe or image>": only the look through that exe
@@ -4459,6 +4642,7 @@ int wmain(int argc, wchar_t **argv)
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
+    if (!StiffProbeTest()) return 1;
     {
         // the fuel while rolling drag is in force (review F1): 1 from a row of 1.5; the row with it off or with no hook;
         // a toggle puts it in again on the next pass

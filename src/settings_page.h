@@ -136,7 +136,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             "cold rubber grips less, most on asphalt and rock; warm air is a little more pressure, warm rubber a little more "
             "grip on asphalt; in the heat soft tires wear from lower speeds. The modes' numbers are for 15 C.");
     changed(ImGui::Checkbox("Rolling drag", &e.rollingDrag));
-    PageTip("Tires roll harder on soft ground and when aired down.");
+    PageTip("Tires roll harder on soft ground and when aired down. On by default.");
     ImGui::EndDisabled();
     changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
     PageTip("The mode is saved by the truck kind's name in TirePressure.trucks.ini. It comes back the moment you drive that "

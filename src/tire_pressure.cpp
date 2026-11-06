@@ -335,7 +335,7 @@ static void ReadIni(TpSettings &s)
                         L"; 50 before the tire is flat. MaxDamage=0 or TireDamage=0: none.\n"
                         L"; StandStill=1: a pressure change only goes on while the truck stands still. Temperature=1: the tires feel\n"
                         L"; the outside temperature (AmbientC, or a gauge mod's by map and hour while it runs): cold air is less\n"
-                        L"; pressure in them, cold rubber less grip. RollingDrag=1: the tires roll harder on soft ground and when aired\n"
+                        L"; pressure in them, cold rubber less grip. RollingDrag=1 (on by default): the tires roll harder on soft ground and when aired\n"
                         L"; down (rolling resistance by ground and pressure, in the wheels' damping). HardMode=1: the realistic numbers and options in place of the\n"
                         L"; grip, mode and damage keys and Seconds (WornGrip 10 there); the keys here keep your own.\n"
                         L"; PerTruck=1: each truck keeps its own pressure mode, saved by the truck kind's name in TirePressure.trucks.ini and put\n"
@@ -3236,6 +3236,18 @@ static bool IniTest(const wchar_t *givenIni)
     ReadIni(b);
     bool ok = gone && SameSettings(a, d) && SameSettings(b, d);
     printf("%s ini: a missing ini is written with the defaults and reads back as them%s\n", ok ? "ok  " : "FAIL", gone ? "" : " (the old test ini could not be deleted)");
+    {
+        // rolling drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0
+        TpSettings missing, zero;
+        WritePrivateProfileStringW(L"TirePressure", L"RollingDrag", nullptr, ini.c_str());
+        ReadIni(missing);
+        WritePrivateProfileStringW(L"TirePressure", L"RollingDrag", L"0", ini.c_str());
+        ReadIni(zero);
+        WritePrivateProfileStringW(L"TirePressure", L"RollingDrag", L"1", ini.c_str());
+        const bool on = d.rollingDrag && missing.rollingDrag && !zero.rollingDrag;
+        printf("%s ini: rolling drag on with the key missing and by the defaults, an explicit RollingDrag=0 stays off\n", on ? "ok  " : "FAIL");
+        ok = ok && on;
+    }
     WritePrivateProfileStringW(L"TirePressure", L"ProbeFriction", L"0", ini.c_str());
     c = d;
     c.key = 'K';
@@ -3262,7 +3274,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.standStill = false;
     c.perTruck = false;
     c.temperature = false;
-    c.rollingDrag = true;
+    c.rollingDrag = false;
     c.ambientC = -3.0f;
     c.hardMode = true;
     c.insaneMode = true;
@@ -3455,8 +3467,8 @@ static bool RealismTest()
     HardSettings(h);
     const bool hard = h.standStill && h.temperature && h.tireDamage && h.vanillaBalance && h.increased && h.rollingRadius && h.asphaltFloor == 0.0f && h.seconds == kHardSeconds &&
                       h.key == 'K' && h.soundVolume == 12.0f && h.ambientC == -5.0f && h.mode[1][kModeGround] == kHardModes[1][kModeGround] && h.mode[1][kModeGround] < d.mode[1][kModeGround] &&
-                      !d.rollingDrag && h.rollingDrag && h.mode[0][kModeFuel] == 1.0f && h.mode[1][kModeFuel] == 1.0f && h.mode[2][kModeFuel] == 1.0f;
-    printf("%s realism: hard mode sets its options and numbers (Low dirt x%.2f, the default's x%.2f; rolling drag on, off by default, and fuel x1 in every mode) and leaves the controls, the sounds and the outside temperature alone\n",
+                      d.rollingDrag && h.rollingDrag && h.mode[0][kModeFuel] == 1.0f && h.mode[1][kModeFuel] == 1.0f && h.mode[2][kModeFuel] == 1.0f;
+    printf("%s realism: hard mode sets its options and numbers (Low dirt x%.2f, the default's x%.2f; rolling drag on, as by default, and fuel x1 in every mode) and leaves the controls, the sounds and the outside temperature alone\n",
            hard ? "ok  " : "FAIL", h.mode[1][kModeGround], d.mode[1][kModeGround]);
     // insane mode wins over hard mode and sets its own set; neither touches the controls
     TpSettings x = d;

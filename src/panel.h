@@ -66,7 +66,7 @@ struct TpSettings
     bool standStill;         // StandStill: a pressure change only goes on while the truck stands still
     bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini); 0 = one mode for all, Normal at every start
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
-    bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); off by default
+    bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
     bool insaneMode;         // InsaneMode: a hardcore set harder than real tires (InsaneSettings) in the same place; it wins over HardMode
@@ -126,7 +126,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.standStill = true;
     s.perTruck = true;
     s.temperature = true;
-    s.rollingDrag = false; // until its drive (BRIEF_rolling_drag.md)
+    s.rollingDrag = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.ambientC = 15.0f;
     s.hardMode = false;
     s.insaneMode = false;

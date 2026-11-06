@@ -210,7 +210,7 @@ TIRE = f'''
 <p>The fuel factor scales the truck's engine and gearbox <code>FuelConsumption</code>, and only counts while the truck moves: standing at idle burns as usual. The steering factor scales the truck's steering speed, so soft tires turn slower.</p>
 
 <h2>11. Rolling drag</h2>
-<p>One checkbox in the Realism section, or <code>RollingDrag=1</code>. It is off by default. Hard mode and the insanity mode turn it on. A tire rolls harder on soft ground and when it is aired down. The game slows a rolling truck by itself, but its tires roll the same at every pressure. With this on the mod adds a rolling resistance by the ground and the pressure.</p>
+<p>One checkbox in the Realism section, or <code>RollingDrag=1</code>. It is on by default; untick it to turn it off. Hard mode and the insanity mode keep it on. A tire rolls harder on soft ground and when it is aired down. The game slows a rolling truck by itself, but its tires roll the same at every pressure. With this on the mod adds a rolling resistance by the ground and the pressure.</p>
 <p>The resistance is a force of Crr × N on each wheel on the ground. N is the wheel's share of the truck's weight. Crr goes by the ground under the wheel:</p>
 {table(['Ground', 'Crr', 'Slows the truck at Normal, m/s²', 'At Low, m/s²'], [['Paved', '0.010', '0.10', '0.15'], ['Rock', '0.015', '0.15', '0.22'], ['Gravel', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', '0.030', '0.29', '0.44'], ['Sand', '0.060', '0.59', '0.88'], ['Ice', '0', '0', '0']], 'Table 11. Rolling drag by ground')}
 <p>The pressure scales it by (p / p<sub>Normal</sub>)<sup>−0.5</sup>: Low ×1.49, Reduced ×1.24, Normal ×1, Increased ×0.89. It follows the pressure through a change. The numbers are the mod's own, from published truck tire figures (0.006 to 0.01 on asphalt at the rated pressure).</p>
@@ -300,7 +300,7 @@ TIRE = f'''
  ['BaseGround, BaseAsphalt, BaseMud', '1', '0.1 to 5', 'Scale every mode\'s grip'], ['VanillaBalance', '0', '0 or 1', 'Vanilla balance on'],
  ['VanillaBalanceStrength', '1', '0 to 2', 'How far, past 1 below vanilla'], ['AsphaltFloor', '0', '0 to 10', 'Least grip on paved ground; 0 = off'], ['WornGrip', '10', '0 to 30', 'Percent of its grip a worn out tire keeps; 0 = none'],
  ['Increased', '1', '0 or 1', 'The road mode'], ['TireDamage', '1', '0 or 1', 'Soft tires wear at speed'], ['RollingRadius', '1', '0 or 1', 'Flattened tires roll like real ones'],
- ['StandStill', '1', '0 or 1', 'Change only while standing'], ['PerTruck', '1', '0 or 1', 'Each truck keeps its own pressure mode'], ['Temperature', '1', '0 or 1', 'Tires feel the outside temperature'], ['RollingDrag', '0', '0 or 1', 'Tires roll harder on soft ground and aired down'], ['AmbientC', '15', '-40 to 50', 'Outside temperature without Gauges'],
+ ['StandStill', '1', '0 or 1', 'Change only while standing'], ['PerTruck', '1', '0 or 1', 'Each truck keeps its own pressure mode'], ['Temperature', '1', '0 or 1', 'Tires feel the outside temperature'], ['RollingDrag', '1', '0 or 1', 'Tires roll harder on soft ground and aired down'], ['AmbientC', '15', '-40 to 50', 'Outside temperature without Gauges'],
  ['HardMode', '0', '0 or 1', 'Hard mode'], ['InsaneMode', '0', '0 or 1', 'Globalhacker insanity mode; wins over HardMode'],
  ['AirOutSound, AirInSound, CompressorSound, CompressorStopSound', 'empty', 'WAV file, pak sample or none', 'Replace a sound'],
  ['DumpImage', '0', '0 or 1', 'Write the game\'s code image at the next start, for a report']], 'Table 8. [TirePressure]')}

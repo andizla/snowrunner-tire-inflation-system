@@ -273,23 +273,35 @@ inline bool TruckAgainTakeOver(const char *oldId, uint64_t oldVehicle, const cha
 
 static const ULONGLONG kTruckTakeOverMs = 20000; // the take-over's window: the same kind back under a new id within 20 s
 
-// The take-over's watch (Gameplay's SuspTrack at 88e1ba7): the truck that went last with none driven since, and when.
-// At each change of the driven truck (or to none), TruckTrack says whether the truck now driven takes over the one
-// that went: the same kind under another id within 20 s, no other truck driven between. oldId gets the id that went.
-struct TruckTracker { TruckWho2 gone; ULONGLONG goneAt; };
-inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40])
+// The take-over's watch (Gameplay's SuspTrack): the truck that went last with none driven since, when, and the vehicle
+// object its id was last read on. At each change of the driven truck (or to none), TruckTrack says whether the truck
+// now driven takes over the one that went: the same kind under another id, no other truck driven between (any truck
+// driven clears gone), and either within 20 s (a recovery builds a new vehicle) or on the same vehicle object however
+// long the gap (a garage visit with an upgrade took 21 s, the drive of 2026-11-06 22:37). This mod reads no loading
+// screen, so a load between does not void the same-vehicle rule as it does in Gameplay. wasVehicle and nowVehicle:
+// the vehicle each id was read on. oldId gets the id that went; byVehicle, where given, says the same-vehicle rule
+// took it (over 20 s).
+struct TruckTracker { TruckWho2 gone; ULONGLONG goneAt; uint64_t goneVehicle; };
+inline bool TruckTrack(TruckTracker &t, const TruckWho2 &was, const TruckWho2 &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle = 0,
+                       uint64_t nowVehicle = 0, bool *byVehicle = nullptr)
 {
     oldId[0] = 0;
+    if (byVehicle) *byVehicle = false;
     if (was.kind[0] && !now.kind[0])
     {
         t.gone = was;
         t.goneAt = at;
+        t.goneVehicle = wasVehicle;
         return false;
     }
     if (!now.kind[0]) return false;
-    const bool due = t.gone.kind[0] && !strcmp(t.gone.kind, now.kind) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kTruckTakeOverMs;
+    const bool kind = t.gone.kind[0] && !strcmp(t.gone.kind, now.kind) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id);
+    const bool soon = at - t.goneAt <= kTruckTakeOverMs;
+    const bool sameVehicle = t.goneVehicle && t.goneVehicle == nowVehicle;
+    const bool due = kind && (soon || sameVehicle);
     if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
-    t.gone = TruckWho2{};
+    if (due && byVehicle) *byVehicle = !soon;
+    t = TruckTracker{};
     return due;
 }
 
@@ -300,7 +312,8 @@ struct TruckChange
 {
     bool changed;      // another truck than on the last pass (another kind, or another id), or none
     bool takeOver;     // the game made the truck that went anew under now's id: now takes oldId's mode over
-    bool whileDriven;  // that take-over is of a new id on the same vehicle while driven (else: back within 20 s)
+    bool whileDriven;  // that take-over is of a new id on the same vehicle while driven (else: back within 20 s or on the same vehicle)
+    bool byVehicle;    // a take-over back after more than 20 s, on the same vehicle object
     char oldId[40];
     ULONGLONG goneAt;  // when the truck that went was last read (for the log)
 };
@@ -321,7 +334,7 @@ inline TruckChange TruckWatchStep(TruckWatch &w, TruckWho2 now, uint64_t vehicle
         c.whileDriven = c.takeOver = TruckAgainTakeOver(w.seen.id, w.seenVehicle, now.id, vehicle);
         if (c.takeOver) strncpy_s(c.oldId, w.seen.id, _TRUNCATE);
     }
-    else c.takeOver = TruckTrack(w.track, w.seen, now, at, c.oldId);
+    else c.takeOver = TruckTrack(w.track, w.seen, now, at, c.oldId, w.seenVehicle, vehicle, &c.byVehicle);
     w.seen = now;
     w.seenVehicle = now.kind[0] ? vehicle : 0;
     return c;

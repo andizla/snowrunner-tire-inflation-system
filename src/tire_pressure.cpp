@@ -2822,8 +2822,8 @@ static DWORD WINAPI Run(void *)
             if (read)
             {
                 if (taken && c.whileDriven) Log(L"truck %S: the take-over: under its new id %S it takes over the mode of %S (while driven, the same vehicle)", cur.kind, cur.id, c.oldId);
-                else if (taken) Log(L"truck %S: the take-over: under its new id %S it takes over the mode of %S (back %.0f s after it went)", cur.kind, cur.id, c.oldId,
-                                    (GetTickCount64() - c.goneAt) / 1000.0);
+                else if (taken) Log(L"truck %S: the take-over: under its new id %S it takes over the mode of %S (back %.0f s after it went%s)", cur.kind, cur.id, c.oldId,
+                                    (GetTickCount64() - c.goneAt) / 1000.0, c.byVehicle ? L", on the same vehicle" : L"");
                 curLevel = f.level;
                 curKept = f.ownKept;
                 g_mode = TruckModeInForce(f, g_modeCount);
@@ -4048,6 +4048,35 @@ static bool TruckOwnTest()
         const bool notOver = !TruckModeTakeOver(file, k, id1, id3) && TruckModeFind(file, k, id3).mode == kReduced;
         check(viaB && tooLate && sameBack && viaDirect && notOver,
               "take-over: none after a switch to another truck and back, a gap over 20 s, the same id back, a direct switch, or onto an id with a mode of its own");
+        // the same vehicle object back under a new id is the same truck, however long the gap (a garage visit took 21 s,
+        // the drive of 2026-11-06 22:37); another vehicle only within 20 s; the same pointer with another kind or another
+        // truck driven between is none; and an id with a mode of its own keeps it on the same pointer
+        {
+            auto back = [&](uint64_t goneOn, const TruckWho2 &who, uint64_t on, ULONGLONG after) {
+                TruckWatch v = {};
+                TruckWatchStep(v, a1, goneOn, 0);
+                TruckWatchStep(v, nobody, 0, 1000);
+                return TruckWatchStep(v, who, on, 1000 + after);
+            };
+            const TruckChange s21 = back(0x1000, a2, 0x1000, 21000), s120 = back(0x1000, a2, 0x1000, 120000), s600 = back(0x1000, a2, 0x1000, 600000);
+            const bool same = s21.takeOver && s21.byVehicle && !strcmp(s21.oldId, id1) && s120.takeOver && s120.byVehicle && s600.takeOver && s600.byVehicle &&
+                              !s21.whileDriven;
+            const TruckChange soonOther = back(0x1000, a2, 0x2000, 5000);
+            const bool other = soonOther.takeOver && !soonOther.byVehicle && !back(0x1000, a2, 0x2000, 21000).takeOver;
+            const bool kindOther = !back(0x1000, b1, 0x1000, 21000).takeOver;
+            TruckWatch v = {};
+            TruckWatchStep(v, a1, 0x1000, 0);
+            TruckWatchStep(v, nobody, 0, 1000);
+            TruckWatchStep(v, b1, 0x2000, 2000);
+            TruckWatchStep(v, nobody, 0, 3000);
+            const bool between = !TruckWatchStep(v, a2, 0x1000, 40000).takeOver;
+            // the same pointer and kind, the new id already holding a mode of its own (id3 at Reduced): due, nothing copied
+            const TruckChange own = back(0x1000, a3, 0x1000, 30000);
+            const bool ownKept = own.takeOver && !TruckModeTakeOver(file, k, own.oldId, id3) && TruckModeFind(file, k, id3).mode == kReduced;
+            check(same && other && kindOther && between && ownKept,
+                  "take-over: on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same pointer with another "
+                  "kind or another truck between; an id with a mode of its own keeps it on the same pointer");
+        }
         // while driven: a new id on the same vehicle takes the mode over, on another vehicle it is another truck; a first id is none
         TruckWatch d = {};
         TruckWatchStep(d, a2, 0x3000, 0);

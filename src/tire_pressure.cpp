@@ -1948,6 +1948,13 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
 // hook is in (else off, with a line saying why), the pressure's factor, a line once per truck and, with ProbeRoll=1,
 // one a second while the truck moves: each wheel's ground, Crr, the c in its body and the torque that c means,
 // I·(c − stock)·ω, against Crr·N·r.
+static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, ULONGLONG passAt);
+
+// The fuel factor the game gets (review F1 of BRIEF_defaults_on.md, the lead's call): 1 while rolling drag is in force
+// (the setting, or hard or insanity mode, and the hook found), as the drag charges a soft tire's fuel itself; else the
+// mode's Fuel use row. The row keeps its value for when the drag is off.
+static float FuelInForce(float row, bool dragOn) { return dragOn ? 1.0f : row; }
+
 static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, ULONGLONG passAt)
 {
     static bool wasOn = false, noHookSaid = false;
@@ -1969,7 +1976,8 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
     {
         wasOn = on;
         truckSaid = 0;
-        Log(on ? L"rolling drag: on, written in the truck update" : L"rolling drag: off, the stock damping back in the wheels that hold the mod's");
+        Log(on ? L"rolling drag: on, written in the truck update; the fuel x1 in every mode (the modes' Fuel use rows apply while it is off)"
+               : L"rolling drag: off, the stock damping back in the wheels that hold the mod's; the modes' Fuel use rows in force");
     }
     if (!on || !truck) return;
     DragStats s;
@@ -2759,6 +2767,7 @@ static DWORD WINAPI Run(void *)
         }
         Mode forVehicle = g_now;
         if (!rolling) forVehicle.fuel = 1.0f;
+        forVehicle.fuel = FuelInForce(forVehicle.fuel, g_dragOn != 0); // each pass, so a change of the drag puts it in at once
         // the gears make up for the smaller collision cylinders, but for what a real tire loses (the wheels' mean)
         float roll = 0.0f;
         int rolled = 0;
@@ -4450,6 +4459,36 @@ int wmain(int argc, wchar_t **argv)
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
+    {
+        // the fuel while rolling drag is in force (review F1): 1 from a row of 1.5; the row with it off or with no hook;
+        // a toggle puts it in again on the next pass
+        const float row = 1.5f;
+        HWND (WINAPI *const hookWas)() = g_foregroundReal;
+        const bool settingWas = g_dragSetting;
+        const std::vector<WheelRef> none;
+        g_foregroundReal = GetForegroundWindow;
+        g_dragSetting = true;
+        RollingDragPass(0, none, 0.0f, 0);
+        const float on = FuelInForce(row, g_dragOn != 0);
+        g_dragSetting = false;
+        RollingDragPass(0, none, 0.0f, 0);
+        const float off = FuelInForce(row, g_dragOn != 0);
+        g_dragSetting = true;
+        g_foregroundReal = nullptr;
+        RollingDragPass(0, none, 0.0f, 0);
+        const float noHook = FuelInForce(row, g_dragOn != 0);
+        g_foregroundReal = GetForegroundWindow;
+        RollingDragPass(0, none, 0.0f, 0);
+        const float again = FuelInForce(row, g_dragOn != 0);
+        g_dragSetting = false;
+        RollingDragPass(0, none, 0.0f, 0);
+        g_foregroundReal = hookWas;
+        g_dragSetting = settingWas;
+        const bool fuelOk = on == 1.0f && off == row && noHook == row && again == 1.0f;
+        printf("%s rolling drag and fuel: x%.2f from a row of x1.50 while it is in force, x%.2f off, x%.2f with no hook, x%.2f on again\n", fuelOk ? "ok  " : "FAIL", on, off,
+               noHook, again);
+        if (!fuelOk) return 1;
+    }
     if (!SoundTest()) return 1;
     wchar_t imageFile[1024] = {};
     GetEnvironmentVariableW(L"SR_IMAGE", imageFile, 1024);

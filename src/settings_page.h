@@ -198,7 +198,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             { kModeOffset, "Flattening", "%.3f m", "AdditionalRadiusOffset: metres off the tire's radius. The game only draws a tire so flat (see the "
               "truck's line above): on a tire with less room than the deepest mode asks for, every mode shrinks alike. A flatter tire also rolls "
               "slower in every gear.", 0.001f },
-            { kModeFuel, "Fuel use", "x%.2f", "FuelConsumptionModifier: counts while the truck moves.", 0.01f },
+            { kModeFuel, "Fuel use", "x%.2f", "FuelConsumptionModifier: counts while the truck moves. x1 while Rolling drag is on, as the drag charges the fuel itself; the row's value counts with it off.", 0.01f },
             { kModeSteering, "Steering speed", "x%.2f", "SteeringSpeedModifier.", 0.01f } };
         for (int r = 0; r < 9; r++)
         {
@@ -222,6 +222,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         }
         ImGui::EndTable();
     }
+    // the fuel while rolling drag is in force is 1 (review F1 of BRIEF_defaults_on.md); the rows stay editable for when it is off
+    if (e.rollingDrag || e.hardMode || e.insaneMode) ImGui::TextDisabled("Fuel use: x1 while Rolling drag is on.");
     changed(ImGui::Checkbox("Flattened tires roll like real ones", &e.rollingRadius));
     PageTip("A real tire's belt keeps its length, so a flattened tire rolls nearly as far per turn as before. In the game the "
             "wheel itself shrinks, which takes about three times as much speed off the truck. With this on the gears make up "

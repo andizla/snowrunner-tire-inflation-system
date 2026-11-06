@@ -4,6 +4,7 @@
 
 - Rolling drag (`RollingDrag`, the Realism section's "Rolling drag", on by default, untick it or set `RollingDrag=0` to turn it off): tires roll harder on soft ground and when aired down. Each wheel on the ground gets a rolling resistance by its ground and the pressure, through its own damping, as the game drags a flat tire. Mud counts as dirt for now. The weight is the truck's as the game's physics has it, its gravity included, without cargo or a trailer. Hard mode and the insanity mode turn it on. Hard mode's fuel factors are 1 now, as the engine burns more against the drag by itself.
 - The insanity mode's fuel factors are 1, as rolling drag now does what they did.
+- While rolling drag is on, every mode's fuel factor is 1: the drag makes a soft tire cost fuel by itself. The Fuel use row keeps its value and counts again with rolling drag off.
 - The panel's pad and key controls wait while the game's function menu is up. The mod then hides no button from the menu, so the d-pad and A work it with the panel open.
 - The last start's log is kept as `TirePressure.prev.log`.
 - `TirePressure.log` names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409). With Next Gen Gameplay in, its log names the game's and this one names the mod's own.

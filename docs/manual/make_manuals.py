@@ -218,7 +218,7 @@ TIRE = f'''
 <li>The weight is the truck's as the game's physics has it, its gravity included. Cargo and a trailer are not counted.</li>
 <li>The drag goes in through each wheel's own damping, the way the game drags a flat tire. It acts with the foot off too. A broken wheel keeps the game's own.</li>
 <li>It needs the game's truck update, as tire damage on the game's thread does. On a build where the mod does not find it, rolling drag stays off and the log says so.</li>
-<li>Fuel: the engine works harder against the drag and burns more by itself. So the fuel factors of hard mode and the insanity mode are 1. The default modes keep theirs for now.</li></ul>
+<li>Fuel: the engine works harder against the drag and burns more by itself. So while rolling drag is on, every mode's fuel factor is 1, the default modes' too. Their Fuel use rows keep their values, which count again with rolling drag off.</li></ul>
 
 <h2>12. Tire damage</h2>
 <p>While the truck is faster than the mode's first speed, a timer runs. Each time it passes the mode's interval, every wheel on the ground takes damage: the least at the first speed, rising to the most at the second speed and above. Below the first speed for a full second, the timer starts over. Increased and Normal never wear.</p>

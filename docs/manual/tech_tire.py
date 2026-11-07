@@ -875,7 +875,8 @@ offer: Increased, or Normal with <code>Increased=0</code>. With <code>PerTruck=0
 kept with <code>Own=0</code>, the kind's mode is in force and a change goes to the kind's section. Where the kind has no section yet,
 the truck's mode goes up into it first, so nothing moves. When the game makes a truck anew under
 another id (a recovery, a garage), the new id takes the old one's mode over, as Next Gen Gameplay does, with one line in the log. A file
-from 1.3.1 to 1.3.3 reads as before, and the first change to a truck writes its own section.</li></ul>
+from 1.3.1 to 1.3.3 reads as before, and the first change to a truck writes its own section.</li>
+<li>A truck back from the garage keeps its own mode however long the visit took. The game gives it a new id there, and on the same truck the new id takes the mode over. Before, a visit over 20 s lost it. A switch through the map to another truck of the kind takes nothing over while the first is still in the game, so each keeps its own.</li></ul>
 <h3>Changed in 1.3.3</h3>
 <ul><li>The step bindings are the plain d-pad left and right, <code>DPadLeft</code> and <code>DPadRight</code> by default (an ini's
 <code>LB+DPadLeft</code> becomes <code>DPadLeft</code>). They act only while the panel is open and no shoulder button is held. LB + d-pad

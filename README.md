@@ -151,11 +151,10 @@ Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini`, `TireP
 
 ## Planned
 
-- Game Pass: the fix in 1.3.0 counts as confirmed once a player's log on that build shows it.
-- The pressure mode per owned truck instead of per kind of truck, once the mod has an id of its own for a truck.
-- PS5 controllers: the mod reads XInput pads only today.
-- The vanilla balance's strength up to 2.5.
 - Clearer names for the settings.
+- Keyboard keys for the open panel.
+- PS5 and DualSense controllers.
+- Ideas under thought, not started: no automatic engine start when you press the throttle, force feedback.
 
 ## Build
 

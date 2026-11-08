@@ -2837,7 +2837,7 @@ static DWORD WINAPI Run(void *)
             const std::string tire = c.changed && vehicle ? FirstTire(vehicle) : std::string();
             const bool read = TruckModeOnChangeWith(trucksFile, g_perTruck, cur, watch.seen, c, f, taken, firstShared, tire, startWhen,
                                                     [](const char *) { return false; }, note);
-            if (read) tireWritten = tire;
+            if (read) tireWritten = TruckTireSeen(trucksFile, cur.kind, cur.id, tire);
             if (firstShared)
             {
                 // PerTruck=0: the first truck of this game start starts in the start mode, the highest on offer
@@ -2866,18 +2866,13 @@ static DWORD WINAPI Run(void *)
                 Log(L"%s", line);
             }
         }
-        // a tire changed while driven: Tire= again in the truck's own section, where it has one (looked at every 2 s)
+        // a tire changed while driven, or the truck's own section made (a mode chosen): Tire= in that section (every 2 s)
         static ULONGLONG tireLookAt = 0;
         if (g_perTruck && cur.id[0] && vehicle && kindOf == vehicle && TruckWhoSame(cur, watch.seen) && GetTickCount64() - tireLookAt >= 2000)
         {
             tireLookAt = GetTickCount64();
             const std::string tire = FirstTire(vehicle);
-            if (!tire.empty() && tire != tireWritten)
-            {
-                tireWritten = tire;
-                truckid::Parts parts = { { L"Tire", truckid::Wide(tire.c_str()) } };
-                if (truckid::PartsPut(trucksFile, TruckSection(cur.kind, cur.id), parts)) Log(L"truck %S %S: its tire is now %S (Tire= in its own section)", cur.kind, cur.id, tire.c_str());
-            }
+            if (TruckTireLook(trucksFile, cur.kind, cur.id, tire, tireWritten)) Log(L"truck %S %S: its tire %S (Tire= in its own section)", cur.kind, cur.id, tire.c_str());
         }
         const bool curDriven = g_perTruck && cur.kind[0] && vehicle && kindOf == vehicle && TruckWhoSame(cur, watch.seen); // cur is this truck
         // the settings page's tick "This truck only" (TruckOnlyPut): on puts the truck's own section in force again, off
@@ -4374,6 +4369,25 @@ static bool TruckOwnTest()
         wchar_t line[400];
         TruckIdLine(line, 400, cur, cm, false, n, f);
         const bool lineOk = wcsstr(line, L"truck: test_id_kind, id CCCCCCCC, matched out of the warehouse by its parts: the settings of AAAAAAAA") == line;
+        DeleteFileW(file.c_str());
+        // the review's M1: a mode chosen while driven makes the section; the next look puts Tire= in, once, and a new
+        // tire again
+        bool lookOk = false;
+        {
+            drive(idA, "tire_x", start1, n, f);
+            std::string written = TruckTireSeen(file, k, idA, "tire_x"); // as at the change: no section yet
+            const bool noneYet = !TruckTireLook(file, k, idA, "tire_x", written) && !truckid::SectionThere(file, TruckSection(k, idA));
+            TruckModeChosen(file, k, idA, false, kLow);
+            const bool put = TruckTireLook(file, k, idA, "tire_x", written);
+            wchar_t t1[32] = {};
+            GetPrivateProfileStringW(TruckSection(k, idA).c_str(), L"Tire", L"", t1, 32, file.c_str());
+            const bool once = !TruckTireLook(file, k, idA, "tire_x", written);
+            const bool again = TruckTireLook(file, k, idA, "tire_z", written);
+            wchar_t t2[32] = {};
+            GetPrivateProfileStringW(TruckSection(k, idA).c_str(), L"Tire", L"", t2, 32, file.c_str());
+            lookOk = noneYet && put && !wcscmp(t1, L"tire_x") && once && again && !wcscmp(t2, L"tire_z");
+        }
+        check(lookOk, "truck id: a mode chosen while driven makes the section, and the next tire look puts Tire= in it, once; a new tire is written again (review M1)");
         check(firstA && !wcscmp(tireA, L"tire_x") && bKind && listed && bStays && otherTire && matched && lineOk,
               "truck id: [Seen] lists every driven id and makes no section; Tire= goes into a section that exists; a listed truck on the kind's never takes another's "
               "mode; a new one with another tire matches none; with the same tire the one waiting truck's mode is copied and marked How=warehouse, and the line says so");

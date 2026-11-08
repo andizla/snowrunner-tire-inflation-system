@@ -140,6 +140,25 @@ inline int TruckModeChosen(const std::wstring &file, const char *kind, const cha
     return kTruckLevelOwn;
 }
 
+// The look every 2 s at the driven truck's tire (truck_id.h parts). written holds what was last seen: the tire, then
+// "|s" while the truck has its own section, as Gauges' look does. A change of either writes Tire= into that section,
+// so a section made while driving (a mode chosen, TruckModeChosen) gets it too (the review's M1). True when written.
+inline std::string TruckTireSeen(const std::wstring &file, const char *kind, const char *id, const std::string &tire)
+{
+    if (tire.empty()) return std::string();
+    const bool there = id && id[0] && truckid::SectionThere(file, TruckSection(kind, id));
+    return there ? tire + "|s" : tire;
+}
+inline bool TruckTireLook(const std::wstring &file, const char *kind, const char *id, const std::string &tire, std::string &written)
+{
+    const std::string seen = TruckTireSeen(file, kind, id, tire);
+    if (seen.empty() || seen == written) return false;
+    written = seen;
+    if (seen.size() < 2 || seen.compare(seen.size() - 2, 2, "|s")) return false; // no section of its own yet
+    truckid::Parts parts = { { L"Tire", truckid::Wide(tire.c_str()) } };
+    return truckid::PartsPut(file, TruckSection(kind, id), parts);
+}
+
 inline int TruckModeInForce(const TruckModeFound &f, int modeCount);
 
 // The tick "This truck only" for the truck kind/id in mode (f as TruckModeFind found it). It shows unticked only where

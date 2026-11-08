@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- The C runtime's handlers behind the lines in `TirePressure.log` are set as the mod starts, so a stop at the game's boot is named too. Before, they were set only at the driven truck. They are set again there, after the game has set its own.
+- The C runtime's handlers behind the lines in `TirePressure.log` are set as the mod starts, so a stop at the game's boot is named too. Before, they were set only at the driven truck. They are set again there, after the game has set its own. A handler set in between that passes on to the mod's never calls it in a loop: the second call goes to the handler from the start, or ends there.
 
 ## [1.3.4]
 

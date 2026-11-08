@@ -8,6 +8,12 @@
 //   again    ours set, then a "game" handler set over ours in ucrtbase.dll, then the second set (Again): the line
 //            comes and passes on to the game's, which returns, and the program goes on
 //   still    the second set with ours still in place: the one before stays (none), so one line, then 0xC0000409
+//   loop     a "game" handler that calls the one it replaced (ours) set over ours, then Again (review M1): one line,
+//            no recursion, the start's handler takes the second entry, and the program goes on as the game's decides
+//   loopnone the same with no handler at the start: one line, the second entry returns, the program goes on
+//   loopabort the same for SIGABRT: one line, no recursion, and abort ends the program its own way
+//   guard    in this process: the guard per thread says "again" only on the thread already inside (the filter's
+//            guard in Gauges is the same crtline::Guard)
 #include "crt_line.h"
 #include <errno.h>
 #include <string>
@@ -26,6 +32,38 @@ static void Note(const char *text) { Out(text); }
 
 static volatile long g_beforeCalls = 0;
 static void __cdecl Before(const wchar_t *, const wchar_t *, const wchar_t *, unsigned, uintptr_t) { InterlockedIncrement(&g_beforeCalls); }
+
+// A handler that passes on to the one it replaced, as a crash reporter may: set over ours, it calls ours again.
+static crtline::InvalidParameterFn g_replaced = nullptr;
+static crtline::SignalHandlerFn g_abortReplaced = nullptr;
+static volatile long g_passerCalls = 0;
+static void __cdecl Passer(const wchar_t *expr, const wchar_t *fn, const wchar_t *file, unsigned line, uintptr_t reserved)
+{
+    if (InterlockedIncrement(&g_passerCalls) > 20)
+    {
+        Out("test: recursion");
+        ExitProcess(9);
+    }
+    if (g_replaced) g_replaced(expr, fn, file, line, reserved);
+}
+static void __cdecl AbortPasser(int sig)
+{
+    if (InterlockedIncrement(&g_passerCalls) > 20)
+    {
+        Out("test: recursion");
+        ExitProcess(9);
+    }
+    if (g_abortReplaced) g_abortReplaced(sig);
+}
+
+static crtline::Inside g_testInside = {};
+static volatile long g_otherAgain = -1;
+static DWORD WINAPI OtherThread(void *)
+{
+    crtline::Guard guard(g_testInside);
+    g_otherAgain = guard.again ? 1 : 0;
+    return 0;
+}
 
 static std::string LogText()
 {
@@ -74,8 +112,33 @@ int wmain(int argc, wchar_t **argv)
         _set_abort_behavior(0, _WRITE_ABORT_MSG);
         const std::wstring mode = argv[1];
         const HMODULE u = LoadLibraryW(L"ucrtbase.dll");
+        typedef void(__cdecl * NoInfo)();
+        const NoInfo noInfo = u ? (NoInfo)(void *)GetProcAddress(u, "_invalid_parameter_noinfo") : nullptr;
+        const crtline::SetInvalidParameterFn ucrtSet = u ? (crtline::SetInvalidParameterFn)(void *)GetProcAddress(u, "_set_invalid_parameter_handler") : nullptr;
         if (mode == L"before") _set_invalid_parameter_handler(Before);
+        if (mode == L"loop" && ucrtSet) ucrtSet(Before); // set before the mod's start: the start's handler
         if (mode != L"plain") crtline::Set(Out, true, nullptr, 0);
+        if (mode == L"loop" || mode == L"loopnone")
+        {
+            if (ucrtSet) g_replaced = ucrtSet(Passer); // set after the mod's start, passing on to ours
+            wchar_t said[400];
+            crtline::Again(Out, true, said, sizeof said / sizeof said[0]);
+            char saidLine[600];
+            _snprintf_s(saidLine, _TRUNCATE, "test: %ls", said);
+            Note(saidLine);
+            if (noInfo) noInfo();
+            const long wantBefore = mode == L"loop" ? 1 : 0;
+            Note(g_passerCalls == 1 && g_beforeCalls == wantBefore ? "test: the game's handler was called once, and the program goes on" : "test: not as wanted");
+            return 7;
+        }
+        if (mode == L"loopabort")
+        {
+            // ours in the mod's own runtime is what abort() here reaches: a handler over it that passes on to it
+            g_abortReplaced = signal(SIGABRT, AbortPasser);
+            signal(SIGABRT, crtline::Abort<crtline::kOwn>); // ours back in front, as the second set does
+            crtline::g_rt[crtline::kOwn].abortBefore = AbortPasser;
+            abort();
+        }
         if (mode == L"own") _invalid_parameter_noinfo();
         else if (mode == L"game")
         {
@@ -96,10 +159,8 @@ int wmain(int argc, wchar_t **argv)
         }
         else if (mode == L"again" || mode == L"still")
         {
-            typedef void(__cdecl * NoInfo)();
-            const NoInfo f = u ? (NoInfo)(void *)GetProcAddress(u, "_invalid_parameter_noinfo") : nullptr;
-            const crtline::SetInvalidParameterFn setIp = u ? (crtline::SetInvalidParameterFn)(void *)GetProcAddress(u, "_set_invalid_parameter_handler") : nullptr;
-            if (mode == L"again" && setIp) setIp(Before); // the game sets its own after the mod's start
+            const NoInfo f = noInfo;
+            if (mode == L"again" && ucrtSet) ucrtSet(Before); // the game sets its own after the mod's start
             wchar_t said[400];
             crtline::Again(Out, true, said, sizeof said / sizeof said[0]);
             char line[600];
@@ -169,6 +230,50 @@ int wmain(int argc, wchar_t **argv)
           "the second set with ours still there: the one before stays (none), one line, then 0xC0000409");
     if (still != 0xC0000409) printf("     exit code %08lX\n%s", still, stillLog.c_str());
     DeleteFileW(g_logPath);
+    const wchar_t *loops[2] = { L"loop", L"loopnone" };
+    for (const wchar_t *mode : loops)
+    {
+        const DWORD looped = Child(self, mode);
+        const std::string loopLog = LogText();
+        const bool withStart = !wcscmp(mode, L"loop");
+        Check(looped == 7 && count(loopLog, "crash: ") == 1 && loopLog.find("recursion") == std::string::npos &&
+                  loopLog.find("had been replaced by the game's own, ours is back in front and passes on to it") != std::string::npos &&
+                  loopLog.find("test: the game's handler was called once, and the program goes on") != std::string::npos,
+              withStart ? "a game handler over ours that calls ours: one line, no recursion, the start's handler takes the second entry, the program goes on"
+                        : "the same with no handler at the start: one line, no recursion, the second entry returns, the program goes on");
+        if (looped != 7) printf("     exit code %08lX\n%s", looped, loopLog.c_str());
+        DeleteFileW(g_logPath);
+    }
+    const DWORD loopAbort = Child(self, L"loopabort");
+    const std::string loopAbortLog = LogText();
+    Check(loopAbort == plain && count(loopAbortLog, "crash: ") == 1 && loopAbortLog.find("recursion") == std::string::npos &&
+              loopAbortLog.find("; passed on to the handler set before ours, then abort ends the program its own way\r\n") != std::string::npos,
+          "abort with a handler over ours that calls ours: one line, no recursion, and abort ends the program its own way");
+    if (loopAbort != plain) printf("     exit code %08lX\n%s", loopAbort, loopAbortLog.c_str());
+    DeleteFileW(g_logPath);
+    {
+        // the guard per thread: again only on the thread already inside; out again, the next entry is the first
+        bool first = false, second = false, after = false;
+        {
+            crtline::Guard outer(g_testInside);
+            first = !outer.again;
+            {
+                crtline::Guard inner(g_testInside);
+                second = inner.again;
+            }
+            const HANDLE t = CreateThread(nullptr, 0, OtherThread, nullptr, 0, nullptr);
+            if (t)
+            {
+                WaitForSingleObject(t, 10000);
+                CloseHandle(t);
+            }
+        }
+        {
+            crtline::Guard later(g_testInside);
+            after = !later.again;
+        }
+        Check(first && second && g_otherAgain == 0 && after, "the guard per thread: a second entry on the same thread is seen, another thread's is not, and leaving clears it");
+    }
     if (g_failed) printf("CRT TEST: %d FAILED\n", g_failed);
     return g_failed ? 1 : 0;
 }

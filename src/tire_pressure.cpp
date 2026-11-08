@@ -824,6 +824,15 @@ static std::string TireMesh(uint64_t model)
     return chars;
 }
 
+// The first wheel's tire mesh of the truck at vehicle (the wheel models from [vehicle + 0x200]): the part the warehouse
+// match goes by in this mod (truck_id.h, Tire=). Empty where it is not read.
+static std::string FirstTire(uint64_t vehicle)
+{
+    uint64_t begin = 0, model = 0;
+    if (!Read(vehicle + 0x200, begin) || begin < 0x10000 || !Read(begin, model) || model < 0x10000) return {};
+    return TireMesh(model);
+}
+
 static bool ApplyWornWheel(const WheelRef &w)
 {
     float asphalt, substance, cylinder, radius, offset;
@@ -2776,6 +2785,7 @@ static DWORD WINAPI Run(void *)
         static int curLevel = kTruckLevelStart; // where its mode came from (kTruckLevel...)
         static bool curKept = false;   // its own section holds Own=0: This truck only is unticked for it
         static TruckWatch watch = {};  // the truck read on the last pass and the take-over's watch (TruckWatchStep)
+        static std::string tireWritten; // the driven truck's Tire= as last written or read (truck_id.h parts)
         static bool kindSaid = false;
         const std::wstring trucksFile = g_dir + kTruckModesFile;
         if (vehicle && vehicle != kindOf)
@@ -2820,7 +2830,14 @@ static DWORD WINAPI Run(void *)
             }
             TruckModeFound f = {};
             bool taken = false, firstShared = false;
-            const bool read = TruckModeOnChange(trucksFile, g_perTruck, cur, watch.seen, c, f, taken, firstShared);
+            // the warehouse match goes by the first wheel's tire (Tire=); this mod reads no loading screen, so an id
+            // driven this start never counts as waiting (truck_id.h MatchFind's drivenGone)
+            static const unsigned long long startWhen = truckid::Now();
+            TruckIdNote note = {};
+            const std::string tire = c.changed && vehicle ? FirstTire(vehicle) : std::string();
+            const bool read = TruckModeOnChangeWith(trucksFile, g_perTruck, cur, watch.seen, c, f, taken, firstShared, tire, startWhen,
+                                                    [](const char *) { return false; }, note);
+            if (read) tireWritten = tire;
             if (firstShared)
             {
                 // PerTruck=0: the first truck of this game start starts in the start mode, the highest on offer
@@ -2844,6 +2861,22 @@ static DWORD WINAPI Run(void *)
                 else if (f.level == kTruckLevelKind) Log(L"truck %S %S: the kind's %s put back (%s%s)", cur.kind, idWords, g_modes[g_mode].name, kTruckModesFile,
                                                          f.ownKept ? L", This truck only unticked" : L"");
                 else Log(L"truck %S %S: not driven before, so %s", cur.kind, idWords, g_modes[g_mode].name);
+                wchar_t line[400];
+                TruckIdLine(line, 400, cur, c, taken, note, f);
+                Log(L"%s", line);
+            }
+        }
+        // a tire changed while driven: Tire= again in the truck's own section, where it has one (looked at every 2 s)
+        static ULONGLONG tireLookAt = 0;
+        if (g_perTruck && cur.id[0] && vehicle && kindOf == vehicle && TruckWhoSame(cur, watch.seen) && GetTickCount64() - tireLookAt >= 2000)
+        {
+            tireLookAt = GetTickCount64();
+            const std::string tire = FirstTire(vehicle);
+            if (!tire.empty() && tire != tireWritten)
+            {
+                tireWritten = tire;
+                truckid::Parts parts = { { L"Tire", truckid::Wide(tire.c_str()) } };
+                if (truckid::PartsPut(trucksFile, TruckSection(cur.kind, cur.id), parts)) Log(L"truck %S %S: its tire is now %S (Tire= in its own section)", cur.kind, cur.id, tire.c_str());
             }
         }
         const bool curDriven = g_perTruck && cur.kind[0] && vehicle && kindOf == vehicle && TruckWhoSame(cur, watch.seen); // cur is this truck
@@ -4032,7 +4065,7 @@ static bool TruckOwnTest()
         const TruckModeFound old = TruckModeFind(file, k, id1);
         const bool tookOver = gone.changed && !gone.takeOver && back.takeOver && !back.whileDriven && !strcmp(back.oldId, id1) && read && taken &&
                               got.level == kTruckLevelOwn && got.mode == kLow && TruckKindWide(id2) == by && at[0] && !newMark[0] && old.level == kTruckLevelOwn && old.mode == kLow;
-        TruckModeSeen(file, k, id1);
+        TruckMarkClear(file, k, id1);
         GetPrivateProfileStringW(TruckSection(k, id1).c_str(), L"TakenBy", L"", by, 48, file.c_str());
         check(tookOver && !by[0], "take-over: the same kind back under a new id 5 s after it went takes the mode over, the old id keeps its own, marked TakenBy and TakenAt; "
                                   "driven again, its mark goes");
@@ -4284,6 +4317,67 @@ static bool TruckOwnTest()
                   theirs.level == kTruckLevelKind && theirs.mode == kReduced && sections == 3 && noIdKind,
               "upgrade: an old file with only kind sections reads the kind's mode as before; the first change writes the truck's own [kind:{id}], the kind's stays "
               "for the others; a truck whose id is not read writes the kind's");
+        DeleteFileW(file.c_str());
+    }
+    // the truck id beyond the take-over (BRIEF_truck_id_part2.md) through this mod's own change: [Seen], Tire= and the
+    // warehouse match, with the mod's sections and words
+    {
+        const std::wstring file = g_dir + L"test_truck_id.ini";
+        DeleteFileW(file.c_str());
+        const char *k = "test_id_kind", *idA = "{AAAAAAAA-0000-0000-0000-00000000000A}", *idB = "{BBBBBBBB-0000-0000-0000-00000000000B}",
+                   *idC = "{CCCCCCCC-0000-0000-0000-00000000000C}";
+        const unsigned long long start1 = 1000;
+        auto never = [](const char *) { return false; };
+        auto drive = [&](const char *id, const std::string &tire, unsigned long long start, TruckIdNote &note, TruckModeFound &got) {
+            TruckWho2 cur = {}, now = {};
+            strncpy_s(now.kind, k, _TRUNCATE);
+            strncpy_s(now.id, id, _TRUNCATE);
+            TruckChange c = {};
+            c.changed = true;
+            bool taken = false, firstShared = false;
+            return TruckModeOnChangeWith(file, true, cur, now, c, got, taken, firstShared, tire, start, never, note);
+        };
+        TruckIdNote n = {};
+        TruckModeFound f = {};
+        // start 1: A gets its own mode (Tire= with it), B is driven on the kind's and never given its own
+        drive(idA, "tire_x", start1, n, f);
+        const bool firstA = n.looked && n.match.why == truckid::kMatchNone && n.line == truckid::kLineKind;
+        TruckModeChosen(file, k, idA, false, kLow);
+        drive(idA, "tire_x", start1, n, f); // a second drive this start: the section exists now, so Tire= goes in
+        wchar_t tireA[32] = {};
+        GetPrivateProfileStringW(TruckSection(k, idA).c_str(), L"Tire", L"", tireA, 32, file.c_str());
+        drive(idB, "tire_x", start1, n, f);
+        const bool bKind = n.line == truckid::kLineKind && f.level != kTruckLevelOwn;
+        unsigned long long seenA = 0, seenB = 0;
+        const bool listed = truckid::SeenGet(file, idA, seenA) && truckid::SeenGet(file, idB, seenB) && !truckid::SectionThere(file, TruckSection(k, idB));
+        // start 2: B is driven first; it is listed, so it never takes A's mode
+        const unsigned long long start2 = truckid::Now() + 10;
+        drive(idB, "tire_x", start2, n, f);
+        const bool bStays = !n.looked && n.line == truckid::kLineKind && f.level != kTruckLevelOwn;
+        // C, new to the mod, with A's tire: A's mode matched out of the warehouse, copied and marked; with another tire none
+        drive(idC, "tire_y", start2, n, f);
+        const bool otherTire = n.looked && n.match.why == truckid::kMatchNone && !n.matched;
+        DeleteFileW(file.c_str());
+        // again from a clean file, with A waiting and C new
+        TruckModeChosen(file, k, idA, false, kLow);
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Tire", L"tire_x", file.c_str());
+        truckid::SeenPut(file, idA, 500);
+        drive(idC, "tire_x", start2, n, f);
+        wchar_t how[16] = {};
+        GetPrivateProfileStringW(TruckSection(k, idA).c_str(), L"How", L"", how, 16, file.c_str());
+        const bool matched = n.matched && n.line == truckid::kLineMatched && f.level == kTruckLevelOwn && f.mode == kLow && !wcscmp(how, L"warehouse") &&
+                             !strcmp(n.match.id, idA);
+        TruckChange cm = {};
+        TruckWho2 cur = {};
+        strncpy_s(cur.kind, k, _TRUNCATE);
+        strncpy_s(cur.id, idC, _TRUNCATE);
+        wchar_t line[400];
+        TruckIdLine(line, 400, cur, cm, false, n, f);
+        const bool lineOk = wcsstr(line, L"truck: test_id_kind, id CCCCCCCC, matched out of the warehouse by its parts: the settings of AAAAAAAA") == line;
+        check(firstA && !wcscmp(tireA, L"tire_x") && bKind && listed && bStays && otherTire && matched && lineOk,
+              "truck id: [Seen] lists every driven id and makes no section; Tire= goes into a section that exists; a listed truck on the kind's never takes another's "
+              "mode; a new one with another tire matches none; with the same tire the one waiting truck's mode is copied and marked How=warehouse, and the line says so");
+        if (!lineOk) wprintf(L"     %s\n", line);
         DeleteFileW(file.c_str());
     }
     return all;

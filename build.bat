@@ -73,6 +73,7 @@ cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_SPOTTER /I sr
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\overlay_test.obj /Fe:out\test\overlay\overlay_test.exe test\overlay_test.cpp /link user32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib || goto fail
 rem the crash line's C runtime handlers (src\crt_line.h, the same file as Gauges'): an invalid parameter and abort, each in a child process
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\crt_test.obj /Fe:out\test\crt_test.exe test\crt_test.cpp || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_id_test.obj /Fe:out\test\truck_id_test.exe test\truck_id_test.cpp || goto fail
 echo BUILD OK: out\version.dll, out\TirePressure.asi, out\test\loader_test.exe
 exit /b 0
 :fail

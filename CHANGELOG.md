@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- A truck taken out of the warehouse gets its own mode back. The game gives it a new id there. Where exactly one waiting truck of its kind has the same tire on its first wheel, its mode is copied to the new id. Waiting means not driven this start. The old section stays, marked `How=warehouse`, and is never dropped. A truck bought new with the same tire as one waiting truck gets a copy of its mode too, and the other keeps its own. Two such trucks or none leave it on its kind's mode. `[Seen]` in `TirePressure.trucks.ini` lists every truck driven by its id, so a truck that never had a mode of its own never takes another's. A truck's own section now holds `Tire=`. Files from before read as they did, and nothing matches until a truck has been driven once with this version. `TirePressure.log` has one line a drive, in the same words as Next Gen Gameplay's.
+- The take-over, the marks and the match are in `truck_id.h`, the same file as Next Gen Gameplay's.
+
 ## [1.3.4]
 
 - Stiff base (`StiffBase`, the Realism section's "Stiff base", on by default; untick it or set `StiffBase=0` to turn it off): every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. A tire already stiffer keeps its own. The modes go on top as before. For now it sets how far the tire sits into its round shape. How soft its contact is stays the tire's own. Off, each wheel gets the game's own shape back.

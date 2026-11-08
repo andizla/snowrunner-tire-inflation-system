@@ -2521,6 +2521,16 @@ static DWORD WINAPI Run(void *)
     const bool logKept = MoveFileExW((g_dir + L"TirePressure.log").c_str(), (g_dir + L"TirePressure.prev.log").c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
     Log(L"Next Gen Tire Inflation " TP_VERSION L" (TirePressure): exe stamp %08lx", stamp);
     if (logKept) Log(L"log: the last start's log is kept as TirePressure.prev.log");
+    // the crash line (round 4) armed at the start (BRIEF_crash_line_early.md): after the first line, which starts the
+    // file anew, and before the panel and the places' looks (up to 60 s). It needs nothing of the game's. ucrtbase.dll's
+    // handlers are Gauges' where Gauges.asi is loaded, so the line is not written twice
+    wchar_t crtStart[320];
+    if (CrashFileOpen())
+    {
+        crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crtStart, sizeof crtStart / sizeof crtStart[0]);
+        Log(L"crash line: %s; armed at the start, again at the driven truck", crtStart);
+    }
+    else Log(L"crash line: none at the start, as TirePressure.log could not be opened for it (error %lu)", GetLastError());
     SettingsDefaults(g_set); // what the settings page shows until the ini is read
     g_overlayOk = PanelInit(g_self);
     // The mod's places in the exe, looked for by what the game's code is like around them (build_find.h), so it needs
@@ -2697,12 +2707,15 @@ static DWORD WINAPI Run(void *)
         {
             chainSeen = true;
             Log(L"driven truck found: %zu wheels", wheels.size());
-            // the crash line (round 4): the C runtime's invalid parameters and abort named in this log. ucrtbase.dll's
-            // handlers are Gauges' where Gauges.asi is loaded, so the line is not written twice
-            wchar_t crt[320];
+            // the crash line armed again: the game sets ucrtbase.dll's invalid-parameter handler after the mod's start
+            // and it replaces ours (crtline::Again keeps the one before unless what comes back is ours). Gauges.asi
+            // is looked for again, so ucrtbase.dll's stay Gauges' where it has come since
+            wchar_t crt[400];
+            const bool wasOpen = g_crashFile != INVALID_HANDLE_VALUE;
             if (CrashFileOpen())
             {
-                crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
+                if (wasOpen) crtline::Again(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
+                else crtline::Set(CrashLineOut, GetModuleHandleW(L"Gauges.asi") == nullptr, crt, sizeof crt / sizeof crt[0]);
                 Log(L"crash line: %s", crt);
             }
             else Log(L"crash line: none, as TirePressure.log could not be opened for it (error %lu)", GetLastError());

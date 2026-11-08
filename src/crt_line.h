@@ -146,4 +146,44 @@ inline void Set(void (*out)(const char *), bool game, wchar_t *said, size_t size
     if (said && size)
         _snwprintf_s(said, size, _TRUNCATE, L"the C runtime's invalid parameters and abort are named in this log: the mod's own runtime's handlers set, %s", gameSaid);
 }
+
+// The second set, at the first truck (BRIEF_crash_line_early.md). The game sets ucrtbase.dll's invalid-parameter
+// handler after the mod starts, and the runtime keeps only one, so ours is set there again. What comes back becomes
+// the handler before ours, unless it is ours: then the one from the start stays, and ours never calls itself. The
+// mod's own runtime is the mod's alone, so its handlers stay. game as for Set, read again by the caller.
+inline void Again(void (*out)(const char *), bool game, wchar_t *said, size_t size)
+{
+    if (!g_out) g_out = out;
+    wchar_t gameSaid[240] = L"";
+    if (!game)
+        _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's (Gauges.asi has them)");
+    else if (!g_rt[kGame].set)
+    {
+        // not set at the start (ucrtbase.dll was not loaded then): the first set now
+        wchar_t first[320];
+        Set(out, true, first, sizeof first / sizeof first[0]);
+        _snwprintf_s(gameSaid, _TRUNCATE, L"%s", g_rt[kGame].set ? L"ucrtbase.dll's set for the first time" : L"not ucrtbase.dll's (still not loaded)");
+    }
+    else
+    {
+        const HMODULE u = GetModuleHandleW(L"ucrtbase.dll");
+        const SetInvalidParameterFn setIp = u ? (SetInvalidParameterFn)(void *)GetProcAddress(u, "_set_invalid_parameter_handler") : nullptr;
+        const SignalFn sig = u ? (SignalFn)(void *)GetProcAddress(u, "signal") : nullptr;
+        if (setIp && sig)
+        {
+            const InvalidParameterFn was = setIp(InvalidParameter<kGame>);
+            const bool ipOurs = was == InvalidParameter<kGame>;
+            if (!ipOurs) g_rt[kGame].before = was;
+            const SignalHandlerFn abortWas = sig(SIGABRT, Abort<kGame>);
+            const bool abortOurs = abortWas == Abort<kGame>;
+            if (!abortOurs) g_rt[kGame].abortBefore = abortWas == SIG_ERR ? SIG_DFL : abortWas;
+            _snwprintf_s(gameSaid, _TRUNCATE, L"ucrtbase.dll's set again: the invalid-parameter handler set at the start %s; abort's %s",
+                         ipOurs ? L"was still ours" : was ? L"had been replaced by the game's own, ours is back in front and passes on to it" : L"had been taken out, ours is back",
+                         abortOurs ? L"was still ours" : L"had been replaced, ours is back in front and passes on to it");
+        }
+        else
+            _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's again (its two functions were not found)");
+    }
+    if (said && size) _snwprintf_s(said, size, _TRUNCATE, L"the C runtime's handlers at the first truck: %s; the mod's own runtime's stay", gameSaid);
+}
 } // namespace crtline

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- The C runtime's handlers behind the lines in `TirePressure.log` are set as the mod starts, so a stop at the game's boot is named too. Before, they were set only at the driven truck. They are set again there, after the game has set its own.
+
 ## [1.3.4]
 
 - Stiff base (`StiffBase`, the Realism section's "Stiff base", on by default; untick it or set `StiffBase=0` to turn it off): every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. A tire already stiffer keeps its own. The modes go on top as before. For now it sets how far the tire sits into its round shape. How soft its contact is stays the tire's own. Off, each wheel gets the game's own shape back.

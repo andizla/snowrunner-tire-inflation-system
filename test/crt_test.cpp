@@ -5,6 +5,9 @@
 //   before   a handler set before ours that returns: the line, then strcpy_s gives EINVAL and the program goes on;
 //            five such calls give three lines, and an invalid parameter with no handler after them still gets its line
 //   abort    abort(): the line, and the exit code abort gives without our handler (plain)
+//   again    ours set, then a "game" handler set over ours in ucrtbase.dll, then the second set (Again): the line
+//            comes and passes on to the game's, which returns, and the program goes on
+//   still    the second set with ours still in place: the one before stays (none), so one line, then 0xC0000409
 #include "crt_line.h"
 #include <errno.h>
 #include <string>
@@ -91,6 +94,21 @@ int wmain(int argc, wchar_t **argv)
             Note("test: the program went on");
             return 7;
         }
+        else if (mode == L"again" || mode == L"still")
+        {
+            typedef void(__cdecl * NoInfo)();
+            const NoInfo f = u ? (NoInfo)(void *)GetProcAddress(u, "_invalid_parameter_noinfo") : nullptr;
+            const crtline::SetInvalidParameterFn setIp = u ? (crtline::SetInvalidParameterFn)(void *)GetProcAddress(u, "_set_invalid_parameter_handler") : nullptr;
+            if (mode == L"again" && setIp) setIp(Before); // the game sets its own after the mod's start
+            wchar_t said[400];
+            crtline::Again(Out, true, said, sizeof said / sizeof said[0]);
+            char line[600];
+            _snprintf_s(line, _TRUNCATE, "test: %ls", said);
+            Note(line);
+            if (f) f();
+            Note(g_beforeCalls == 1 ? "test: the game's handler was called, and the program goes on" : "test: not as wanted");
+            return 7;
+        }
         else if (mode == L"abort" || mode == L"plain") abort();
         Note("test: the program went on");
         return 7;
@@ -129,6 +147,27 @@ int wmain(int argc, wchar_t **argv)
               abortLog.find("; abort ends the program its own way\r\n") != std::string::npos,
           "abort: the line, and the exit code abort gives without our handler");
     printf("     abort's exit code %08lX (without our handler %08lX)\n", aborted, plain);
+    DeleteFileW(g_logPath);
+    auto count = [](const std::string &s, const char *what) {
+        size_t n = 0;
+        for (size_t at = s.find(what); at != std::string::npos; at = s.find(what, at + 1)) n++;
+        return n;
+    };
+    const DWORD again = Child(self, L"again");
+    const std::string againLog = LogText();
+    Check(again == 7 && againLog.find("had been replaced by the game's own, ours is back in front and passes on to it") != std::string::npos &&
+              count(againLog, "crash: an invalid parameter in ucrtbase.dll, thread ") == 1 && againLog.find("; passed on to the handler set before ours\r\n") != std::string::npos &&
+              againLog.find("test: the game's handler was called, and the program goes on") != std::string::npos,
+          "the second set over a game handler: ours is back in front, the line comes once and passes on to the game's, and the program goes on");
+    if (again != 7) printf("     exit code %08lX\n%s", again, againLog.c_str());
+    DeleteFileW(g_logPath);
+    const DWORD still = Child(self, L"still");
+    const std::string stillLog = LogText();
+    Check(still == 0xC0000409 && stillLog.find("the invalid-parameter handler set at the start was still ours; abort's was still ours") != std::string::npos &&
+              count(stillLog, "crash: ") == 1 && stillLog.find("; the program ends with a fast fail (0xC0000409), as with no handler\r\n") != std::string::npos &&
+              stillLog.find("went on") == std::string::npos,
+          "the second set with ours still there: the one before stays (none), one line, then 0xC0000409");
+    if (still != 0xC0000409) printf("     exit code %08lX\n%s", still, stillLog.c_str());
     DeleteFileW(g_logPath);
     if (g_failed) printf("CRT TEST: %d FAILED\n", g_failed);
     return g_failed ? 1 : 0;

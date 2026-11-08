@@ -856,7 +856,8 @@ value and counts again with rolling drag off.</li>
 d-pad and A work it with the panel open.</li>
 <li>The last start's log is kept as <code>TirePressure.prev.log</code>.</li>
 <li><code>TirePressure.log</code> names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409). With
-Next Gen Gameplay in, its log names the game's and this one names the mod's own.</li>
+Next Gen Gameplay in, its log names the game's and this one names the mod's own. These handlers are set as the mod starts and again at the
+driven truck, after the game has set its own.</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>.
 Before, the mods never loaded there, and with that option the game would not start.</li>
 <li>With Spotter installed (its draw API, version 1 or later), the overlay draws through Spotter's frame hook instead of a hook of its

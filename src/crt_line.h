@@ -36,15 +36,59 @@ typedef SignalHandlerFn(__cdecl *SignalFn)(int, SignalHandlerFn);
 static const int kFrames = 16; // the runtime's own frames come first (_invalid_parameter, the function, its helpers)
 static const long kLines = 3;  // lines passed on to a handler that returns: a game that goes on after EINVAL may come here often
 
+// Who is inside a handler now, by thread id: a guard per thread with no thread-local storage. A handler set after
+// ours that passes on to the one it replaced calls ours again from inside ours (review M1); the guard sees that and
+// ours goes to the handler from the start instead, so two handlers never call each other forever. Eight threads at
+// once are kept; a ninth goes in unguarded, as before.
+static const int kInside = 8;
+struct Inside
+{
+    volatile long ids[kInside];
+};
+struct Guard
+{
+    Inside &in;
+    int slot;
+    bool again; // this thread was already inside: write no line, go to the start's handler
+    explicit Guard(Inside &inside) : in(inside), slot(-1), again(false)
+    {
+        const long me = (long)GetCurrentThreadId();
+        for (int i = 0; i < kInside; i++)
+            if (in.ids[i] == me)
+            {
+                again = true;
+                return;
+            }
+        for (int i = 0; i < kInside; i++)
+            if (InterlockedCompareExchange(&in.ids[i], me, 0) == 0)
+            {
+                slot = i;
+                return;
+            }
+    }
+    ~Guard()
+    {
+        if (slot >= 0) InterlockedExchange(&in.ids[slot], 0);
+    }
+    Guard(const Guard &) = delete;
+    Guard &operator=(const Guard &) = delete;
+};
+
 enum { kGame, kOwn, kRuntimes };
 struct Runtime
 {
     const char *name;
-    InvalidParameterFn before;   // the invalid-parameter handler set before ours, or none
-    SignalHandlerFn abortBefore; // SIGABRT's handler before ours (SIG_DFL when none)
+    InvalidParameterFn before;   // the invalid-parameter handler ours passes on to: the start's, or the one taken at the first truck
+    SignalHandlerFn abortBefore; // SIGABRT's handler ours passes on to (SIG_DFL when none)
+    InvalidParameterFn start;    // the invalid-parameter handler set before ours at the start, or none: where a second entry goes
+    SignalHandlerFn abortStart;  // SIGABRT's at the start
     bool set;
+    Inside inside, abortInside;
 };
-static Runtime g_rt[kRuntimes] = { { "ucrtbase.dll", nullptr, SIG_DFL, false }, { "the mod's own runtime", nullptr, SIG_DFL, false } };
+static Runtime g_rt[kRuntimes] = { { "ucrtbase.dll", nullptr, SIG_DFL, nullptr, SIG_DFL, false, {}, {} },
+                                   { "the mod's own runtime", nullptr, SIG_DFL, nullptr, SIG_DFL, false, {}, {} } };
+
+inline bool Chained(SignalHandlerFn fn) { return fn && fn != SIG_DFL && fn != SIG_IGN && fn != SIG_ERR; }
 static void (*g_out)(const char *) = nullptr;
 static volatile long g_lines = 0;
 
@@ -92,6 +136,14 @@ inline void Write(int k, const char *what, bool invalid, const wchar_t *expr, co
 
 template <int K> void __cdecl InvalidParameter(const wchar_t *expr, const wchar_t *fn, const wchar_t *file, unsigned line, uintptr_t reserved)
 {
+    Guard guard(g_rt[K].inside);
+    if (guard.again)
+    {
+        // called again from the handler ours passed on to: no line, the start's handler, or a return as with none
+        const InvalidParameterFn start = g_rt[K].start;
+        if (start && start != InvalidParameter<K>) start(expr, fn, file, line, reserved);
+        return;
+    }
     const InvalidParameterFn before = g_rt[K].before;
     Write(K, "an invalid parameter", true, expr, fn, file, line,
           before ? "passed on to the handler set before ours" : "the program ends with a fast fail (0xC0000409), as with no handler", before != nullptr);
@@ -105,8 +157,15 @@ template <int K> void __cdecl InvalidParameter(const wchar_t *expr, const wchar_
 
 template <int K> void __cdecl Abort(int sig)
 {
+    Guard guard(g_rt[K].abortInside);
+    if (guard.again)
+    {
+        const SignalHandlerFn start = g_rt[K].abortStart;
+        if (Chained(start) && start != Abort<K>) start(sig);
+        return;
+    }
     const SignalHandlerFn before = g_rt[K].abortBefore;
-    const bool chained = before && before != SIG_DFL && before != SIG_IGN && before != SIG_ERR;
+    const bool chained = Chained(before);
     Write(K, "abort (SIGABRT)", false, nullptr, nullptr, nullptr, 0,
           chained ? "passed on to the handler set before ours, then abort ends the program its own way" : "abort ends the program its own way", false);
     if (chained) before(sig);
@@ -125,9 +184,9 @@ inline void Set(void (*out)(const char *), bool game, wchar_t *said, size_t size
         const SignalFn sig = u ? (SignalFn)(void *)GetProcAddress(u, "signal") : nullptr;
         if (setIp && sig)
         {
-            g_rt[kGame].before = setIp(InvalidParameter<kGame>);
+            g_rt[kGame].before = g_rt[kGame].start = setIp(InvalidParameter<kGame>);
             const SignalHandlerFn was = sig(SIGABRT, Abort<kGame>);
-            g_rt[kGame].abortBefore = was == SIG_ERR ? SIG_DFL : was;
+            g_rt[kGame].abortBefore = g_rt[kGame].abortStart = was == SIG_ERR ? SIG_DFL : was;
             g_rt[kGame].set = true;
             _snwprintf_s(gameSaid, _TRUNCATE, L"ucrtbase.dll's%s", g_rt[kGame].before ? L" (the game's own handler stays, called after the line)" : L"");
         }
@@ -138,12 +197,53 @@ inline void Set(void (*out)(const char *), bool game, wchar_t *said, size_t size
         _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's (Gauges.asi has them)");
     if (!g_rt[kOwn].set)
     {
-        g_rt[kOwn].before = _set_invalid_parameter_handler(InvalidParameter<kOwn>);
+        g_rt[kOwn].before = g_rt[kOwn].start = _set_invalid_parameter_handler(InvalidParameter<kOwn>);
         const SignalHandlerFn was = signal(SIGABRT, Abort<kOwn>);
-        g_rt[kOwn].abortBefore = was == SIG_ERR ? SIG_DFL : was;
+        g_rt[kOwn].abortBefore = g_rt[kOwn].abortStart = was == SIG_ERR ? SIG_DFL : was;
         g_rt[kOwn].set = true;
     }
     if (said && size)
         _snwprintf_s(said, size, _TRUNCATE, L"the C runtime's invalid parameters and abort are named in this log: the mod's own runtime's handlers set, %s", gameSaid);
+}
+
+// The second set, at the first truck (BRIEF_crash_line_early.md). The game sets ucrtbase.dll's invalid-parameter
+// handler after the mod starts, and the runtime keeps only one, so ours is set there again. What comes back becomes
+// the handler ours passes on to, unless it is ours: then the one from the start stays, and ours never calls itself.
+// The start's is kept beside it: when the newer one passes on to ours again, the guard sends that call to the start's.
+// The mod's own runtime is the mod's alone, so its handlers stay. game as for Set, read again by the caller.
+inline void Again(void (*out)(const char *), bool game, wchar_t *said, size_t size)
+{
+    if (!g_out) g_out = out;
+    wchar_t gameSaid[240] = L"";
+    if (!game)
+        _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's (Gauges.asi has them)");
+    else if (!g_rt[kGame].set)
+    {
+        // not set at the start (ucrtbase.dll was not loaded then): the first set now
+        wchar_t first[320];
+        Set(out, true, first, sizeof first / sizeof first[0]);
+        _snwprintf_s(gameSaid, _TRUNCATE, L"%s", g_rt[kGame].set ? L"ucrtbase.dll's set for the first time" : L"not ucrtbase.dll's (still not loaded)");
+    }
+    else
+    {
+        const HMODULE u = GetModuleHandleW(L"ucrtbase.dll");
+        const SetInvalidParameterFn setIp = u ? (SetInvalidParameterFn)(void *)GetProcAddress(u, "_set_invalid_parameter_handler") : nullptr;
+        const SignalFn sig = u ? (SignalFn)(void *)GetProcAddress(u, "signal") : nullptr;
+        if (setIp && sig)
+        {
+            const InvalidParameterFn was = setIp(InvalidParameter<kGame>);
+            const bool ipOurs = was == InvalidParameter<kGame>;
+            if (!ipOurs) g_rt[kGame].before = was;
+            const SignalHandlerFn abortWas = sig(SIGABRT, Abort<kGame>);
+            const bool abortOurs = abortWas == Abort<kGame>;
+            if (!abortOurs) g_rt[kGame].abortBefore = abortWas == SIG_ERR ? SIG_DFL : abortWas;
+            _snwprintf_s(gameSaid, _TRUNCATE, L"ucrtbase.dll's set again: the invalid-parameter handler set at the start %s; abort's %s",
+                         ipOurs ? L"was still ours" : was ? L"had been replaced by the game's own, ours is back in front and passes on to it" : L"had been taken out, ours is back",
+                         abortOurs ? L"was still ours" : Chained(abortWas) ? L"had been replaced, ours is back in front and passes on to it" : L"had been taken out, ours is back");
+        }
+        else
+            _snwprintf_s(gameSaid, _TRUNCATE, L"not ucrtbase.dll's again (its two functions were not found)");
+    }
+    if (said && size) _snwprintf_s(said, size, _TRUNCATE, L"the C runtime's handlers at the first truck: %s; the mod's own runtime's stay", gameSaid);
 }
 } // namespace crtline

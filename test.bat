@@ -17,6 +17,7 @@ echo the game's log> out\test\proton_helper\AsiLoader.log
 out\test\proton_helper\crash_reporter.exe helper || set failed=1
 out\test\probe_test.exe || set failed=1
 out\test\crt_test.exe || set failed=1
+out\test\truck_id_test.exe || set failed=1
 out\test\overlay\overlay_test.exe || set failed=1
 if %failed%==1 (echo TESTS FAILED & exit /b 1)
 echo TESTS OK

@@ -19,5 +19,7 @@ out\test\probe_test.exe || set failed=1
 out\test\crt_test.exe || set failed=1
 out\test\truck_id_test.exe || set failed=1
 out\test\overlay\overlay_test.exe || set failed=1
+rem the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
+python -I test\player_texts.py src\panel.h src\panel.cpp src\panel_draw.h src\settings_page.h src\ng_overlay.cpp || set failed=1
 if %failed%==1 (echo TESTS FAILED & exit /b 1)
 echo TESTS OK

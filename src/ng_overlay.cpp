@@ -962,8 +962,8 @@ static void GraphicsPage()
     if (!api) return;
     // the keys are left to the DLL's own status lines below: the API tells no Graphics version from another (the
     // Reviewer's must on BRIEF_overlay_graphics_tab_text.md)
-    ImGui::TextWrapped("These switch Next Gen Graphics' effects on and off while you play. What the game starts with is set in SnowRunnerShadows.ini. "
-                       "Its own lines below say which keys work beside this tab.");
+    ImGui::TextWrapped("These switch the Next Gen Graphics effects on and off while you play. What the game starts with is set in SnowRunnerShadows.ini. "
+                       "The lines of Next Gen Graphics below say which keys work beside this tab.");
     ImGui::Spacing();
     for (int i = 0; i < api->count; i++)
     {

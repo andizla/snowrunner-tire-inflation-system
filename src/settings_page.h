@@ -108,8 +108,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         if (live.room >= 0.0f && live.sink > 0.0f)
             ImGui::Text("Its contact sinks %.1f cm into the ground; the game draws it up to %.1f cm flatter.", live.sink * 100.0f, live.room * 100.0f);
         else if (live.room >= 0.0f) ImGui::Text("The game draws it up to %.1f cm flatter.", live.room * 100.0f);
-        ImGui::Text("Outside %.0f C (%s): the tires hold %.0f%% of Normal's pressure, %.0f%% once the air's temperature counts.", live.outsideC,
-                    live.outsideFrom ? "another mod's, by map and hour" : "AmbientC", live.pressure * 100.0f, live.pressureAir * 100.0f);
+        ImGui::Text("Outside %.0f C (%s): the tires hold %.0f%% of the Normal pressure, %.0f%% once the air temperature counts.", live.outsideC,
+                    live.outsideFrom ? "from another mod, by map and hour" : "AmbientC", live.pressure * 100.0f, live.pressureAir * 100.0f);
     }
     else ImGui::TextDisabled("No truck driven.");
 
@@ -122,7 +122,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             "While it is on, everything below but the outside temperature, the controls, the panel and the sounds is set by "
             "it and greyed out; TirePressure.ini keeps your own numbers for when it is off.");
     if (ImGui::Checkbox("Globalhacker insanity mode", &s.insaneMode)) { if (s.insaneMode) s.hardMode = false; act |= kPageChanged; }
-    PageTip("Built from the player Globalhacker's own settings, and harder than real tires: Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h and are worn out "
+    PageTip("Built from the settings of the player Globalhacker, and harder than real tires: Low grips x2 on dirt and x0.4 on asphalt, soft tires wear from 15 km/h and are worn out "
             "within seconds a little faster, a change takes 25 s and only while the truck stands, flattened tires lose the "
             "speed the smaller wheel loses, no Increased mode, and the vanilla balance at 2 puts tires that out-grip every "
             "vanilla tire below it, and rolling drag is on. Greys out the same settings as hard mode.");
@@ -134,13 +134,13 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     PageTip("The air in the tires follows the outside temperature (the gas law, Normal taken as 35 psi): cold air is less "
             "pressure, so the tires run softer, flatter and with more grip on soft ground, and Low is as soft as they go; "
             "cold rubber grips less, most on asphalt and rock; warm air is a little more pressure, warm rubber a little more "
-            "grip on asphalt; in the heat soft tires wear from lower speeds. The modes' numbers are for 15 C.");
+            "grip on asphalt; in the heat soft tires wear from lower speeds. The numbers of the modes are for 15 C.");
     changed(ImGui::Checkbox("Rolling drag", &e.rollingDrag));
     PageTip("Tires roll harder on soft ground and when aired down. On by default.");
     ImGui::EndDisabled();
     changed(ImGui::Checkbox("Stiff base", &s.stiffBase));
-    PageTip("Every tire starts at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode. "
-            "A tire already stiffer keeps its own. Off: each tire's own softness. On by default.");
+    PageTip("Every tire starts at least as stiff as the Stiff tires of the game, so a soft tire is no flatter than a Stiff one in any mode. "
+            "A tire already stiffer keeps its own. Off: each tire keeps its own softness. On by default.");
     changed(ImGui::Checkbox("Each truck keeps its own pressure", &s.perTruck));
     PageTip("The mode is saved per owned truck in TirePressure.trucks.ini. It comes back the moment you drive that truck "
             "again, without a sound or a wait, across map loads and game starts. A truck not driven before starts in the "
@@ -155,8 +155,8 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
         if (ImGui::Checkbox("This truck only", &only)) act |= only ? kPageTruckOnly : kPageTruckKind;
         ImGui::EndDisabled();
         ImGui::Unindent();
-        PageTip("Ticked (as it starts): a mode you choose is this truck's alone, kept by the game's id for it. Unticked: this "
-                "truck takes its kind's mode (its own goes up to the kind where the kind has none yet), a mode you choose goes to the kind, and its own is kept "
+        PageTip("Ticked (as it starts): a mode you choose is for this truck alone, kept by the id the game gives it. Unticked: this "
+                "truck takes the mode of its kind (its own goes up to the kind where the kind has none yet), a mode you choose goes to the kind, and its own is kept "
                 "for when you tick it again. "
                 "Greyed out while no truck is driven or the game gives no id for it.");
     }
@@ -213,10 +213,10 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             { kModeRock, "Rock grip", "x%.2f", "RockFriction: grip where the ground is rock or stone.", 0.01f },
             { kModeAsphalt, "Asphalt grip", "x%.2f", "BodyFrictionAsphalt: grip on paved ground (asphalt roads, concrete, pavers, bridges).", 0.01f },
             { kModeMud, "Mud grip", "x%.2f", "SubstanceFriction: grip in mud.", 0.01f },
-            { kModeOffset, "Flattening", "%.3f m", "AdditionalRadiusOffset: metres off the tire's radius. The game only draws a tire so flat (see the "
-              "truck's line above): on a tire with less room than the deepest mode asks for, every mode shrinks alike. A flatter tire also rolls "
+            { kModeOffset, "Flattening", "%.3f m", "AdditionalRadiusOffset: metres off the tire radius. The game only draws a tire so flat (see the "
+              "line for the truck above): on a tire with less room than the deepest mode asks for, every mode shrinks alike. A flatter tire also rolls "
               "slower in every gear.", 0.001f },
-            { kModeFuel, "Fuel use", "x%.2f", "FuelConsumptionModifier: counts while the truck moves. x1 while Rolling drag is on, as the drag charges the fuel itself; the row's value counts with it off.", 0.01f },
+            { kModeFuel, "Fuel use", "x%.2f", "FuelConsumptionModifier: counts while the truck moves. x1 while Rolling drag is on, as the drag charges the fuel itself; the value in the row counts with it off.", 0.01f },
             { kModeSteering, "Steering speed", "x%.2f", "SteeringSpeedModifier.", 0.01f } };
         for (int r = 0; r < 9; r++)
         {
@@ -243,7 +243,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     // the fuel while rolling drag is in force is 1 (review F1 of BRIEF_defaults_on.md); the rows stay editable for when it is off
     if (e.rollingDrag || e.hardMode || e.insaneMode) ImGui::TextDisabled("Fuel use: x1 while Rolling drag is on.");
     changed(ImGui::Checkbox("Flattened tires roll like real ones", &e.rollingRadius));
-    PageTip("A real tire's belt keeps its length, so a flattened tire rolls nearly as far per turn as before. In the game the "
+    PageTip("The belt of a real tire keeps its length, so a flattened tire rolls nearly as far per turn as before. In the game the "
             "wheel itself shrinks, which takes about three times as much speed off the truck. With this on the gears make up "
             "the difference.");
 
@@ -322,7 +322,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     PageLabel("Auto confirm", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##confirm", &s.confirmSeconds, 0.0f, 30.0f, s.confirmSeconds > 0.0f ? "%.0f s" : "never", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("Without input for this long the panel's choice applies itself. Never: confirm with the pad.");
+    PageTip("Without input for this long the choice on the panel applies itself. Never: confirm with the pad.");
     ImGui::EndDisabled();
     PageLabel("Pad throttle curve", labelX);
     ImGui::SetNextItemWidth(w);

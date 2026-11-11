@@ -69,6 +69,7 @@ static float g_wornGrip = kWornGripDefault / 100.0f; // ini WornGrip as a share:
 static int g_key = VK_F3;
 // the panel (panel.cpp): UI=0 turns it off (F3 then cycles the modes directly, as when the overlay cannot start)
 static bool g_uiWanted = true, g_ui = false, g_padOk = false, g_overlayOk = false;
+static bool g_overlayDraws = false; // the overlay drew a frame within the last second and is not broken (PanelDrawn); the mod's thread keeps it
 static int g_confirmMs = (int)(kConfirmDefault * 1000.0f); // the panel's selection confirms itself after this long without input, 0 = never
 static uint32_t g_padOpen = 0, g_padLower = 0, g_padRaise = 0, g_padConfirm = 0, g_padCancel = 0;
 static HMODULE g_self = nullptr;
@@ -434,6 +435,15 @@ static void ReadIni(TpSettings &s)
             s.mode[m][k] = min(kModeRange[k].hi, max(kModeRange[k].lo, IniFloat(kModeSections[m], Wide(kModeKeys[k]), s.mode[m][k], ini)));
 }
 
+// The panel is in use where it is wanted, the overlay started and the overlay draws; else the key cycles the modes
+// and the filter hides none of the pad's buttons from the game.
+static void UiSet()
+{
+    g_ui = g_uiWanted && g_overlayOk && g_overlayDraws;
+    if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
+    else PadMasks(0, 0, 0, 0, 0);
+}
+
 // Puts settings in force: the key, the panel, the pad bindings, the modes with the base grip in them.
 static void ApplySettings(const TpSettings &in, bool log)
 {
@@ -449,7 +459,6 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_seconds = s.seconds;
     g_soundVolume = s.soundVolume / 100.0f * kSoundFull;
     g_uiWanted = s.ui;
-    g_ui = g_uiWanted && g_overlayOk;
     g_panelScale = s.uiScale;
     g_confirmMs = (int)(s.confirmSeconds * 1000.0f + 0.5f);
     g_panelConfirmMs = g_confirmMs;
@@ -457,8 +466,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     for (int i = 0; i < 5; i++) *pads[i] = PadParse(s.pad[i]);
     g_padLower = PadStepMask(g_padLower);
     g_padRaise = PadStepMask(g_padRaise);
-    if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
-    else PadMasks(0, 0, 0, 0, 0);
+    UiSet();
     PadCurves(s.padCurve[0], s.padCurve[1]);
     KeyName(g_key, g_panelKeyName, sizeof g_panelKeyName);
     g_balanceOn = s.vanillaBalance;
@@ -2595,9 +2603,11 @@ static DWORD WINAPI Run(void *)
     else Log(L"state for other mods: not published (the shared memory could not be made)");
     if (!SoundStart(g_dir)) Log(L"sound: none, as its thread did not start");
     g_now = FactorsAt(g_pressure); // with a base grip, Normal is not the stock values: the first wheels get it straight away
-    Log(L"panel: %s", g_ui ? L"drawn by the mod's own overlay" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
+    Log(L"panel: %s", g_uiWanted && g_overlayOk ? L"drawn by the mod's own overlay" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly" : L"off (UI=0): the key cycles the modes directly");
     if (g_overlayOk) Log(L"settings: the Tire Inflation tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini)");
     bool down = false, chainSeen = false, moving = false, panelOpen = false;
+    bool drawBroken = false, drawSaid = false; // the overlay's frames (PanelDraws): why it draws none, and the line said once a session
+    unsigned long long drawLast = 0, drawNow = 0;
     int sel = 0;
     uint32_t padPrev = 0;
     GameMenuGate gameMenu = {}; // the game's function menu: the panel's controls wait in it
@@ -2623,6 +2633,20 @@ static DWORD WINAPI Run(void *)
             {
                 g_padOk = true;
                 Log(L"pad: %d more of the game's XInputGetState pointers go through the panel's filter", n);
+            }
+        }
+        // The panel only while the overlay draws: a frame within the last second and no fault (PanelDrawn). Where the
+        // overlay started and draws nothing, or stopped, the key and the pad are as when it did not start, and the
+        // filter's masks go so no button stays hidden for a panel nobody sees. A map load can hold the frames for
+        // longer than that, so this runs in plain play and is back with the next frame.
+        if (g_overlayOk)
+        {
+            drawNow = GetTickCount64();
+            const bool draws = PanelDraws(drawNow, &drawBroken, &drawLast);
+            if (draws != g_overlayDraws)
+            {
+                g_overlayDraws = draws;
+                UiSet();
             }
         }
         // the settings page: edits count on this pass (an edited factor counts at once) and go
@@ -2920,13 +2944,30 @@ static DWORD WINAPI Run(void *)
         }
         // the key steps the pressure down, from Low round to the highest mode in use
         auto stepDown = [](int p) { return p > kLow ? p - 1 : g_modeCount - 1; };
+        const bool panelWasOpen = panelOpen;
         if (!g_ui)
         {
             // the panel switched off while it was open (the settings page, or the ini read again): it closes, unchanged
-            if (panelOpen) { panelOpen = false; Log(L"panel: closed without a change (switched off)"); }
+            const bool noFrames = g_uiWanted && g_overlayOk; // wanted and started, so it is the overlay that draws nothing
+            if (panelOpen)
+            {
+                panelOpen = false;
+                if (!noFrames) Log(L"panel: closed without a change (switched off)");
+            }
             g_view.open = 0;
             g_view.confirmMs = -1;
             if (pressed) chosen = stepDown(g_mode);
+            // once a session, at the first panel closed so or the first press that went past it
+            if (noFrames && !drawSaid && (pressed || panelWasOpen))
+            {
+                drawSaid = true;
+                wchar_t why[80];
+                if (drawBroken) wcscpy_s(why, L"it stopped after a fault");
+                else if (!drawLast) wcscpy_s(why, L"it has drawn none yet");
+                else swprintf_s(why, L"its last one was %llu ms ago", drawNow - drawLast);
+                Log(L"panel: the overlay draws no frame (%s), so %s and the pad's buttons are the game's until it draws again. Said once a session",
+                    why, panelWasOpen ? L"the open panel closed without a change" : L"the key cycles the modes directly");
+            }
         }
         else
         {
@@ -3565,6 +3606,41 @@ static bool OutsideTextTest()
     const bool ok = source && text && tip && withFlag && without && stale && noOut;
     printf("%s outside temperature: the tab says by map and hour only for a fresh block with its by-map flag, from another mod for a fresh one "
            "without it, AmbientC for none or a stale one; the slider tip the same way; the flags come from the copy the temperature came from\n",
+           ok ? "ok  " : "FAIL");
+    return ok;
+}
+
+// The panel is there only while the overlay draws (115, part 3), by times handed in.
+static bool PanelDrawnTest()
+{
+    const unsigned long long t = 500000;
+    const bool never = !PanelDrawn(true, false, 0, t);
+    const bool lately = PanelDrawn(true, false, t - 500, t) && PanelDrawn(true, false, t - kPanelFrameMs, t) && PanelDrawn(true, false, t + 20, t);
+    const bool longAgo = !PanelDrawn(true, false, t - 1500, t) && !PanelDrawn(true, false, t - kPanelFrameMs - 1, t);
+    const bool broken = !PanelDrawn(true, true, t - 500, t) && !PanelDrawn(true, true, t, t);
+    const bool notStarted = !PanelDrawn(false, false, t - 500, t);
+    // frames, a gap of four seconds (a map load), frames again
+    const bool gap = PanelDrawn(true, false, t, t + 50) && !PanelDrawn(true, false, t, t + 4000) && PanelDrawn(true, false, t + 4010, t + 4050);
+    // the masks follow it: with the overlay drawing the open binding is hidden from the game, without it nothing is
+    const bool uiWas = g_uiWanted, okWas = g_overlayOk, drawsWas = g_overlayDraws, inUseWas = g_ui;
+    g_uiWanted = true;
+    g_overlayOk = true;
+    g_overlayDraws = false;
+    UiSet();
+    const bool off = !g_ui;
+    g_overlayDraws = true;
+    UiSet();
+    const bool on = g_ui;
+    g_overlayOk = false;
+    UiSet();
+    const bool noStart = !g_ui;
+    g_uiWanted = uiWas;
+    g_overlayOk = okWas;
+    g_overlayDraws = drawsWas;
+    UiSet();
+    const bool ok = never && lately && longAgo && broken && notStarted && gap && off && on && noStart && g_ui == inUseWas;
+    printf("%s panel: there only while the overlay draws: not before its first frame, with one 0.5 s ago, not with one 1.5 s ago, not once broken, "
+           "again with frames after a gap; the key and the pad follow it\n",
            ok ? "ok  " : "FAIL");
     return ok;
 }
@@ -5490,6 +5566,7 @@ int wmain(int argc, wchar_t **argv)
     if (!PadCurveTest()) return 1;
     if (!PadRuleTest()) return 1;
     if (!OutsideTextTest()) return 1;
+    if (!PanelDrawnTest()) return 1;
     if (!GameMenuTest()) return 1;
     if (!CrashLogTest()) return 1;
     if (!WornGripTest()) return 1;

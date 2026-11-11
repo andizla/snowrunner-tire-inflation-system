@@ -223,6 +223,15 @@ void PadCurves(float throttle, float brake)
 
 uint8_t PadCurved(uint8_t value, int trigger) { return g_padMap[trigger & 1][value]; }
 
+bool PanelDraws(unsigned long long now, bool *broken, unsigned long long *lastFrame)
+{
+    const bool b = NgOverlayBroken();
+    const unsigned long long last = NgLastFrameDrawn();
+    if (broken) *broken = b;
+    if (lastFrame) *lastFrame = last;
+    return PanelDrawn(true, b, last, now);
+}
+
 void PadMasks(uint32_t open, uint32_t lower, uint32_t raise, uint32_t confirm, uint32_t cancel)
 {
     // only the open binding is hidden while the panel is closed: the game keeps every other button then (PadHide)

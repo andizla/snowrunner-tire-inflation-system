@@ -264,6 +264,18 @@ inline const char *OutsideSliderTip(int from)
 }
 void LiveGet(TpLive &out);
 
+// The panel can be seen only while the overlay draws: started, not broken, and a frame drawn through within
+// kPanelFrameMs. Where it started and draws nothing (or stopped) the key and the pad fall back as when it did not
+// start, so no panel is open unseen with the pad's buttons hidden from the game. lastFrame: the tick of the last
+// frame drawn, 0 before the first.
+static const unsigned long long kPanelFrameMs = 1000;
+inline bool PanelDrawn(bool started, bool broken, unsigned long long lastFrame, unsigned long long now)
+{
+    return started && !broken && lastFrame != 0 && (long long)(now - lastFrame) <= (long long)kPanelFrameMs;
+}
+// The same of the overlay as it is now (the one place the mod asks the overlay). broken and lastFrame say why.
+bool PanelDraws(unsigned long long now, bool *broken = nullptr, unsigned long long *lastFrame = nullptr);
+
 // Gamepad. The game loads XInputGetState itself and keeps it in more than one pointer; PadInit points every copy at a
 // filter that hides the panel's buttons from the game (PadHide has the rule). Called again it catches copies made
 // since. Without the filter (no pointer found) the pad still works the panel, but the game sees the presses too.

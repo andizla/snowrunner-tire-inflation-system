@@ -2,7 +2,8 @@
 setlocal EnableExtensions
 rem GrabDumps.bat: puts what a crash report for the Next Gen mods needs into one zip beside this file.
 rem It goes in the game's Bin folder (next to SnowRunner.exe). Run it after a crash, before starting the game again:
-rem the game's crash dump is overwritten by the next crash, and the logs by the next start.
+rem the game's crash dump is overwritten by the next crash, and the logs by the next start. Tire Inflation keeps the last
+rem start's log once, as TirePressure.prev.log, and the start after that overwrites it.
 rem Paths are never used inside parentheses or unquoted: "Program Files (x86)" would end a block early, a "&" split a line.
 
 cd /d "%~dp0"
@@ -20,7 +21,7 @@ rem the game's crash dump
 if exist "%LOCALAPPDATA%\Saber\CrashDump.dmp" copy /y "%LOCALAPPDATA%\Saber\CrashDump.dmp" "%T%\" >nul
 
 rem the mods' logs and settings, the loader's log, ReShade's log and other mods' logs named *_LOG.txt
-for %%f in (AsiLoader.log Gauges.log TirePressure.log ReShade.log *_LOG.txt Gauges.ini TirePressure.ini NextGen.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
+for %%f in (AsiLoader.log Gauges.log TirePressure.log TirePressure.prev.log ReShade.log *_LOG.txt Gauges.ini TirePressure.ini TirePressure.trucks.ini NextGen.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
 
 rem Gauges keeps each earlier start's log in Gauges\logs: the newest 3
 set /a N=0

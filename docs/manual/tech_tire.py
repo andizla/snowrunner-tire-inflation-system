@@ -386,7 +386,9 @@ torque of <i>I</i>·<i>c</i>·ω, and the tire's grip passes it to the truck. A 
 torque Crr·<i>N</i>·<i>r</i>. So (<code>rolling_drag.h</code>):</p>
 {eq('<i>c</i> = <i>c</i><sub>stock</sub> + Crr · <i>f</i>(<i>p</i>) · <i>N</i> · <i>r</i> / (<i>I</i> · max(|ω|, 2 m/s / <i>r</i>)),    <i>f</i>(<i>p</i>) = (<i>p</i> / <i>p</i><sub>Normal</sub>)<sup>−0.5</sup>,    <i>N</i> = <i>M</i> <i>g</i> / <i>n</i>')}
 <p class="where"><i>c</i><sub>stock</sub> is wheel +0xAC, the game's own figure, never the body's word read back. <i>r</i> is
-wheel +0x94. <i>I</i> is the wheel body's inertia about its axle: 1 over body +0x220's x, y or z, the one that stands apart
+the radius the wheel rolls on: its collision cylinder's (shape +0x28), which the mod makes smaller with the pressure, where it lies
+within 0.5 to 1.25 of wheel +0x94, else wheel +0x94 (<code>RdRollRadius</code>). With wheel +0x94 the force at the ground came out
+above Crr·<i>N</i> by the one over the other, 13 to 18 percent at Low. <i>I</i> is the wheel body's inertia about its axle: 1 over body +0x220's x, y or z, the one that stands apart
 (<code>RollAxle</code>). ω is the body's angular velocity (+0x240) along that axle's column of the rotation (+0x170). <i>M</i> is
 the mass the physics moves: model +0x784, the game's own sum of the truck's bodies but the wheels (the chassis, a cab on a hinge,
 an antenna, the steering pivot; the chassis's body alone misses the cab), and every wheel body's 1/w (body +0x22C). In <i>N</i>
@@ -407,13 +409,15 @@ last (the game wrote it: compared as a word, never taken as a stock), or when <i
 last word itself. A broken wheel (model +0x328) keeps the game's own. A wheel off the ground, the truck left for another and the
 setting off get the stock back, where the body still holds the mod's word. While the probe (<code>ProbeRoll</code>) holds a
 damping of its own, the drag waits. Without the truck update hook it stays off, with a log line.</p>
-<p><b>The log.</b> A line per truck with the chassis body's 1/w, the files' sum of the bodies (model +0x784), the wheels, the gravity factor, <i>N</i> and the mass, the first wheel's <i>I</i>, <i>r</i> and stock damping, the
+<p><b>The log.</b> A line per truck with the chassis body's 1/w, the files' sum of the bodies (model +0x784), the wheels, the gravity factor, <i>N</i> and the mass, the first wheel's <i>I</i>, <i>r</i> (with wheel +0x94 beside it) and stock damping, the
 Crr and the pressure factor. With <code>ProbeRoll=1</code> also one a second while the truck moves: each wheel's ground,
 Crr × <i>f</i>, the <i>c</i> in its body, its spin, and the torque <i>I</i>·(<i>c</i> − <i>c</i><sub>stock</sub>)·ω against
 Crr·<i>f</i>·<i>N</i>·<i>r</i>.</p>
 <p>The probe's coast-downs showed that body +0x216 reaches the truck as <i>I</i>·<i>c</i>·ω, for torques well above any rolling
-drag writes. Fuel: the fuel factors of hard mode and the insanity mode are 1, as the engine burns more against the drag by itself. The default modes keep
-theirs until a drive says otherwise.</p>
+drag writes. Fuel: while rolling drag is on and acts on the truck, every mode's fuel factor is 1, as the engine burns more against the drag by itself.
+The drag does not act on a truck whose mass was not read, whose wheel bodies show no axle, or of whose wheels none could be reckoned
+(<code>RdActsWhy</code>). Such a truck keeps its mode's Fuel use row, and the log says so once a truck with the first wheel's inertia
+about x, y and z. The fuel is written on the mod's thread and the drag reckons in the truck update, so the answer is one pass old.</p>
 '''
 
 
@@ -829,7 +833,8 @@ def s_limits():
 <ul><li>Made on the Steam build of 22 July 2026. The Epic build has not been tested; the Game Pass build is addressed by the 1.2.1
 search but not confirmed. After a game update the mod may stand down until it is updated.</li>
 <li>Only the driven truck's wheels are changed; trailers keep their tires. Co-op has not been tested.</li>
-<li>Should the overlay not start (no swap chain found; the log says why) there is no panel or tab, the key cycles the modes and the pad is not filtered. Without a sound device the
+<li>Should the overlay not start (no swap chain found; the log says why) there is no panel or tab, the key cycles the modes and the pad is not filtered. The same holds
+while the overlay started and draws no frame: an open panel closes without a change, and the log says so once a session. Without a sound device the
 sounds are off.</li>
 <li>On the by-hand damage path the game's damage display follows at the next damage the game deals itself.</li>
 <li>The ground grip list only fills once the truck moves, so the balance waits for the first metres.</li>

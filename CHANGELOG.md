@@ -7,6 +7,15 @@
 - The C runtime's handlers behind the lines in `TirePressure.log` are set as the mod starts, so a stop at the game's boot is named too. Before, they were set only at the driven truck. They are set again there, after the game has set its own. A handler set in between that passes on to the mod's never calls it in a loop: the second call goes to the handler from the start, or ends there.
 - A truck taken out of the warehouse gets its own mode back. The game gives it a new id there. Where exactly one waiting truck of its kind has the same tire on its first wheel, its mode is copied to the new id. Waiting means not driven this start. The old section stays, marked `How=warehouse`, and is never dropped. A truck bought new with the same tire as one waiting truck gets a copy of its mode too, and the other keeps its own. Two such trucks or none leave it on its kind's mode. `[Seen]` in `TirePressure.trucks.ini` lists every truck driven by its id, so a truck that never had a mode of its own never takes another's. A truck's own section now holds `Tire=`. Files from before read as they did, and nothing matches until a truck has been driven once with this version. `TirePressure.log` has one line a drive, in the same words as Next Gen Gameplay's.
 - The take-over, the marks and the match are in `truck_id.h`, the same file as Next Gen Gameplay's.
+- Rolling drag reckons with the radius the wheel rolls on, its collision cylinder, which the mod makes smaller with the pressure. Before, it took the full radius of the wheel, so the drag at the ground came out above Crr × the weight: by 13 to 18 percent at Low and about 2 percent at Normal. The drag at Low is that much lighter now and matches the tables.
+- A truck that rolling drag cannot reckon keeps the Fuel use row of its mode. That is a truck whose mass, wheel axle or wheels the mod cannot read. Before, its fuel factor went to 1 with no drag to make up for it. The log names the truck and the reason once.
+- The long tips of the tab wrap inside the tip box.
+- The tab says "by map and hour" for the outside temperature only where the block of the other mod marks it as read from the map. A block without that mark reads "from another mod".
+- The panel opens only while the overlay draws. Where the overlay started and draws nothing, the key cycles the modes directly and the pad buttons stay with the game, as when the overlay did not start. The log says so once a session.
+- The start line in the log says that the pad buttons and the trigger curves need the overlay.
+- The two source files of the overlay are the same as in Next Gen Gameplay again.
+- A fresh `TirePressure.trucks.ini` gets its note at the head whichever write comes first. Before, a new install wrote `[Seen]` first and the file came out without the note.
+- `GrabDumps.bat` also takes `TirePressure.prev.log` and `TirePressure.trucks.ini`.
 
 ## [1.3.4]
 

@@ -219,7 +219,8 @@ TIRE = f'''
 <li>The weight is the truck's as the game's physics has it, its gravity included. Cargo and a trailer are not counted.</li>
 <li>The drag goes in through each wheel's own damping, the way the game drags a flat tire. It acts with the foot off too. A broken wheel keeps the game's own.</li>
 <li>It needs the game's truck update, as tire damage on the game's thread does. On a build where the mod does not find it, rolling drag stays off and the log says so.</li>
-<li>Fuel: the engine works harder against the drag and burns more by itself. So while rolling drag is on, every mode's fuel factor is 1, the default modes' too. Their Fuel use rows keep their values, which count again with rolling drag off.</li></ul>
+<li>Fuel: the engine works harder against the drag and burns more by itself. So while rolling drag is on, every mode's fuel factor is 1, the default modes' too. Their Fuel use rows keep their values, which count again with rolling drag off.</li>
+<li>A truck whose weight or wheels the mod cannot read gets no drag. It keeps its mode's Fuel use row, and the log names it once.</li></ul>
 
 <h2>12. Tire damage</h2>
 <p>While the truck is faster than the mode's first speed, a timer runs. Each time it passes the mode's interval, every wheel on the ground takes damage: the least at the first speed, rising to the most at the second speed and above. Below the first speed for a full second, the timer starts over. Increased and Normal never wear.</p>
@@ -323,7 +324,9 @@ TIRE = f'''
  ['state published for other mods in Local\\SnowRunnerTirePressure.State...', 'The block for Gauges is there.'],
  ['wheel ... worn out: 10 percent of its grip until it is repaired', 'A tire wore out.'],
  ['key pressed, no driven truck found', 'The key was pressed outside a truck.'],
- ['panel: the overlay did not start: the key cycles the modes directly', 'The overlay found no swap chain; the overlay: lines say why.']], 'Table 10. Lines worth knowing')}
+ ['panel: the overlay did not start: the key cycles the modes directly', 'The overlay found no swap chain; the overlay: lines say why. The pad does nothing in the mod then: the panel and the trigger curves need the overlay.'],
+ ['panel: the overlay draws no frame', 'The overlay started and draws nothing. The key cycles the modes directly and the pad\'s buttons are the game\'s until it draws again. Said once a session.'],
+ ['rolling drag: does not act on truck', 'The mod could not read that truck\'s mass, wheel axle or wheels. The truck gets no drag and keeps its mode\'s Fuel use row.']], 'Table 10. Lines worth knowing')}
 
 <!--TECH-->
 <h2>Licence and credits</h2>

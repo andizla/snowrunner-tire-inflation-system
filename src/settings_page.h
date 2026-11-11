@@ -38,9 +38,16 @@ static int PageVirtualKey(int k)
     }
 }
 
+// A tip, wrapped at kPageTipWrap font heights: a plain SetTooltip draws one line and the screen edge cuts a long one.
+static const float kPageTipWrap = 35.0f;
 static void PageTip(const char *text)
 {
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) return;
+    if (!ImGui::BeginTooltip()) return;
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * kPageTipWrap);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
 }
 
 // A label in the left column, the widget after it.

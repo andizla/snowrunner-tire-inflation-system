@@ -70,6 +70,52 @@ inline float RdDamping(float stock, float crr, float factor, float n, float r, f
     return kRdMost;
 }
 
+// Whether the drag acts on a truck at all, by what does not change with the ground (a jump or a truck on its side
+// must not read as a truck the drag cannot reckon): the mass read, and at least one wheel that is read, not broken
+// and has its axle told from its inertia, in contact or not. told: the wheels with an axle told; reckoned: those of
+// them read and not broken. Where it does not act the wheels get no drag, so the fuel must not be left to it.
+enum RdWhy { kRdActs, kRdNoMass, kRdNoAxle, kRdNoWheel };
+inline RdWhy RdActsWhy(bool massRead, int told, int reckoned)
+{
+    return !massRead ? kRdNoMass : reckoned > 0 ? kRdActs : told > 0 ? kRdNoWheel : kRdNoAxle;
+}
+
+// The fuel's side of that answer, kept on the mod's thread. The truck update leaves the answer with its vehicle; the
+// mod's thread takes it only for the vehicle it serves (have). No answer yet for a vehicle: the drag is taken to act,
+// so a good truck never pays the fuel factor and the drag at the start. No frame for a while: the last answer for
+// that vehicle holds. A truck the drag does not act on gets one line, once a session, and one more, once, if it
+// changes over later (the mass read late). Only such trucks are kept, the last kRdFuelTrucks of them.
+enum RdSay { kRdSayNothing, kRdSayNot, kRdSayActs };
+struct RdFuelTruck { uint64_t vehicle; bool acts, notSaid, actsSaid; };
+static const int kRdFuelTrucks = 32;
+struct RdFuelState { RdFuelTruck truck[kRdFuelTrucks]; int count, next; };
+inline bool RdFuelTake(RdFuelState &s, uint64_t vehicle, bool have, bool acts, RdSay *say = nullptr)
+{
+    if (say) *say = kRdSayNothing;
+    RdFuelTruck *t = nullptr;
+    for (int i = 0; i < s.count; i++)
+        if (s.truck[i].vehicle == vehicle) t = &s.truck[i];
+    if (!have) return t ? t->acts : true;
+    if (!t)
+    {
+        if (acts) return true; // a good truck with nothing said needs no record
+        t = &s.truck[s.count < kRdFuelTrucks ? s.count++ : s.next++ % kRdFuelTrucks];
+        *t = { vehicle, true, false, false };
+    }
+    t->acts = acts;
+    if (!acts && !t->notSaid)
+    {
+        t->notSaid = true;
+        if (say) *say = kRdSayNot;
+    }
+    else if (acts && t->notSaid && !t->actsSaid)
+    {
+        t->actsSaid = true;
+        if (say) *say = kRdSayActs;
+    }
+    return acts;
+}
+
 // The mod's own record of a wheel: the wheel it was written for, the word written last and the c it stood for.
 struct RdRecord { uint64_t wheel; uint16_t word; float c; };
 

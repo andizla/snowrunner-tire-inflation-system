@@ -1550,6 +1550,7 @@ static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
 struct DragWheelStat { int index; RdGround ground; float crr, r, wheelR, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written; }; // r: the one reckoned with (DragRadius), wheelR: wheel + 0x94
 struct DragStats { uint64_t vehicle; float mass, chassis, files, gravity, gravityRead, factor, n; int count, grounded, capped; LONG frames, writes, cappedFrames;
+                   RdWhy why; int told, reckoned; float inertia3[3]; // whether the drag acts on the truck (RdActsWhy), and the first wheel's inertia about x, y, z
                    DragWheelStat w[kRollWheelsMost]; };
 static SRWLOCK g_dragLock = SRWLOCK_INIT;
 static DragStats g_dragStats = {}; // under g_dragLock: the last frame's, and the counts since the truck came
@@ -1639,7 +1640,8 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         weight += wheelMass[i] * wheelGravity[i];
         if (Read(wheels[i].wheel + 0x1A4, contact[i]) && contact[i]) grounded++;
     }
-    const bool massOk = modelOk && mass < 1.0e6f && grounded > 0;
+    const bool massRead = modelOk && mass < 1.0e6f, massOk = massRead && grounded > 0;
+    int told = 0, reckoned = 0; // wheels with an axle told, and those of them read and not broken: in contact or not
     const float n = massOk ? weight * kRdG / (float)grounded : 0.0f;
     if (stats)
     {
@@ -1672,6 +1674,8 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         const bool read = Read(w.model + 0x328, broken) && Read(w.wheel + 0x1C8, flags) && Read(w.wheel + 0x1C0, ice) && Read(w.wheel + 0x94, r) &&
                           Read(w.wheel + 0xAC, stock) && Read(w.body + 0x216, word) && stock >= 0.0f && stock < 1000.0f;
         const int axle = bodies[i].ok ? RollAxle(bodies[i].inv) : -1;
+        if (axle >= 0) told++;
+        if (axle >= 0 && read && !broken) reckoned++;
         st.wheelR = r;
         if (read) r = DragRadius(w, r); // the one r from here on: the torque's arm, the floor's spin and the stats
         st.broken = broken != 0;
@@ -1714,6 +1718,14 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         }
         kept.push_back({ w, rec });
         if (stats) stats->w[i] = st;
+    }
+    if (stats)
+    {
+        // the answer for the fuel (the mod's thread, DragFuelActs), left with the vehicle as the rest of the stats
+        stats->told = told;
+        stats->reckoned = reckoned;
+        stats->why = RdActsWhy(massRead, told, reckoned);
+        for (int k = 0; k < 3; k++) stats->inertia3[k] = Inverse(bodies[0].inv[k]);
     }
     g_dragKept.swap(kept);
     return writes;
@@ -2055,6 +2067,35 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
 // (the setting, or hard or insanity mode, and the hook found), as the drag charges a soft tire's fuel itself; else the
 // mode's Fuel use row. The row keeps its value for when the drag is off.
 static float FuelInForce(float row, bool dragOn) { return dragOn ? 1.0f : row; }
+
+// Whether the drag acts on the truck the mod's thread serves, by the truck update's last answer for it (RdFuelTake):
+// where it does not, the wheels get no drag and the mode's Fuel use row holds as with RollingDrag off, said in one
+// line. The answer is a frame's and the fuel a pass's of this thread, so a change-over lags by one pass at most.
+static RdFuelState g_dragFuel; // the mod's thread's only
+static bool DragFuelActs(uint64_t vehicle)
+{
+    DragStats s;
+    AcquireSRWLockShared(&g_dragLock);
+    s = g_dragStats;
+    ReleaseSRWLockShared(&g_dragLock);
+    RdSay say = kRdSayNothing;
+    const bool acts = RdFuelTake(g_dragFuel, vehicle, vehicle && s.vehicle == vehicle && s.frames > 0, s.why == kRdActs, &say);
+    if (say == kRdSayNot)
+    {
+        wchar_t why[160];
+        if (s.why == kRdNoMass) _snwprintf_s(why, _TRUNCATE, L"its mass is not read (model+0x784 reads %.0f kg, with the wheels %.0f kg)", s.files, s.mass);
+        else if (s.why == kRdNoAxle) wcscpy_s(why, L"no wheel's axle is told from its inertia (the three within 2 %)");
+        else _snwprintf_s(why, _TRUNCATE, L"no wheel is read and unbroken (%d of %d with an axle told)", s.told, s.count);
+        Log(L"rolling drag: does not act on truck %p: %s; the first wheel's inertia about x, y and z %.3f, %.3f and %.3f kg m2; "
+            L"the mode's Fuel use row is used on this truck instead. Said once a truck",
+            (void *)vehicle, why, s.inertia3[0], s.inertia3[1], s.inertia3[2]);
+    }
+    else if (say == kRdSayActs)
+        Log(L"rolling drag: acts on truck %p now, as it did not before (the mass %.0f kg, %d of %d wheels reckoned); the fuel x1 on it again in place of "
+            L"the Fuel use row. Said once a truck",
+            (void *)vehicle, s.mass, s.reckoned, s.count);
+    return acts;
+}
 
 static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheels, float speed, ULONGLONG passAt)
 {
@@ -3170,7 +3211,8 @@ static DWORD WINAPI Run(void *)
         }
         Mode forVehicle = g_now;
         if (!rolling) forVehicle.fuel = 1.0f;
-        forVehicle.fuel = FuelInForce(forVehicle.fuel, g_dragOn != 0); // each pass, so a change of the drag puts it in at once
+        // each pass, so a change of the drag puts it in at once; the drag only where it acts on this truck (DragFuelActs)
+        forVehicle.fuel = FuelInForce(forVehicle.fuel, g_dragOn != 0 && DragFuelActs(vehicle));
         // the gears make up for the smaller collision cylinders, but for what a real tire loses (the wheels' mean)
         float roll = 0.0f;
         int rolled = 0;
@@ -5001,6 +5043,148 @@ static bool RollingDragTest()
     return ok;
 }
 
+// A truck the drag cannot reckon pays the fuel factor and no drag (117 part 2), on made up trucks: sphere-like wheels,
+// a good truck, a mass read late, every wheel broken, a jump, and the line once a truck.
+static bool DragFuelTest()
+{
+    const Build saved = g_buildFound;
+    const bool gravityKnown = g_dragGravityKnown;
+    g_dragGravityKnown = false;
+    g_buildFound.wheelVtable = 0x100;
+    g_buildFound.cylinderVtable = 0x200;
+    FakeTruck *good = new FakeTruck, *sphere = new FakeTruck, *late = new FakeTruck;
+    std::vector<WheelRef> wg, ws, wl;
+    FakeTruckMake(*good, wg);
+    FakeTruckMake(*sphere, ws);
+    FakeTruckMake(*late, wl);
+    const float row = 1.5f, ball[4] = { 1.0f / 6.0f, 1.0f / 6.05f, 1.0f / 6.0f, 1.0f / 50.0f }, noMass = 0.0f, mass = 1200.0f;
+    for (FakeWheel &f : sphere->w) memcpy(f.body + 0x220, ball, sizeof ball);
+    memcpy(late->model + 0x784, &noMass, 4);
+    for (FakeTruck *t : { good, sphere, late })
+        for (FakeWheel &f : t->w) FakeSpin(f, 20.0f);
+    const WORD stockWord = HavokHalf(0.05f);
+    RdFuelState fuel = {};
+    RdSay say = kRdSayNothing;
+    auto frame = [&](FakeTruck *t, const std::vector<WheelRef> &w, DragStats &st)
+    {
+        st = {};
+        g_dragKept.clear();
+        g_dragVehicle = 0;
+        return RollingDragFrame((uint64_t)t->vehicle, w, true, 1.0f, &st);
+    };
+    DragStats st = {};
+    // no answer yet: the drag is taken to act, nothing said
+    const bool none = RdFuelTake(fuel, (uint64_t)good->vehicle, false, false, &say) && say == kRdSayNothing && fuel.count == 0;
+    // a good truck: the drag, a fuel factor of 1, no line and no record
+    const int goodWrites = frame(good, wg, st);
+    bool goodOk = goodWrites == 4 && st.why == kRdActs && st.told == 4 && st.reckoned == 4 && fabsf(st.inertia3[0] - 10.0f) < 0.01f && fabsf(st.inertia3[1] - 6.0f) < 0.01f;
+    goodOk = goodOk && RdFuelTake(fuel, (uint64_t)good->vehicle, true, st.why == kRdActs, &say) && say == kRdSayNothing && fuel.count == 0 && FuelInForce(row, true) == 1.0f;
+    // a jump: every wheel off the ground for five frames, then down again. Still the drag's, no change-over and no line
+    bool jump = true;
+    for (FakeWheel &f : good->w) f.wheel[0x1A4] = 0;
+    for (int k = 0; k < 5; k++)
+    {
+        frame(good, wg, st);
+        jump = jump && st.why == kRdActs && st.grounded == 0 && st.reckoned == 4 && RdFuelTake(fuel, (uint64_t)good->vehicle, true, st.why == kRdActs, &say) && say == kRdSayNothing;
+    }
+    for (FakeWheel &f : good->w) f.wheel[0x1A4] = 1;
+    frame(good, wg, st);
+    jump = jump && st.why == kRdActs && st.grounded == 4 && fuel.count == 0;
+    // sphere-like wheels (the three within 2 %): no drag written, the fuel factor and the line, once
+    const int sphereWrites = frame(sphere, ws, st);
+    bool sphereOk = sphereWrites == 0 && st.why == kRdNoAxle && st.told == 0 && FakeWord(sphere->w[0]) == stockWord;
+    const bool sphereActs = RdFuelTake(fuel, (uint64_t)sphere->vehicle, true, st.why == kRdActs, &say);
+    sphereOk = sphereOk && !sphereActs && say == kRdSayNot && FuelInForce(row, sphereActs) == row;
+    sphereOk = sphereOk && !RdFuelTake(fuel, (uint64_t)sphere->vehicle, true, false, &say) && say == kRdSayNothing;
+    // its jump changes nothing either, and with no frame of its own (another truck's stats) its last answer holds
+    for (FakeWheel &f : sphere->w) f.wheel[0x1A4] = 0;
+    frame(sphere, ws, st);
+    sphereOk = sphereOk && st.why == kRdNoAxle && !RdFuelTake(fuel, (uint64_t)sphere->vehicle, true, st.why == kRdActs, &say) && say == kRdSayNothing;
+    sphereOk = sphereOk && !RdFuelTake(fuel, (uint64_t)sphere->vehicle, false, true, &say) && say == kRdSayNothing && RdFuelTake(fuel, (uint64_t)good->vehicle, false, false, &say);
+    // the mass read late: the fuel factor and the line first, then the drag and one more line, and no line after that
+    frame(late, wl, st);
+    bool lateOk = st.why == kRdNoMass && st.told == 4 && FakeWord(late->w[0]) == stockWord && !RdFuelTake(fuel, (uint64_t)late->vehicle, true, st.why == kRdActs, &say) &&
+                  say == kRdSayNot;
+    memcpy(late->model + 0x784, &mass, 4);
+    const int lateWrites = frame(late, wl, st);
+    lateOk = lateOk && lateWrites == 4 && st.why == kRdActs && RdFuelTake(fuel, (uint64_t)late->vehicle, true, true, &say) && say == kRdSayActs;
+    lateOk = lateOk && RdFuelTake(fuel, (uint64_t)late->vehicle, true, true, &say) && say == kRdSayNothing && !RdFuelTake(fuel, (uint64_t)late->vehicle, true, false, &say) &&
+             say == kRdSayNothing && RdFuelTake(fuel, (uint64_t)late->vehicle, true, true, &say) && say == kRdSayNothing && fuel.count == 2;
+    // every wheel broken: nothing the drag reckons, though the axles are told
+    for (FakeWheel &f : good->w) f.model[0x328] = 1;
+    frame(good, wg, st);
+    const bool allBroken = st.why == kRdNoWheel && st.told == 4 && st.reckoned == 0;
+    for (FakeWheel &f : good->w) f.model[0x328] = 0;
+    const bool whys = RdActsWhy(false, 4, 4) == kRdNoMass && RdActsWhy(true, 4, 1) == kRdActs && RdActsWhy(true, 0, 0) == kRdNoAxle && RdActsWhy(true, 3, 0) == kRdNoWheel;
+    // more such trucks than the record holds: the oldest goes, a good truck still needs none
+    RdFuelState many = {};
+    for (uint64_t v = 1; v <= (uint64_t)kRdFuelTrucks + 3; v++) RdFuelTake(many, v, true, false);
+    const bool full = many.count == kRdFuelTrucks && !RdFuelTake(many, (uint64_t)kRdFuelTrucks + 3, false, true) && RdFuelTake(many, 1, false, false) &&
+                      !RdFuelTake(many, 5, false, true);
+    // through the mod's thread's own step: the sphere truck's stats left by the frame, the fuel row and one line for two passes;
+    // then the stats of the truck whose mass came late, as it changes over
+    auto count = [](const char *what)
+    {
+        std::string text;
+        FILE *lf = _wfsopen((g_dir + L"TirePressure.log").c_str(), L"rb", _SH_DENYNO);
+        if (lf)
+        {
+            char buf[4096];
+            size_t got;
+            while ((got = fread(buf, 1, sizeof buf, lf)) > 0) text.append(buf, got);
+            fclose(lf);
+        }
+        int n = 0;
+        for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + 1)) n++;
+        return n;
+    };
+    auto leave = [&](const DragStats &d)
+    {
+        AcquireSRWLockExclusive(&g_dragLock);
+        g_dragStats = d;
+        g_dragStats.frames = 1;
+        ReleaseSRWLockExclusive(&g_dragLock);
+    };
+    const RdFuelState fuelWas = g_dragFuel;
+    g_dragFuel = {};
+    const int notBefore = count("rolling drag: does not act on truck"), actsBefore = count("rolling drag: acts on truck"), axleBefore = count("no wheel's axle is told from its inertia"),
+              massBefore = count("its mass is not read (model+0x784 reads 0 kg");
+    frame(sphere, ws, st);
+    leave(st);
+    const bool first = DragFuelActs((uint64_t)sphere->vehicle), second = DragFuelActs((uint64_t)sphere->vehicle), other = DragFuelActs((uint64_t)good->vehicle);
+    memcpy(late->model + 0x784, &noMass, 4);
+    frame(late, wl, st);
+    leave(st);
+    const bool lateNot = DragFuelActs((uint64_t)late->vehicle);
+    memcpy(late->model + 0x784, &mass, 4);
+    frame(late, wl, st);
+    leave(st);
+    const bool lateActs = DragFuelActs((uint64_t)late->vehicle), lateStill = DragFuelActs((uint64_t)late->vehicle);
+    const bool lines = !first && !second && other && !lateNot && lateActs && lateStill && FuelInForce(row, first) == row && FuelInForce(row, lateActs) == 1.0f &&
+                       count("rolling drag: does not act on truck") == notBefore + 2 && count("rolling drag: acts on truck") == actsBefore + 1 &&
+                       count("no wheel's axle is told from its inertia") == axleBefore + 1 && count("its mass is not read (model+0x784 reads 0 kg") == massBefore + 1 &&
+                       count("kg m2; the mode's Fuel use row is used on this truck instead") == notBefore + 2;
+    g_dragFuel = fuelWas;
+    AcquireSRWLockExclusive(&g_dragLock);
+    g_dragStats = DragStats{};
+    ReleaseSRWLockExclusive(&g_dragLock);
+    g_dragKept.clear();
+    g_dragVehicle = 0;
+    delete good;
+    delete sphere;
+    delete late;
+    g_buildFound = saved;
+    g_dragGravityKnown = gravityKnown;
+    const bool ok = none && goodOk && jump && sphereOk && lateOk && allBroken && whys && full && lines;
+    printf("%s rolling drag and a truck it cannot reckon: a good truck the drag and fuel x1 with no line; sphere-like wheels no drag, the Fuel use row x%.2f and one line; "
+           "a mass read late the row, then the drag with one more line and none after; every wheel broken the row; a jump of five frames no change-over and no line; "
+           "no answer yet the drag; the last answer holds with no frame; the lines once through the mod's own step\n",
+           ok ? "ok  " : "FAIL", FuelInForce(row, sphereActs));
+    if (!ok) printf("     none %d good %d (%d) jump %d sphere %d (%d) late %d (%d) broken %d whys %d full %d lines %d\n", none, goodOk, goodWrites, jump, sphereOk, sphereWrites, lateOk,
+                    lateWrites, allBroken, whys, full, lines);
+    return ok;
+}
+
 static bool RollProbeTest()
 {
     bool halves = true;
@@ -5613,6 +5797,7 @@ int wmain(int argc, wchar_t **argv)
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
+    if (!DragFuelTest()) return 1;
     if (!StiffBaseTest()) return 1;
     if (!TextCutTest()) return 1;
     {

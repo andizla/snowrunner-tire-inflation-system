@@ -244,11 +244,24 @@ struct TpLive
     float room;                  // metres the game can draw the first wheel's tire flatter (the modes' flattening fits in it); below 0 = not known
     float sink;                  // metres its contact sits inside the cylinder (a soft tire), already taken off room
     float outsideC;              // the outside temperature in force
-    int outsideFrom;             // 0 = AmbientC, 1 = another mod's block (outside.h)
+    int outsideFrom;             // OutsideSource (outside.h): 0 = AmbientC, 1 = another mod's block, 2 = that block by map and hour
     float pressure;              // the tires' pressure as a share of Normal's, where it stands between the modes
     float pressureAir;           // the same as the outside temperature leaves it (what the grip goes by)
 };
 enum { kSurfaceDirt, kSurfaceGravel, kSurfaceSand, kSurfaceRock, kSurfacePaved };
+// The tab's words for where the outside temperature comes from, and the slider's tip, by TpLive::outsideFrom: "by map
+// and hour" only where the block says so.
+inline const char *OutsideFromText(int from)
+{
+    return from == 2 ? "from another mod, by map and hour" : from == 1 ? "from another mod" : "AmbientC";
+}
+inline const char *OutsideSliderTip(int from)
+{
+    return from == 1 ? "Where no other mod publishes the outside temperature. A gauge mod by the same author gives it "
+                       "while it runs, and this slider is then not in force."
+                     : "Where no other mod publishes the outside temperature. A gauge mod by the same author gives it by map and hour "
+                       "while it runs, and this slider is then not in force.";
+}
 void LiveGet(TpLive &out);
 
 // Gamepad. The game loads XInputGetState itself and keeps it in more than one pointer; PadInit points every copy at a

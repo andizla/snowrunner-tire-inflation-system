@@ -66,9 +66,19 @@ struct OutsideReader
     unsigned long long lookAt; // when it is looked for next
 };
 
-// The outside temperature from the block, when there is one and it is fresh: true with c. The mapping is opened the
-// first time it is there (looked for every kOutsideLookMs until then) and held open after.
-inline bool OutsideRead(OutsideReader &r, unsigned long long now, float &c)
+// Where the outside temperature in force comes from: the ini, another mod's block, or that block with the map's own
+// temperature (kOutsideByMap). The tab words its line and the slider's tip by this (panel.h). fresh: OutsideRead's
+// answer; flags: the flags of the block that answer came from.
+enum { kOutsideFromIni = 0, kOutsideFromMod = 1, kOutsideFromMap = 2 };
+inline int OutsideSource(bool fresh, uint32_t flags)
+{
+    return !fresh ? kOutsideFromIni : flags & kOutsideByMap ? kOutsideFromMap : kOutsideFromMod;
+}
+
+// The outside temperature from the block, when there is one and it is fresh: true with c, and with flags the flags
+// of the same copy of the block. The mapping is opened the first time it is there (looked for every kOutsideLookMs
+// until then) and held open after.
+inline bool OutsideRead(OutsideReader &r, unsigned long long now, float &c, uint32_t *flags = nullptr)
 {
     if (!r.block && now >= r.lookAt)
     {
@@ -90,6 +100,7 @@ inline bool OutsideRead(OutsideReader &r, unsigned long long now, float &c)
     // (a block written a moment after `now` was taken is fresh, so the difference is signed)
     if (!r.block || !OutsideCopy(r.block, b) || (long long)(now - b.tick) > (long long)kOutsideStaleMs || !(b.ambientC > -90.0f && b.ambientC < 90.0f)) return false;
     c = b.ambientC;
+    if (flags) *flags = b.flags;
     return true;
 }
 

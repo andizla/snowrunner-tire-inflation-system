@@ -116,7 +116,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
             ImGui::Text("Its contact sinks %.1f cm into the ground; the game draws it up to %.1f cm flatter.", live.sink * 100.0f, live.room * 100.0f);
         else if (live.room >= 0.0f) ImGui::Text("The game draws it up to %.1f cm flatter.", live.room * 100.0f);
         ImGui::Text("Outside %.0f C (%s): the tires hold %.0f%% of the Normal pressure, %.0f%% once the air temperature counts.", live.outsideC,
-                    live.outsideFrom ? "from another mod, by map and hour" : "AmbientC", live.pressure * 100.0f, live.pressureAir * 100.0f);
+                    OutsideFromText(live.outsideFrom), live.pressure * 100.0f, live.pressureAir * 100.0f);
     }
     else ImGui::TextDisabled("No truck driven.");
 
@@ -170,8 +170,7 @@ static int SettingsPage(TpSettings &s, const TpLive &live, PageState &st, uint32
     PageLabel("Outside temperature", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##outside", &s.ambientC, -40.0f, 50.0f, "%.0f C", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("Where no other mod publishes the outside temperature. A gauge mod by the same author gives it by map and hour "
-            "while it runs, and this slider is then not in force.");
+    PageTip(OutsideSliderTip(live.outsideFrom));
 
     ImGui::SeparatorText("Grip");
     ImGui::BeginDisabled(preset);

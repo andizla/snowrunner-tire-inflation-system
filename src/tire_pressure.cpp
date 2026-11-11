@@ -126,6 +126,7 @@ static OutsideReader g_outside = {};
 static TireStateWriter g_state = {}; // the mod's state for other mods (tire_state.h)
 static float g_outsideC = 15.0f;    // the outside temperature in force
 static bool g_outsideFromMod = false; // it comes from another mod's block
+static int g_outsideSource = 0;       // OutsideSource: with that block, whether it is the map's own
 static std::wstring g_dir;
 static uint64_t g_base = 0;
 static int g_mode = kNormal;
@@ -3019,7 +3020,9 @@ static DWORD WINAPI Run(void *)
         // the outside temperature: another mod's block while it is there and fresh, else AmbientC
         {
             float c = 0.0f;
-            const bool fromMod = OutsideRead(g_outside, GetTickCount64(), c);
+            uint32_t flags = 0; // of the same copy of the block as c
+            const bool fromMod = OutsideRead(g_outside, GetTickCount64(), c, &flags);
+            g_outsideSource = OutsideSource(fromMod, flags);
             if (fromMod != g_outsideFromMod)
                 Log(fromMod ? L"outside temperature: %.1f C from another mod's block" : L"outside temperature: AmbientC %g C (no other mod publishes one)", fromMod ? c : g_ambientC);
             g_outsideFromMod = fromMod;
@@ -3303,7 +3306,7 @@ static DWORD WINAPI Run(void *)
                 }
             }
             live.outsideC = g_outsideC;
-            live.outsideFrom = g_outsideFromMod ? 1 : 0;
+            live.outsideFrom = g_outsideSource;
             live.pressure = g_pressure;
             live.pressureAir = pressureAir;
             AcquireSRWLockExclusive(&g_setLock);
@@ -3526,6 +3529,44 @@ static bool GameMenuTest()
            "in the three known builds and none elsewhere\n",
            hold && places ? "ok  " : "FAIL");
     return ok && hold && places;
+}
+
+// The tab's words for the outside temperature, by the block's freshness and its by-map flag (115, part 2), and
+// OutsideRead handing out the flags of the copy it took the temperature from.
+static bool OutsideTextTest()
+{
+    const bool source = OutsideSource(false, 0) == kOutsideFromIni && OutsideSource(false, kOutsideByMap) == kOutsideFromIni &&
+                        OutsideSource(true, 0) == kOutsideFromMod && OutsideSource(true, kOutsideVehicle | kOutsideEngineOn) == kOutsideFromMod &&
+                        OutsideSource(true, kOutsideByMap) == kOutsideFromMap && OutsideSource(true, kOutsideByMap | kOutsideVehicle) == kOutsideFromMap;
+    const bool text = !strcmp(OutsideFromText(kOutsideFromIni), "AmbientC") && !strcmp(OutsideFromText(kOutsideFromMod), "from another mod") &&
+                      !strcmp(OutsideFromText(kOutsideFromMap), "from another mod, by map and hour");
+    const bool tip = strstr(OutsideSliderTip(kOutsideFromMap), "by map and hour") && strstr(OutsideSliderTip(kOutsideFromIni), "by map and hour") &&
+                     !strstr(OutsideSliderTip(kOutsideFromMod), "by map and hour") && strstr(OutsideSliderTip(kOutsideFromMod), "not in force");
+    // a block in this process: fresh with the flag, fresh without it, stale with it
+    OutsideBlock b = {};
+    b.magic = kOutsideMagic;
+    b.version = kOutsideVersion;
+    b.size = sizeof b;
+    b.ambientC = -7.5f;
+    b.tick = 100000;
+    b.flags = kOutsideByMap | kOutsideVehicle;
+    OutsideReader r = {};
+    r.block = &b;
+    float c = 0.0f;
+    uint32_t flags = 0;
+    const bool withFlag = OutsideRead(r, 100500, c, &flags) && c == -7.5f && OutsideSource(true, flags) == kOutsideFromMap;
+    b.flags = kOutsideVehicle;
+    flags = 0xffffffffu;
+    const bool without = OutsideRead(r, 100500, c, &flags) && OutsideSource(true, flags) == kOutsideFromMod;
+    b.flags = kOutsideByMap;
+    flags = 0;
+    const bool stale = !OutsideRead(r, 100000 + kOutsideStaleMs + 1, c, &flags) && flags == 0 && OutsideSource(false, kOutsideByMap) == kOutsideFromIni;
+    const bool noOut = OutsideRead(r, 100500, c);
+    const bool ok = source && text && tip && withFlag && without && stale && noOut;
+    printf("%s outside temperature: the tab says by map and hour only for a fresh block with its by-map flag, from another mod for a fresh one "
+           "without it, AmbientC for none or a stale one; the slider tip the same way; the flags come from the copy the temperature came from\n",
+           ok ? "ok  " : "FAIL");
+    return ok;
 }
 
 // The pad's rule with the default bindings: what the filter hides from the game (PadHide), when a step counts
@@ -5448,6 +5489,7 @@ int wmain(int argc, wchar_t **argv)
     if (!IniTest(argc > 1 ? argv[1] : nullptr)) return 1;
     if (!PadCurveTest()) return 1;
     if (!PadRuleTest()) return 1;
+    if (!OutsideTextTest()) return 1;
     if (!GameMenuTest()) return 1;
     if (!CrashLogTest()) return 1;
     if (!WornGripTest()) return 1;

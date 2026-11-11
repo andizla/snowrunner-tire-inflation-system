@@ -24,7 +24,7 @@
 // apart yet). Ice is 0, as the game's own stays. The numbers are this mod's, from published truck tire figures
 // (0.006 to 0.01 on asphalt at the rated pressure).
 enum RdGround { kRdIce, kRdPaved, kRdSand, kRdGravel, kRdRock, kRdDirt, kRdGroundCount };
-static const float kRdCrr[kRdGroundCount] = { 0.0f, 0.010f, 0.060f, 0.020f, 0.015f, 0.030f };
+static const float kRdCrr[kRdGroundCount] = { 0.0f, 0.010f, 0.060f, 0.020f, 0.015f, 0.020f };
 static const char *const kRdGroundNames[kRdGroundCount] = { "ice", "paved", "sand", "gravel", "rock", "dirt" };
 static const float kRdFloor = 2.0f;    // m/s: the spin is held at least at this ground speed's worth
 static const float kRdMost = 20.0f;    // the most damping written: part 1 measured up to 8, and c·dt passes 1 at 60 a second

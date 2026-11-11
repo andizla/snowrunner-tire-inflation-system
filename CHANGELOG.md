@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Rolling drag on dirt is lighter: Crr 0.020, down from 0.030. Trucks lost too much speed on plain dirt roads. Mud still counts as dirt, with the mud drag of the game on top.
 - The texts of the tab, the panel and the Graphics tab carry no apostrophe and no contraction: "the Normal pressure", "does not". A test keeps them so.
 - The Graphics tab's text no longer says how Next Gen Graphics' keys behave beside it; the DLL's own lines in the tab say it.
 - The C runtime's handlers behind the lines in `TirePressure.log` are set as the mod starts, so a stop at the game's boot is named too. Before, they were set only at the driven truck. They are set again there, after the game has set its own. A handler set in between that passes on to the mod's never calls it in a loop: the second call goes to the handler from the start, or ends there.

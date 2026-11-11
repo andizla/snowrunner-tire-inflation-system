@@ -400,9 +400,9 @@ contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is 
 <p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
 floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never
 pushes a wheel. Over all the wheels the drag slows the truck by Crr · <i>f</i> · <i>g</i>, whatever its mass.</p>
-{table(['Ground', 'Flag', 'Crr', 'At Normal, m/s²', 'At Low, m/s²'], [['Paved', '<code>+0x1C8</code>', '0.010', '0.10', '0.15'], ['Rock', '<code>+0x1CD</code>', '0.015', '0.15', '0.22'], ['Gravel', '<code>+0x1C9</code>', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', 'none', '0.030', '0.29', '0.44'], ['Sand', '<code>+0x1CA</code>', '0.060', '0.59', '0.88'], ['Ice', '<code>+0x1C0</code>', '0', '0', '0']], 'Crr by the ground flags the game\'s check leaves in the wheel')}
+{table(['Ground', 'Flag', 'Crr', 'At Normal, m/s²', 'At Low, m/s²'], [['Paved', '<code>+0x1C8</code>', '0.010', '0.10', '0.15'], ['Rock', '<code>+0x1CD</code>', '0.015', '0.15', '0.22'], ['Gravel', '<code>+0x1C9</code>', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', 'none', '0.020', '0.20', '0.29'], ['Sand', '<code>+0x1CA</code>', '0.060', '0.59', '0.88'], ['Ice', '<code>+0x1C0</code>', '0', '0', '0']], 'Crr by the ground flags the game\'s check leaves in the wheel')}
 <p>Where several flags are set: ice, then paved, sand, gravel, rock, and dirt for the rest. No flag counts as dirt. Mud sets
-none, so mud gets dirt's 0.030 on top of the game's own mud drag; +0x1CE is not mud (it is on over paved road). Ice is 0.</p>
+none, so mud gets dirt's 0.020 on top of the game's own mud drag; +0x1CE is not mud (it is on over paved road). Ice is 0.</p>
 <p><b>When it writes.</b> <code>RollingDragFrame</code> runs in the truck update, on the game's thread, every frame, on reads of
 that frame. A wheel's <i>c</i> goes in when the mod has no word of its own in it, when the body holds another word than the mod's
 last (the game wrote it: compared as a word, never taken as a stock), or when <i>c</i> moved by over 2 % since. The mod keeps its

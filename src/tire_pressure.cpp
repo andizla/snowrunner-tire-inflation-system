@@ -4964,11 +4964,11 @@ static bool RollingDragTest()
         most = t;
     }
     const bool standing = under && fabsf(most - want) <= 0.001f * want;
-    // the ground: ice none, sand at Low 0.060 x 1.49, no flag dirt's 0.030, and the order where several are set
+    // the ground: ice none, sand at Low 0.060 x 1.49, no flag dirt's 0.020, and the order where several are set
     const uint8_t none[6] = {}, paved[6] = { 1, 0, 1, 0, 0, 1 }, sandGravel[6] = { 0, 1, 1, 0, 0, 0 }, gravelRock[6] = { 0, 1, 0, 0, 0, 1 }, rock[6] = { 0, 0, 0, 0, 0, 1 };
     const float low = RdPressureFactor(kModePressure[kLow]);
     const bool grounds = RdGroundOf(paved, 1) == kRdIce && RdGroundOf(paved, 0) == kRdPaved && RdGroundOf(sandGravel, 0) == kRdSand && RdGroundOf(gravelRock, 0) == kRdGravel &&
-                         RdGroundOf(rock, 0) == kRdRock && RdGroundOf(none, 0) == kRdDirt && kRdCrr[kRdDirt] == 0.030f && fabsf(low - 1.4907f) < 0.001f &&
+                         RdGroundOf(rock, 0) == kRdRock && RdGroundOf(none, 0) == kRdDirt && kRdCrr[kRdDirt] == 0.020f && fabsf(low - 1.4907f) < 0.001f &&
                          fabsf(kRdCrr[kRdSand] * low - 0.0894f) < 0.0005f && fabsf(RdPressureFactor(kModePressure[kReduced]) - 1.240f) < 0.001f &&
                          RdPressureFactor(1.0f) == 1.0f && fabsf(RdPressureFactor(kModePressure[kIncreased]) - 0.894f) < 0.001f;
     // c held at 20, and said so

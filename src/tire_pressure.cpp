@@ -1548,7 +1548,7 @@ static bool g_dragGravityKnown = true;
 struct DragKept { WheelRef w; RdRecord rec; };
 static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
-struct DragWheelStat { int index; RdGround ground; float crr, r, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written; };
+struct DragWheelStat { int index; RdGround ground; float crr, r, wheelR, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written; }; // r: the one reckoned with (DragRadius), wheelR: wheel + 0x94
 struct DragStats { uint64_t vehicle; float mass, chassis, files, gravity, gravityRead, factor, n; int count, grounded, capped; LONG frames, writes, cappedFrames;
                    DragWheelStat w[kRollWheelsMost]; };
 static SRWLOCK g_dragLock = SRWLOCK_INIT;
@@ -1598,6 +1598,17 @@ static int DragStockBack()
 
 // One frame of rolling drag for a truck's wheels (on: the setting in force and nothing else holding the damping).
 // Writes made; stats, where given, what it found.
+// The radius the drag reckons with: the wheel's collision cylinder's (shape + 0x28, as the mod reaches it everywhere),
+// by RdRollRadius's rule against the wheel's own figure handed in (wheel + 0x94). The frame, the stats and the probe's
+// lines all take it here, so the log never proves another figure than the one in force. The cylinder is written on
+// the mod's thread and read here in the truck update: one float, whole on this machine, no lock.
+static float DragRadius(const WheelRef &w, float wheelRadius)
+{
+    float cylinder = 0.0f;
+    const bool have = w.shape && Read(w.shape + 0x28, cylinder);
+    return RdRollRadius(wheelRadius, have, cylinder);
+}
+
 static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheels, bool on, float factor, DragStats *stats)
 {
     if (!on || vehicle != g_dragVehicle)
@@ -1661,6 +1672,8 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         const bool read = Read(w.model + 0x328, broken) && Read(w.wheel + 0x1C8, flags) && Read(w.wheel + 0x1C0, ice) && Read(w.wheel + 0x94, r) &&
                           Read(w.wheel + 0xAC, stock) && Read(w.body + 0x216, word) && stock >= 0.0f && stock < 1000.0f;
         const int axle = bodies[i].ok ? RollAxle(bodies[i].inv) : -1;
+        st.wheelR = r;
+        if (read) r = DragRadius(w, r); // the one r from here on: the torque's arm, the floor's spin and the stats
         st.broken = broken != 0;
         st.grounded = contact[i] != 0;
         st.ground = RdGroundOf(flags, ice);
@@ -1961,6 +1974,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
             const RollBody b = ReadRollBody(w.body);
             float r = 0;
             Read(w.wheel + 0x94, r);
+            r = DragRadius(w, r); // the drag's own r
             const int axle = RollAxle(b.inv);
             wheelSum += Inverse(b.inv[3]);
             wchar_t one[160];
@@ -2001,6 +2015,7 @@ static void RollProbePass(uint64_t vehicle, const std::vector<WheelRef> &wheels,
         Read(w.wheel + 0xAC, stock);
         Read(w.wheel + 0xA8, broken);
         Read(w.wheel + 0x94, r);
+        r = DragRadius(w, r); // the drag's own r, so v/r is the spin the drag reckons with
         Read(w.wheel + 0x1A4, contact);
         Read(w.model + 0x328, flat);
         bool once = false;
@@ -2090,9 +2105,9 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
             _snwprintf_s(gravity, _TRUNCATE, L"the gravity factor taken as 1, as its place is not confirmed (body+0x%X, Havok's place for it, reads %.3f on the chassis)", kDragGravityAt,
                        s.gravityRead);
         Log(L"rolling drag: truck %p, the chassis's own body 1/w %.1f kg, the files' sum of its bodies %.0f kg (model+0x784), the wheels %s (%.1f kg); %s; "
-            L"N %.0f N a wheel on %d on the ground, the mass %.0f kg; cargo and a trailer not in it; the first wheel I %.2f kg m2 about its axle, r %.3f m, "
+            L"N %.0f N a wheel on %d on the ground, the mass %.0f kg; cargo and a trailer not in it; the first wheel I %.2f kg m2 about its axle, r %.3f m (its cylinder's where that lies within %g to %g of wheel+0x94, which reads %.3f m), "
             L"stock damping %.3f; Crr paved %.3f, rock %.3f, gravel %.3f, dirt %.3f (with no flag, mud too), sand %.3f, ice 0; x%.2f at %s",
-            (void *)s.vehicle, s.chassis, s.files, wheelsText.c_str(), wheelSum, gravity, s.n, s.grounded, s.mass, w.inertia, w.r, w.stock, kRdCrr[kRdPaved],
+            (void *)s.vehicle, s.chassis, s.files, wheelsText.c_str(), wheelSum, gravity, s.n, s.grounded, s.mass, w.inertia, w.r, kRdCylLo, kRdCylHi, w.wheelR, w.stock, kRdCrr[kRdPaved],
             kRdCrr[kRdRock], kRdCrr[kRdGravel], kRdCrr[kRdDirt], kRdCrr[kRdSand], s.factor, g_modes[g_mode].name);
     }
     if (!g_probeRoll || passAt < secondAt || speed < 0.5f) return;
@@ -2101,12 +2116,12 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
     for (int i = 0; i < s.count && i < kRollWheelsMost; i++)
     {
         const DragWheelStat &w = s.w[i];
-        wchar_t one[200];
+        wchar_t one[240];
         if (w.broken) _snwprintf_s(one, _TRUNCATE, L"; w%d broken, the game's own", w.index);
         else if (!w.grounded) _snwprintf_s(one, _TRUNCATE, L"; w%d off the ground, stock %.3f", w.index, w.stock);
         else
-            _snwprintf_s(one, _TRUNCATE, L"; w%d %S Crr %.3f, c %.3f (stock %.3f), spin %.1f rad/s, torque %.1f against %.1f N m", w.index, kRdGroundNames[w.ground], w.crr * s.factor,
-                       w.c, w.stock, w.spin, w.inertia * (w.c - w.stock) * fabsf(w.spin), w.crr * s.factor * s.n * w.r);
+            _snwprintf_s(one, _TRUNCATE, L"; w%d %S Crr %.3f, c %.3f (stock %.3f), spin %.1f rad/s, torque %.1f against %.1f N m at r %.3f", w.index, kRdGroundNames[w.ground], w.crr * s.factor,
+                       w.c, w.stock, w.spin, w.inertia * (w.c - w.stock) * fabsf(w.spin), w.crr * s.factor * s.n * w.r, w.r);
         list += one;
     }
     Log(L"rolling drag: %.2f m/s, x%.2f at %s, N %.0f N, %ld frames, %ld writes, %ld frames with a wheel held at %g%s", speed, s.factor, g_modes[g_mode].name, s.n,
@@ -4746,7 +4761,7 @@ static bool RollCoastTest()
 
 // Rolling drag (BRIEF_rolling_drag.md part 2) on made up wheels in this process, round figures: the game's sum of the
 // truck's bodies 1200 kg (model + 0x784), the chassis's own body 1000 kg with a gravity factor of 1.4, four 50 kg
-// wheels (I 10 kg m2 about x, r 0.5 m, stock damping 0.05).
+// wheels (I 10 kg m2 about x, a radius of 0.5 m on a collision cylinder of 0.45 m, stock damping 0.05).
 struct FakeWheel { uint8_t model[0x400], wheel[0x400], body[0x300], shape[0x40]; };
 struct FakeTruck { uint8_t vehicle[0x100], model[0x800], chassis[0x300]; FakeWheel w[4]; };
 static void FakeTruckMake(FakeTruck &t, std::vector<WheelRef> &refs)
@@ -4769,6 +4784,7 @@ static void FakeTruckMake(FakeTruck &t, std::vector<WheelRef> &refs)
         put(f.wheel, 0x18, (uint64_t)f.body);
         put(f.body, 0x20, (uint64_t)f.shape);
         put(f.wheel, 0x94, 0.5f);
+        put(f.shape, 0x28, 0.45f); // the cylinder the wheel rolls on, under its radius as at a lowered pressure
         put(f.wheel, 0xAC, 0.05f);
         put(f.wheel, 0xA8, 2.0f);
         put(f.wheel, 0x1A4, (BYTE)1);
@@ -4796,7 +4812,22 @@ static bool RollingDragTest()
     std::vector<WheelRef> wa, wb;
     FakeTruckMake(a, wa);
     FakeTruckMake(b, wb);
-    const float r = 0.5f, inertia = 10.0f, stock = 0.05f, mass = 1200.0f + 4.0f * 50.0f, n = mass * kRdG / 4.0f;
+    // r is the cylinder's: the spins, the torque's arm and the floor all go by it
+    const float r = 0.45f, wheelRadius = 0.5f, inertia = 10.0f, stock = 0.05f, mass = 1200.0f + 4.0f * 50.0f, n = mass * kRdG / 4.0f;
+    // the rule: the cylinder within 0.5 to 1.25 of the wheel's own figure, else the wheel's own
+    const float notANumber = nanf("");
+    const bool rule = RdRollRadius(0.5f, true, 0.45f) == 0.45f && RdRollRadius(0.5f, false, 0.45f) == 0.5f && RdRollRadius(0.5f, true, 0.0f) == 0.5f &&
+                      RdRollRadius(0.5f, true, -0.45f) == 0.5f && RdRollRadius(0.5f, true, notANumber) == 0.5f && RdRollRadius(0.5f, true, 0.25f) == 0.25f &&
+                      RdRollRadius(0.5f, true, 0.249f) == 0.5f && RdRollRadius(0.5f, true, 0.625f) == 0.625f && RdRollRadius(0.5f, true, 0.626f) == 0.5f &&
+                      RdRollRadius(0.5f, true, 0.5f) == 0.5f && kRdCylLo == 0.5f && kRdCylHi == 1.25f;
+    // the reach: shape + 0x28, and the wheel's own with no shape or a cylinder out of bounds
+    WheelRef noShape = wa[0];
+    noShape.shape = 0;
+    const float tooSmall = 0.2f, cylinder = 0.45f;
+    bool reach = DragRadius(wa[0], wheelRadius) == 0.45f && DragRadius(noShape, wheelRadius) == wheelRadius;
+    memcpy(a.w[0].shape + 0x28, &tooSmall, 4);
+    reach = reach && DragRadius(wa[0], wheelRadius) == wheelRadius;
+    memcpy(a.w[0].shape + 0x28, &cylinder, 4);
     g_dragKept.clear();
     g_dragVehicle = 0;
     // the torque the word written means, I·(c − stock)·ω, against Crr·N·r, through the half
@@ -4807,6 +4838,9 @@ static bool RollingDragTest()
     const int first = RollingDragFrame((uint64_t)a.vehicle, wa, true, 1.0f, &st);
     const float t10 = torque(a.w[0], 10.0f / r);
     const bool atTen = first == 4 && fabsf(t10 - want) <= 0.01f * want && fabsf(st.n - n) < 0.5f && fabsf(st.mass - mass) < 0.5f;
+    // the force at the ground, the torque over the cylinder the wheel rolls on, is Crr N; over the wheel's own radius it would be a tenth short
+    const float force = t10 / cylinder, forceWant = 0.010f * n;
+    const bool atGround = fabsf(force - forceWant) <= 0.01f * forceWant && st.w[0].r == cylinder && st.w[0].wheelR == wheelRadius && rule && reach;
     // three times the ground speed (sand, floored): the torque still Crr·N·r
     for (FakeWheel &f : a.w) FakeSpin(f, 30.0f / r);
     RollingDragFrame((uint64_t)a.vehicle, wa, true, 1.0f, nullptr);
@@ -4953,14 +4987,16 @@ static bool RollingDragTest()
     g_dragVehicle = 0;
     g_buildFound = saved;
     g_dragGravityKnown = gravityKnown;
-    const bool ok = atTen && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed && capOk;
+    const bool ok = atTen && atGround && spinning && standing && grounds && iceStock && broken && airborne && change && flat && switched && off && waits && posted && noHook && summed && capOk;
     printf("%s rolling drag: at 10 m/s on paved at Normal the word's torque %.2f N m against Crr N r %.2f (N %.0f N by the mass %.0f kg, the game's sum and the wheels), "
            "%.2f at three times the spin, under the floor falling to nothing; ice none, sand at Low x%.3f, no flag dirt; broken kept, airborne and off and another truck "
            "stock; a write over 2 %% and on the game's word only; no climb over 10 lost records; none while the probe holds; the probe's stock back in the truck update; no hook off; "
-           "the gravity factor 1 with it off, with it on (the default) the chassis's 1.4 on the game's sum (N %.0f N) and in the truck's line; c held at 20\n",
-           ok ? "ok  " : "FAIL", t10, want, st.n, st.mass, t30, low, withGravity.n);
+           "the gravity factor 1 with it off, with it on (the default) the chassis's 1.4 on the game's sum (N %.0f N) and in the truck's line; c held at 20; "
+           "r the cylinder's %.2f m under the wheel's %.2f, the force at the ground %.1f N against Crr N %.1f; the wheel's own radius with no shape, no number, "
+           "none above 0 or a cylinder outside 0.5 to 1.25 of it\n",
+           ok ? "ok  " : "FAIL", t10, want, st.n, st.mass, t30, low, withGravity.n, cylinder, wheelRadius, force, forceWant);
     if (!ok)
-        printf("     ten %d spin %d standing %d grounds %d ice %d broken %d air %d change %d (%d %d %d) flat %d switched %d off %d waits %d posted %d nohook %d summed %d (found %d)\n", atTen,
+        printf("     ground %d (rule %d reach %d r %.3f wheelR %.3f) ten %d spin %d standing %d grounds %d ice %d broken %d air %d change %d (%d %d %d) flat %d switched %d off %d waits %d posted %d nohook %d summed %d (found %d)\n", atGround, rule, reach, st.w[0].r, st.w[0].wheelR, atTen,
                spinning, standing, grounds, iceStock, broken, airborne, change, slight, larger, game, flat, switched, off, waits, posted, noHook, summed, 0);
     return ok;
 }

@@ -8,7 +8,8 @@
 //   c = c_stock + Crr · factor · N · r / (I · max(|ω|, 2 m/s / r))
 //
 // with ω the body's own spin along its axle (not the truck's speed over r, so a spinning wheel gets no more torque
-// than a rolling one), I the body's inertia about the axle, r the wheel's radius and c_stock the game's own figure for
+// than a rolling one), I the body's inertia about the axle, r the radius the wheel rolls on (its collision cylinder's,
+// RdRollRadius, which this mod makes smaller with the pressure) and c_stock the game's own figure for
 // the wheel (wheel + 0xAC, never the body's word read back). Above the floor the torque is Crr·N·r; below it the torque
 // falls with the spin to nothing standing, so the damping never pushes a wheel. N is the wheel's share of the weight:
 // the truck's Havok mass (the chassis's and every wheel's, the mass the physics moves) times g over the wheels on the
@@ -44,6 +45,17 @@ inline RdGround RdGroundOf(const uint8_t flags[6], uint8_t ice)
 // The pressure's factor on Crr, (p / p_Normal)^-0.5, from the mod's pressure share as it moves (Low 0.45 gives x1.49,
 // Reduced 0.65 x1.24, Normal x1, Increased 1.25 x0.89).
 inline float RdPressureFactor(float pressure) { return pressure > 0.05f ? 1.0f / sqrtf(pressure) : 1.0f / sqrtf(0.05f); }
+
+// The radius the wheel rolls on: its collision cylinder's, which the mod makes smaller than the wheel's own figure
+// (wheel + 0x94) with the pressure. With the wheel's own the force at the ground came out larger than Crr·N by the
+// one over the other, 13 to 18 percent at Low. The wheel's own figure where there is no cylinder, it is no number or
+// not above 0, or it lies outside kRdCylLo to kRdCylHi of the wheel's own (the gauge mod's rule for its cut).
+static const float kRdCylLo = 0.5f, kRdCylHi = 1.25f;
+inline float RdRollRadius(float wheelRadius, bool haveCylinder, float cylinder)
+{
+    if (!haveCylinder || !(cylinder > 0.0f) || !(cylinder >= kRdCylLo * wheelRadius && cylinder <= kRdCylHi * wheelRadius)) return wheelRadius;
+    return cylinder;
+}
 
 // The wheel's damping, c above, held at kRdMost (capped, where given, says it was). Where any of N, r or I is not a
 // usable number the stock.

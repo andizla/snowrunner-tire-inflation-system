@@ -38,6 +38,7 @@
 #include "truck_modes.h"
 #include "roll_probe.h"
 #include "rolling_drag.h"
+#include "ground_probe.h"
 #include "crt_line.h"
 #include "stiff_probe.h"
 
@@ -93,6 +94,7 @@ static int g_probeDamage = -1, g_probeDamageBack = 0; // diagnostics: ini ProbeD
 static int g_probeDrive = 0;                        // diagnostics: ini ProbeDrive=1 logs speed, handbrake and ground every second
 static int g_probeByHand = 0;                       // diagnostics: ini ProbeByHand=1 deals tire damage without the game's thread
 static int g_probeRoll = 0;                         // diagnostics: ini ProbeRoll=1, the rolling drag probe (RollProbePass)
+static int g_probeGround = 0;                       // diagnostics: ini ProbeGround=1, the ground probe (GroundProbeTruckUpdate), read only
 static float g_rollValues[kRollMostValues] = {};    // ini ProbeRollDamping: the dampings the coast-downs run at
 static int g_rollValueCount = 0;
 // the damping (a Havok half) the truck update writes every frame to the grounded, unbroken wheels of this vehicle; -1 none
@@ -205,7 +207,13 @@ void PanelLog(const wchar_t *fmt, ...)
 }
 
 // Game memory is read and written through these, so an object freed under us is an error return, not a fault.
-template <typename T> static bool Read(uint64_t addr, T &out) { return addr >= 0x10000 && ReadProcessMemory(GetCurrentProcess(), (void *)addr, &out, sizeof out, nullptr); }
+#ifdef TP_PROBE_TEST
+static long g_testReads = 0; // probe_test counts a call's reads with it
+#define TP_READ_COUNTED g_testReads++,
+#else
+#define TP_READ_COUNTED
+#endif
+template <typename T> static bool Read(uint64_t addr, T &out) { return TP_READ_COUNTED addr >= 0x10000 && ReadProcessMemory(GetCurrentProcess(), (void *)addr, &out, sizeof out, nullptr); }
 template <typename T> static bool WriteAs(uint64_t addr, const T &v) { return addr >= 0x10000 && WriteProcessMemory(GetCurrentProcess(), (void *)addr, &v, sizeof v, nullptr) != 0; }
 
 // The game's menu input flag, input + 0x1D8, by the input global's place in each build it is known in (control + 0x68
@@ -354,6 +362,8 @@ static void ReadIni(TpSettings &s)
                         L"; PerTruck=1: each truck keeps its own pressure mode in TirePressure.trucks.ini, put back when that truck is driven\n"
                         L"; again: [kind:{id}] for one owned truck (by the game's id for it, Own=1), else [kind] for its kind; a truck not\n"
                         L"; driven before starts in the highest mode on offer. 0 = one mode for all trucks, the highest on offer at each start.\n"
+                        L"; ProbeGround=1 is for diagnostics only: it logs what the game keeps of the ground under each wheel while the\n"
+                        L"; truck moves, up to 10 lines a second, so the log grows fast. It changes nothing in the game. Leave it at 0.\n"
                         L"; DumpImage=1 writes the game's code as the mod sees it into TirePressure_image_<stamp>.bin next to the\n"
                         L"; exe at the next start, for a report when the mod stands down on your build. Take it out again after.\n");
             fclose(f);
@@ -614,6 +624,8 @@ static void LoadIni()
     wchar_t roll[128] = {};
     GetPrivateProfileStringW(L"TirePressure", L"ProbeRollDamping", L"0.5,2,8", roll, 128, ini.c_str());
     g_rollValueCount = RollParseValues(roll, g_rollValues);
+    g_probeGround = GetPrivateProfileIntW(L"TirePressure", L"ProbeGround", 0, ini.c_str()) != 0;
+    if (g_probeGround) Log(L"%s", kGpStart);
     if (g_probeRoll)
     {
         std::wstring list;
@@ -1368,6 +1380,7 @@ static std::vector<WheelRef> g_rollBackJob; // under g_rollBackLock
 static volatile LONG g_rollBackPending = 0, g_rollBackDone = -1, g_rollBackOf = 0;
 static int RollStockBack(const std::vector<WheelRef> &wheels);
 static void RollingDragTruckUpdate(uint64_t vehicle);
+static void GroundProbeTruckUpdate(uint64_t vehicle);
 
 static void OnTruckUpdate(uint64_t returnSlot)
 {
@@ -1386,7 +1399,11 @@ static void OnTruckUpdate(uint64_t returnSlot)
     const LONG rollWord = g_rollFrameWord;
     if (rollWord >= 0) RollFrameWrite(returnSlot, rollWord);
     uint64_t updFirst = 0, updVehicle = 0;
-    if (Read(returnSlot + g_build->firstArgument, updFirst) && Read(updFirst + 0x20, updVehicle) && updVehicle) RollingDragTruckUpdate(updVehicle);
+    if (Read(returnSlot + g_build->firstArgument, updFirst) && Read(updFirst + 0x20, updVehicle) && updVehicle)
+    {
+        RollingDragTruckUpdate(updVehicle);
+        GroundProbeTruckUpdate(updVehicle); // reads only; with ProbeGround=0 it returns at once
+    }
     if (!g_jobPending) return;
     uint64_t first = 0, vehicle = 0;
     if (!Read(returnSlot + g_build->firstArgument, first) || !Read(first + 0x20, vehicle) || !vehicle) return;
@@ -1749,6 +1766,117 @@ static void RollingDragTruckUpdate(uint64_t vehicle)
     stats.cappedFrames = (g_dragStats.vehicle == vehicle ? g_dragStats.cappedFrames : 0) + (stats.capped ? 1 : 0);
     g_dragStats = stats;
     ReleaseSRWLockExclusive(&g_dragLock);
+}
+
+// ---- the ground probe (ini ProbeGround=1, ground_probe.h) ----
+// Read only: what the game keeps of the ground under each wheel, taken in the truck update at most 10 times a second
+// while the driven truck moves, and written by the mod's thread. Every read goes through Read. Nothing is written to
+// the game from here, and with ProbeGround=0 nothing is read and nothing kept.
+struct GpShot
+{
+    uint64_t vehicle;
+    ULONGLONG at; // GetTickCount64 as it was read
+    float speed;  // the truck's forward speed, m/s
+    int count;
+    GpWheel w[kGpWheelsMost];
+};
+static SRWLOCK g_gpLock = SRWLOCK_INIT;
+static GpShot g_gpShot = {};                        // the last pass read, under g_gpLock
+static volatile LONG g_gpPending = 0, g_gpLost = 0; // one waits for the mod's thread; passes read over one not yet taken
+static ULONGLONG g_gpNextAt = 0;                    // the game's thread's only: the next pass is due then
+static GpState g_gpState = {};                      // the mod's thread's only
+
+// One pass: the truck's speed, then each wheel's fields, into a fixed array (no heap: this runs in the truck update).
+// The wheels are the ones CurrentWheels gives, by the same checks. false where the truck is slower than 0.5 m/s or
+// its speed or wheels cannot be read. A wheel's field that cannot be read stays 0 with its ok bit clear.
+static bool GroundProbeRead(uint64_t vehicle, GpShot &shot)
+{
+    float pos[3];
+    uint64_t arr = 0, end = 0;
+    shot.vehicle = vehicle;
+    shot.count = 0;
+    if (!ForwardSpeed(vehicle, shot.speed, pos) || fabsf(shot.speed) <= kGpSpeedMin) return false;
+    if (!Read(vehicle + 0x200, arr) || !Read(vehicle + 0x208, end)) return false;
+    const uint64_t count = end > arr && end - arr <= 64 * 8 ? (end - arr) / 8 : 0;
+    for (uint64_t i = 0; i < count && shot.count < kGpWheelsMost; i++)
+    {
+        uint64_t model = 0, wheel = 0, body = 0, shape = 0, vt = 0;
+        if (!Read(arr + i * 8, model) || !Read(model + 0x2C8, wheel) || !Read(wheel, vt) || vt != g_base + g_build->wheelVtable) continue;
+        if (!Read(wheel + 0x18, body) || !Read(body + 0x20, shape) || !Read(shape, vt) || vt != g_base + g_build->cylinderVtable) continue;
+        GpWheel &w = shot.w[shot.count++];
+        w = GpWheel{};
+        w.index = (int)i;
+        for (int k = 0; k < kGpFloats; k++)
+        {
+            if (Read(wheel + kGpFloat[k].at, w.f[k])) w.ok |= 1u << k;
+            else w.f[k] = 0.0f;
+        }
+        for (int k = 0; k < kGpInts; k++)
+        {
+            if (Read(wheel + kGpIntAt[k], w.i[k])) w.ok |= 1u << (kGpFloats + k);
+            else w.i[k] = 0;
+        }
+        uint8_t flags[7] = {};
+        if (Read(wheel + 0x1A4, w.b[kGpByteBody])) w.ok |= kGpOkBody;
+        else w.b[kGpByteBody] = 0;
+        if (Read(wheel + 0x1C0, w.b[kGpByteIce])) w.ok |= kGpOkIce;
+        else w.b[kGpByteIce] = 0;
+        if (Read(wheel + 0x1C8, flags))
+        {
+            w.ok |= kGpOkFlags;
+            memcpy(w.b + kGpByteFlags, flags, sizeof flags);
+        }
+    }
+    return shot.count > 0;
+}
+
+// The truck update's part, on the game's thread: off, nothing; within 100 ms of the last pass, nothing; another truck's
+// update, two reads. No heap, no log and no wait here: the pass is left for the mod's thread, and one it has not taken
+// yet is read over and counted.
+static void GroundProbeTruckUpdate(uint64_t vehicle)
+{
+    if (!g_probeGround) return;
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_gpNextAt) return;
+    if (CurrentVehicle() != vehicle) return;
+    g_gpNextAt = now + kGpPassMs;
+    GpShot shot;
+    shot.at = now;
+    if (!GroundProbeRead(vehicle, shot)) return;
+    if (!TryAcquireSRWLockExclusive(&g_gpLock)) return; // the mod's thread is taking the last one: the next pass
+    if (g_gpPending) InterlockedIncrement(&g_gpLost);
+    g_gpShot = shot;
+    InterlockedExchange(&g_gpPending, 1);
+    ReleaseSRWLockExclusive(&g_gpLock);
+}
+
+// The mod's thread's part: the pass the truck update left becomes one line, the wheels that moved since their last
+// line (or have had none for a second) side by side. It does not ask whether rolling drag is on: the line says so.
+static void GroundProbePass(uint64_t vehicle)
+{
+    if (!g_probeGround) return;
+    static bool noHookSaid = false;
+    if (!g_foregroundReal)
+    {
+        if (vehicle && !noHookSaid)
+        {
+            noHookSaid = true;
+            Log(L"ground probe: nothing read, as the game's truck update is not hooked in this build%s: it reads only there", g_probeByHand ? L" (ProbeByHand=1)" : L"");
+        }
+        return;
+    }
+    if (!g_gpPending) return;
+    static GpShot shot; // the mod's thread's only
+    AcquireSRWLockExclusive(&g_gpLock);
+    shot = g_gpShot;
+    InterlockedExchange(&g_gpPending, 0);
+    const LONG lost = InterlockedExchange(&g_gpLost, 0);
+    ReleaseSRWLockExclusive(&g_gpLock);
+    bool write[kGpWheelsMost] = {};
+    if (!GpPick(g_gpState, shot.vehicle, shot.w, shot.count, shot.at, write)) return;
+    static wchar_t line[2600];
+    GpLine(line, sizeof line / sizeof line[0], shot.speed, (float)(shot.at - g_gpState.startAt) / 1000.0f, g_dragOn != 0, g_dragFactor, shot.w, write, shot.count, (int)lost);
+    Log(L"%s", line);
 }
 
 // The first wheel's floats in 0..1 that moved since the second before (no cap: the weight may lie anywhere in the window)
@@ -3350,6 +3478,8 @@ static DWORD WINAPI Run(void *)
         RollProbePass(vehicle, wheels, speedOk ? speed : 0.0f, speedOk ? pos[1] : 0.0f, dt, passAt, !gameMenuHolds);
         // rolling drag: on or off for the truck update, the pressure's factor, and its lines
         RollingDragPass(vehicle, wheels, speedOk ? speed : 0.0f, passAt);
+        // diagnostics: ProbeGround=1, the ground under each wheel as the truck update read it
+        GroundProbePass(vehicle);
         // which of the game's threads read the pad and present, once (diagnostics)
         static bool threadsLogged = false;
         static ULONGLONG threadsAt = 0;
@@ -5838,6 +5968,227 @@ static bool TextCutTest()
     return ok;
 }
 
+// The ground probe (ProbeGround, ground_probe.h): the line's text, which wheels get a line, and on a made up truck the
+// truck update's reads with the key off and on.
+static bool GroundProbeTest()
+{
+    // the line's text
+    GpWheel w = {};
+    w.index = 2;
+    w.ok = 0x7FFF;
+    const float vals[kGpFloats] = { 0.75f, 0.012f, 0.034f, 1.5f, FLT_MAX, 0.25f, 0.0f, -0.5f, 2.0f, 0.1f };
+    memcpy(w.f, vals, sizeof vals);
+    w.i[0] = 3;
+    w.i[1] = -1;
+    w.b[kGpByteBody] = 1;
+    w.b[kGpByteFlags + 2] = 1; // sand
+    w.b[kGpByteFlags + 6] = 1;
+    wchar_t text[600], cut[40];
+    GpWheelText(text, 600, w, 1.5f);
+    const wchar_t *const wheelText = L"2: sand 0.0900 | 1 0.75 | 0.0120 0.0340 | 1.5 none | 0.25 0 -0.5 2 | 0.1 0 | 3 -1 | 0.0.1.0.0.0.1";
+    bool texts = !wcscmp(text, wheelText);
+    // a failed read "?", no number "nan" and "inf", FLT_MAX "none" only at + 0x194
+    GpWheel bad = w;
+    bad.ok &= ~((1u << kGpSinkA) | (1u << kGpFloats) | kGpOkFlags);
+    bad.f[kGp190] = nanf("");
+    bad.f[kGp1A8] = INFINITY;
+    bad.f[kGp1AC] = -INFINITY;
+    bad.f[kGp194] = 5.0f;
+    bad.f[kGp1BC] = FLT_MAX;
+    GpWheelText(text, 600, bad, 1.5f);
+    texts = texts && !wcscmp(text, L"2: ? ? | 1 0.75 | ? 0.0340 | nan 5 | inf -inf -0.5 3.403e+38 | 0.1 0 | ? -1 | ?");
+    GpWheel other = w;
+    other.index = 3;
+    const GpWheel two[2] = { w, other };
+    const bool first[2] = { true, false }, both[2] = { true, true };
+    GpLine(text, 600, 3.0f, 1.52f, false, 1.5f, two, first, 2, 2);
+    texts = texts && std::wstring(text) == std::wstring(L"ground probe: 3.0000 m/s, t 1.5 s, drag off, 2 passes not written || ") + wheelText;
+    const int whole = GpLine(text, 600, -3.0f, 0.0f, true, 1.5f, two, both, 2, 0);
+    texts = texts && whole == (int)wcslen(text) && !wcsncmp(text, L"ground probe: -3.0000 m/s, t 0.0 s || 2: sand", 45) && wcsstr(text, L"0.0.1.0.0.0.1 || 3: sand 0.0900 | 1 0.75") != nullptr;
+    // a line too long for its buffer lands cut
+    const int cutTo = GpLine(cut, 40, 3.0f, 1.5f, false, 1.5f, two, both, 2, 0);
+    texts = texts && cutTo == 39 && wcslen(cut) == 39;
+    texts = texts && wcsstr(kGpStart, L"+1CB can be stale") && wcsstr(kGpStart, L"| +1A4 +128 | +178 +17C | +190 +194 | +1A8 +1AC +1B0 +1BC | +1C4 +1C0 | +1B8 +1D0 | +1C8 to +1CE");
+
+    // which wheels get a line
+    GpState s = {};
+    GpWheel now[2] = { w, other };
+    bool wr[kGpWheelsMost] = {};
+    const uint64_t truck = 0x1000;
+    bool rule = GpPick(s, truck, now, 2, 5000, wr) == 2 && wr[0] && wr[1] && s.startAt == 5000; // a truck's first pass: every wheel
+    rule = rule && GpPick(s, truck, now, 2, 5100, wr) == 0 && !wr[0] && !wr[1];                 // nothing moved: none
+    now[0].f[kGp190] += 5.0f;
+    now[0].f[kGp194] = 1.0f;
+    rule = rule && GpPick(s, truck, now, 2, 5200, wr) == 0; // a drifting + 0x190 alone, and + 0x194: none
+    now[0].f[kGpSinkA] += 0.004f;
+    rule = rule && GpPick(s, truck, now, 2, 5300, wr) == 0; // the sink by under 0.005
+    now[0].f[kGpSinkA] += 0.002f;
+    rule = rule && GpPick(s, truck, now, 2, 5400, wr) == 1 && wr[0] && !wr[1]; // by 0.006 since its last line: that wheel
+    rule = rule && s.last[0].f[kGp190] == now[0].f[kGp190];                    // and the line carries the drifted + 0x190
+    now[1].f[kGpSinkB] -= 0.006f;
+    rule = rule && GpPick(s, truck, now, 2, 5410, wr) == 1 && wr[1];
+    now[1].f[kGp1A8] += 0.009f;
+    rule = rule && GpPick(s, truck, now, 2, 5420, wr) == 0; // another float by under 0.01
+    now[1].f[kGp1A8] += 0.002f;
+    rule = rule && GpPick(s, truck, now, 2, 5430, wr) == 1 && wr[1];
+    now[0].i[1] = 0;
+    rule = rule && GpPick(s, truck, now, 2, 5440, wr) == 1 && wr[0]; // an int by any change
+    now[1].b[kGpByteFlags + 3] = 1;
+    rule = rule && GpPick(s, truck, now, 2, 5450, wr) == 1 && wr[1]; // a byte, + 0x1CB here
+    now[1].b[kGpByteBody] = 0;
+    rule = rule && GpPick(s, truck, now, 2, 5460, wr) == 1 && wr[1]; // + 0x1A4
+    now[0].ok &= ~(1u << kGpContactShare);
+    rule = rule && GpPick(s, truck, now, 2, 5470, wr) == 1 && wr[0]; // a read that failed
+    now[1].f[kGpIceBlend] = nanf("");
+    rule = rule && GpPick(s, truck, now, 2, 5480, wr) == 1 && wr[1]; // a float that became no number
+    rule = rule && GpPick(s, truck, now, 2, 5490, wr) == 0;          // and stayed none
+    // nothing moved: a wheel's next line a second after its last (5470 and 5480)
+    rule = rule && GpPick(s, truck, now, 2, 6469, wr) == 0 && GpPick(s, truck, now, 2, 6470, wr) == 1 && wr[0] && GpPick(s, truck, now, 2, 6480, wr) == 1 && wr[1];
+    rule = rule && GpPick(s, truck, now, 2, 6490, wr) == 0 && s.startAt == 5000;
+    // another truck, or another count of wheels: anew
+    rule = rule && GpPick(s, truck + 1, now, 2, 6500, wr) == 2 && s.startAt == 6500 && GpPick(s, truck + 1, now, 1, 6510, wr) == 1 && s.count == 1;
+    rule = rule && !GpFloatMoved(nanf(""), nanf(""), 0.01f) && GpFloatMoved(1.0f, nanf(""), 0.01f) && !GpFloatMoved(INFINITY, INFINITY, 0.01f) &&
+           kGpFloat[kGp190].step == 0.0f && kGpFloat[kGp194].step == 0.0f && kGpFloat[kGpSinkA].step == 0.005f && kGpFloat[kGpSinkB].step == 0.005f &&
+           kGpFloat[kGp190].at == 0x190 && kGpFloat[kGp194].at == 0x194 && kGpFloat[kGpSinkA].at == 0x178 && kGpFloat[kGpSinkB].at == 0x17C;
+
+    // a made up driven truck: the control block, the vehicle with its list of wheel models, the chassis moving at 3 m/s.
+    // Its last wheel lies across a page that cannot be read from + 0x1C0 on.
+    const Build saved = g_buildFound;
+    g_buildFound.wheelVtable = 0x100;
+    g_buildFound.cylinderVtable = 0x200;
+    static FakeTruck t, before;
+    std::vector<WheelRef> refs;
+    FakeTruckMake(t, refs);
+    static uint8_t veh[0x300], vehBefore[0x300], control[0x10], slot[0x600], firstArg[0x40];
+    static uint64_t controlAt, models[4];
+    auto put = [](uint8_t *o, size_t k, auto v) { memcpy(o + k, &v, sizeof v); };
+    memset(veh, 0, sizeof veh);
+    uint8_t *const pages = (uint8_t *)VirtualAlloc(nullptr, 0x2000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!pages) return false;
+    uint8_t *const edge = pages + 0x1000 - 0x1C0;
+    memcpy(edge, t.w[3].wheel, 0x1C0);
+    put(t.w[3].model, 0x2C8, (uint64_t)edge);
+    DWORD was = 0;
+    VirtualProtect(pages + 0x1000, 0x1000, PAGE_NOACCESS, &was);
+    for (int i = 0; i < 4; i++) models[i] = (uint64_t)t.w[i].model;
+    put(veh, 0x60, (uint64_t)t.model);
+    put(veh, 0x200, (uint64_t)models);
+    put(veh, 0x208, (uint64_t)(models + 4));
+    put(control, 8, (uint64_t)veh);
+    controlAt = (uint64_t)control;
+    g_buildFound.control = (uint64_t)&controlAt - g_base;
+    const float forward[3] = { 1.0f, 0.0f, 0.0f }, fast[3] = { 3.0f, 0.0f, 0.0f }, slow[3] = { 0.4f, 0.0f, 0.0f };
+    memcpy(t.chassis + 0x170, forward, sizeof forward);
+    memcpy(t.chassis + 0x230, fast, sizeof fast);
+    put(t.w[0].wheel, 0x128, 0.75f);
+    put(t.w[0].wheel, 0x178, 0.012f);
+    put(t.w[0].wheel, 0x17C, 0.034f);
+    put(t.w[0].wheel, 0x190, 1.5f);
+    put(t.w[0].wheel, 0x194, FLT_MAX);
+    put(t.w[0].wheel, 0x1B8, 3);
+    const uint64_t firstAt = (uint64_t)firstArg, vehAt = (uint64_t)veh, otherAt = (uint64_t)t.vehicle;
+    memcpy(slot + g_build->firstArgument, &firstAt, 8);
+    memcpy(firstArg + 0x20, &vehAt, 8);
+    HWND (WINAPI *const hookWas)() = g_foregroundReal;
+    const float factorWas = g_dragFactor;
+    g_dragKept.clear();
+    g_dragVehicle = 0;
+    g_dragOn = 0;
+    g_dragFactor = 1.0f;
+    g_gpState = GpState{};
+    g_gpNextAt = 0;
+    g_gpPending = 0;
+    auto reads = [&]() {
+        const long from = g_testReads;
+        OnTruckUpdate((uint64_t)slot);
+        return g_testReads - from;
+    };
+    // the key off (review M2): the truck update reads what it read before the probe was there, with rolling drag off
+    // and with it on. The two counts are those of this same test with GroundProbeTruckUpdate's call taken out of
+    // OnTruckUpdate, the only line of it that changed. And nothing is kept.
+    const long kOffDragOff = 2, kOffDragOn = 97;
+    g_probeGround = 0;
+    const long offDragOff = reads();
+    g_dragOn = 1;
+    const long offDragOn = reads();
+    g_dragOn = 0;
+    RollingDragFrame(vehAt, refs, false, 1.0f, nullptr);
+    AcquireSRWLockExclusive(&g_dragLock);
+    g_dragStats = DragStats{};
+    ReleaseSRWLockExclusive(&g_dragLock);
+    const bool offMeansOff = offDragOff == kOffDragOff && offDragOn == kOffDragOn && !g_gpPending && !g_gpNextAt && !g_gpState.vehicle && !g_gpShot.vehicle;
+    // the key on with rolling drag off: the probe reads all the same, and not a byte of the truck changes
+    g_probeGround = 1;
+    memcpy(&before, &t, sizeof t);
+    memcpy(vehBefore, veh, sizeof veh);
+    const long onReads = reads();
+    bool runs = onReads > offDragOff && g_gpPending == 1 && g_gpShot.vehicle == vehAt && g_gpShot.count == 4 && g_gpShot.speed == 3.0f && g_gpShot.w[3].index == 3;
+    const bool untouched = !memcmp(&before, &t, sizeof t) && !memcmp(vehBefore, veh, sizeof veh) && !memcmp(edge, before.w[3].wheel, 0x1C0);
+    // within 100 ms of that pass: as with the key off
+    const long gated = reads();
+    runs = runs && gated == offDragOff;
+    g_foregroundReal = GetForegroundWindow;
+    GroundProbePass(vehAt);
+    runs = runs && !g_gpPending && g_gpState.vehicle == vehAt;
+    // a wheel's sink moved, with rolling drag on by then: that wheel alone, and no "drag off"
+    put(t.w[0].wheel, 0x178, 0.022f);
+    g_gpNextAt = 0;
+    reads();
+    g_dragOn = 1;
+    GroundProbePass(vehAt);
+    g_dragOn = 0;
+    // under 0.5 m/s: nothing read past the speed; another truck's update: two reads more than with the key off
+    memcpy(t.chassis + 0x230, slow, sizeof slow);
+    g_gpNextAt = 0;
+    const long slowReads = reads();
+    const bool standing = !g_gpPending && slowReads == offDragOff + 2 + 5;
+    memcpy(t.chassis + 0x230, fast, sizeof fast);
+    memcpy(firstArg + 0x20, &otherAt, 8);
+    g_gpNextAt = 0;
+    const long otherReads = reads();
+    const bool otherTruck = !g_gpPending && otherReads == offDragOff + 2 && g_gpNextAt == 0;
+    // no hook: one line says why nothing is read
+    g_foregroundReal = nullptr;
+    GroundProbePass(vehAt);
+    std::string log;
+    FILE *lf = _wfsopen((g_dir + L"TirePressure.log").c_str(), L"rb", _SH_DENYNO);
+    if (lf)
+    {
+        char buf[4096];
+        size_t got;
+        while ((got = fread(buf, 1, sizeof buf, lf)) > 0) log.append(buf, got);
+        fclose(lf);
+    }
+    const bool lines =
+        log.find("ground probe: 3.0000 m/s, t 0.0 s, drag off || 0: paved 0.0100 | 1 0.75 | 0.0120 0.0340 | 1.5 none | 0 0 0 0 | 0 0 | 3 0 | 1.0.0.0.0.0.0 || 1: paved 0.0100 | 1 0 | 0.0000 0.0000 | 0 0 | 0 0 0 0 | 0 0 | 0 0 | 1.0.0.0.0.0.0 || 2: ") != std::string::npos &&
+        log.find(" || 3: ? ? | 1 0 | 0.0000 0.0000 | 0 0 | 0 0 0 0 | ? ? | 0 ? | ?") != std::string::npos &&
+        log.find(" s || 0: paved 0.0100 | 1 0.75 | 0.0220 0.0340 | 1.5 none | 0 0 0 0 | 0 0 | 3 0 | 1.0.0.0.0.0.0") != std::string::npos &&
+        log.find("drag off || 0: paved 0.0100 | 1 0.75 | 0.0220") == std::string::npos &&
+        log.find("ground probe: nothing read, as the game's truck update is not hooked in this build") != std::string::npos;
+    g_probeGround = 0;
+    g_gpState = GpState{};
+    g_gpShot = GpShot{};
+    g_gpNextAt = 0;
+    g_gpPending = 0;
+    g_gpLost = 0;
+    g_dragFactor = factorWas;
+    g_foregroundReal = hookWas;
+    g_dragKept.clear();
+    g_dragVehicle = 0;
+    g_buildFound = saved;
+    VirtualFree(pages, 0, MEM_RELEASE);
+    const bool ok = texts && rule && offMeansOff && runs && untouched && standing && otherTruck && lines;
+    printf("%s ground probe: a wheel's text with ? for a failed read, none for FLT_MAX at +194, nan and inf; a line for a sink moved by 0.006 and none for 0.004, for a "
+           "drifting +190 alone or for +194; an int, a byte or a lost read by any change; a second after a wheel's last line; the wheels side by side in one line. "
+           "With the key off the truck update reads %ld with rolling drag off and %ld with it on, as before the probe, and keeps nothing; with the key on and the drag "
+           "off it reads %ld, says drag off and changes no byte of the truck; nothing under 0.5 m/s or for another truck\n",
+           ok ? "ok  " : "FAIL", offDragOff, offDragOn, onReads);
+    if (!ok)
+        printf("     texts %d rule %d off %d (%ld %ld) runs %d (%ld, gated %ld) untouched %d standing %d (%ld) other %d (%ld) lines %d\n", texts, rule, offMeansOff, offDragOff,
+               offDragOn, runs, onReads, gated, untouched, standing, slowReads, otherTruck, otherReads, lines);
+    return ok;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     // "probe_test find <exe or image>": only the look through that exe
@@ -5867,6 +6218,7 @@ int wmain(int argc, wchar_t **argv)
     if (!DragFuelTest()) return 1;
     if (!StiffBaseTest()) return 1;
     if (!TextCutTest()) return 1;
+    if (!GroundProbeTest()) return 1;
     {
         // the fuel while rolling drag is in force (review F1): 1 from a row of 1.5; the row with it off or with no hook;
         // a toggle puts it in again on the next pass

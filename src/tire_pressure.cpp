@@ -2787,7 +2787,7 @@ static DWORD WINAPI Run(void *)
     else Log(L"state for other mods: not published (the shared memory could not be made)");
     if (!SoundStart(g_dir)) Log(L"sound: none, as its thread did not start");
     g_now = FactorsAt(g_pressure); // with a base grip, Normal is not the stock values: the first wheels get it straight away
-    Log(L"panel: %s", g_uiWanted && g_overlayOk ? L"drawn by the mod's own overlay" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly, and the pad does nothing in the mod (no panel and no trigger curves: PadThrottleCurve and PadBrakeCurve need the overlay)" : L"off (UI=0): the key cycles the modes directly");
+    Log(L"panel: %s", g_uiWanted && g_overlayOk ? L"set up on the mod's own overlay; the line Present hooked says when a swap chain is taken" : g_uiWanted ? L"the overlay did not start: the key cycles the modes directly, and the pad does nothing in the mod (no panel and no trigger curves: PadThrottleCurve and PadBrakeCurve need the overlay)" : L"off (UI=0): the key cycles the modes directly");
     if (g_overlayOk) Log(L"settings: the Tire Inflation tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini)");
     bool down = false, chainSeen = false, moving = false, panelOpen = false;
     bool drawBroken = false, drawSaid = false; // the overlay's frames (PanelDraws): why it draws none, and the line said once a session

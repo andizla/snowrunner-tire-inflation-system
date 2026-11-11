@@ -70,6 +70,7 @@ struct NgShared
 // Next Gen Graphics (hid.dll) reads the block too: its F keys go silent while graphics is not 0, read at byte 192 of a
 // version 3 block. A layout that moves it needs a new kNgSharedVersion.
 static_assert(offsetof(NgShared, graphics) == 192, "hid.dll reads NgShared::graphics at byte 192 of block version 3");
+static_assert(sizeof(NgShared) == 616, "the menu block of version 3 is 616 bytes: a change needs a new kNgSharedVersion");
 static NgShared g_private = {};
 static NgShared *g_shared = &g_private;
 static int g_slot = -1;
@@ -118,6 +119,72 @@ static void SharedJoin()
 }
 
 bool NgMenuOpen() { return g_shared->open != 0; }
+
+// ---- a start that comes after the game's swap chain (BRIEF_overlay_late_hook.md) ----
+// The overlay takes a swap chain as the game makes it. A mod whose hooks went in after that has none. It asks here, in
+// a block of its own beside the menu's (which stays as it is: other programs read it by its bytes). A Next Gen mod that
+// draws sees the asking in its own Present, where the chain is alive for sure, writes the chain's pointer here and
+// waits a moment; the late mod's thread gives the chain its table and says so. No reference is held on the chain and
+// no pointer is kept past that Present.
+static NgChain g_chainPrivate = {};
+static NgChain *g_chain = &g_chainPrivate;
+static volatile LONG g_ready = 0;       // the client's start is done (NgOverlayReady): frames are drawn from now on
+static volatile LONG g_wantServed = 0;  // the want this mod last looked at in its Present
+static volatile LONG g_offers = 0;      // the offers this mod made
+static volatile LONG g_wantOpen = 0;    // this mod asked and its asking is not answered yet
+static volatile LONG g_lateWaitMs = 10000, g_lateGraceMs = 1000;
+
+void NgOverlayReady() { InterlockedExchange(&g_ready, 1); }
+void NgLateWaitSet(int waitMs, int graceMs)
+{
+    InterlockedExchange(&g_lateWaitMs, waitMs);
+    InterlockedExchange(&g_lateGraceMs, graceMs);
+}
+// Frames wait for the client's start only where the client asked for that.
+static bool StartDone() { return !g_client.waitReady || g_ready; }
+
+static void ChainJoin()
+{
+    wchar_t name[64];
+    _snwprintf_s(name, _TRUNCATE, L"Local\\NextGen.Chain.%lu", GetCurrentProcessId());
+    const HANDLE map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(NgChain), name);
+    NgChain *c = map ? (NgChain *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(NgChain)) : nullptr;
+    if (!c) return;
+    // a new block is all zeros, which is also its counts' start: the first mod only names the version
+    InterlockedCompareExchange(&c->version, kNgChainVersion, 0);
+    if (c->version == kNgChainVersion) g_chain = c;
+    else NG_LOG(L"overlay: another Next Gen mod hands swap chains over another way (block version %ld): this mod neither asks nor offers", c->version);
+}
+
+// This mod's asking is answered, once: by the chain it was offered, by one it took at its making after all, or by
+// an offer it could not use. An asking left open would have every mod that draws offer for nothing.
+static void ChainAnswer()
+{
+    if (InterlockedExchange(&g_wantOpen, 0)) InterlockedIncrement(&g_chain->taken);
+}
+
+// In this mod's Present, on the game's render thread: a Next Gen mod that started late asked for the chain. It is
+// offered once for each asking, for 100 ms at most, and the Present goes on either way.
+static void ChainOffer(IDXGISwapChain *sc)
+{
+    NgChain *c = g_chain;
+    const LONG want = c->want;
+    if (want == g_wantServed) return;
+    InterlockedExchange(&g_wantServed, want);
+    const LONG takenWas = c->taken;
+    if (want - takenWas <= 0) return;
+    InterlockedExchangePointer(&c->offer, sc);
+    InterlockedIncrement(&c->offered);
+    const ULONGLONG from = GetTickCount64();
+    while (c->taken == takenWas && GetTickCount64() - from < 100) Sleep(1);
+    // the offer is taken back; where it is gone already the late mod holds it this moment and is waited for
+    if (!InterlockedExchangePointer(&c->offer, nullptr))
+        for (int i = 0; i < 2000 && c->taken == takenWas; i++) Sleep(1);
+    const LONG n = InterlockedIncrement(&g_offers);
+    NG_LOG(c->taken != takenWas ? L"overlay: a Next Gen mod that started after the game's swap chain asked for it: offered in this Present and taken after %llu ms (offer %ld)"
+                                : L"overlay: a Next Gen mod that started after the game's swap chain asked for it: offered in this Present and not taken within %llu ms (offer %ld)",
+           GetTickCount64() - from, n);
+}
 
 // Keys the menu cannot have: the mouse's buttons, the modifiers, the Windows keys and Esc (which keeps the old key when
 // a new one is being picked, and pauses the game).
@@ -1689,6 +1756,8 @@ static void FrameLetGo()
 // A fault in the overlay ends the overlay, never the game.
 static void FrameGuarded(IDXGISwapChain *sc)
 {
+    // the client's start is not done (its fonts are not read yet): the present is called on and nothing is drawn
+    if (!StartDone()) return;
     __try
     {
         Frame(sc);
@@ -1721,7 +1790,7 @@ static void SpotterInputFollow()
 static void SPOTTER_CDECL SpotterFrame(const SpotterPresentInfo *info, void *)
 {
     InterlockedExchange(&g_spot.missed, 0);
-    if (!info || !info->swapChain || !info->backbufferRtv || g_broken) return;
+    if (!info || !info->swapChain || !info->backbufferRtv || g_broken || !StartDone()) return;
     if (!g_spot.drawn)
     {
         g_spot.drawn = true;
@@ -1765,7 +1834,7 @@ int NgSpotterState() { return g_spot.handle ? 2 : g_spot.done ? 1 : 0; }
 
 // At each of the overlay's own presents in its first 60 s: Spotter found with its six functions, API version 1 or
 // later and drawing (or about to), and the overlay's callback registered.
-static void SpotterLook(ULONGLONG now)
+static void SpotterLookInner(ULONGLONG now)
 {
     if (g_spot.done || !g_spot.allowed) return;
     if (!g_spot.lookFrom) g_spot.lookFrom = now;
@@ -1811,6 +1880,16 @@ static void SpotterLook(ULONGLONG now)
            available);
 }
 
+// The look comes from the overlay's presents and, at a start after the game's swap chain, from the mod's own thread:
+// one at a time, the other skips its turn.
+static volatile LONG g_spotLooking = 0;
+static void SpotterLook(ULONGLONG now)
+{
+    if (InterlockedExchange(&g_spotLooking, 1)) return;
+    SpotterLookInner(now);
+    InterlockedExchange(&g_spotLooking, 0);
+}
+
 // Whether this present is Spotter's to draw: false draws on the overlay's own route.
 static bool SpotterDraws()
 {
@@ -1830,7 +1909,11 @@ static thread_local int t_presenting = 0;
 
 static HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain *sc, UINT sync, UINT flags)
 {
-    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST) && !SpotterDraws()) FrameGuarded(sc);
+    if (!t_presenting++ && !(flags & DXGI_PRESENT_TEST))
+    {
+        ChainOffer(sc);
+        if (!g_broken && !SpotterDraws()) FrameGuarded(sc);
+    }
     const HRESULT hr = g_present(sc, sync, flags);
     t_presenting--;
     return hr;
@@ -1838,7 +1921,11 @@ static HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain *sc, UINT sync, UINT
 
 static HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1 *sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS *params)
 {
-    if (!t_presenting++ && !g_broken && !(flags & DXGI_PRESENT_TEST) && !SpotterDraws()) FrameGuarded(sc);
+    if (!t_presenting++ && !(flags & DXGI_PRESENT_TEST))
+    {
+        ChainOffer(sc);
+        if (!g_broken && !SpotterDraws()) FrameGuarded(sc);
+    }
     const HRESULT hr = g_present1(sc, sync, flags, params);
     t_presenting--;
     return hr;
@@ -1907,6 +1994,7 @@ static void SwapChainOwn(IDXGISwapChain *sc)
     if (why.atStart) NG_LOG(L"overlay: a swap chain's method table lies at the start of its memory (made by %s, Present in %s): copied from there", in, has);
     InterlockedExchangePointer((void **)sc, to);
     InterlockedIncrement(&g_scOwned);
+    ChainAnswer();
     DXGI_SWAP_CHAIN_DESC sd = {};
     sc->GetDesc(&sd);
     wchar_t onto[MAX_PATH];
@@ -2005,24 +2093,87 @@ static void SwapChainFromReShade(IDXGISwapChain *sc)
     if (sc) SwapChainOwnGuarded(sc);
 }
 
-// Two minutes after the start without a swap chain of the game's, through ReShade or the overlay's hooks: the log says so.
+static BOOL CALLBACK WindowUpEach(HWND w, LPARAM out)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(w)) return TRUE;
+    *(bool *)out = true;
+    return FALSE;
+}
+
+// The start's watch, on a thread of its own. A swap chain taken before the game shows a window: nothing to do. A window
+// up for a second and no chain: the game made its chain before the hooks were in. Then, in this order: Spotter's frame
+// hook where Spotter is in the game (its API takes a callback from any thread), the asking in the chain block, and the
+// next chain the game makes. Ten seconds with a window up and still nothing: one line in capitals, once.
 static DWORD WINAPI WatchThread(void *viaReShade)
 {
-    Sleep(120000);
-    if (!g_scOwned && !g_ownBroken)
+    ULONGLONG windowAt = 0;
+    bool wanted = false, said = false;
+    LONG offeredSeen = g_chain->offered;
+    for (;;)
     {
-        if (viaReShade) NG_LOG(L"overlay: ReShade took the overlay as an add-on but handed it no swap chain of the game's in two minutes: nothing is drawn");
-        else
-            NG_LOG(L"overlay: no swap chain of the game's came through the overlay's hooks in two minutes: nothing is drawn (the game may have made "
-                   L"its DXGI factory and device before the overlay started)");
+        Sleep(20);
+        if (g_ownBroken) return 0;
+        NgChain *c = g_chain;
+        if (g_scOwned) return 0; // one came after all, at its making; SwapChainOwn answered the asking
+        const ULONGLONG now = GetTickCount64();
+        if (!windowAt)
+        {
+            bool up = false;
+            EnumWindows(&WindowUpEach, (LPARAM)&up);
+            if (up) windowAt = now;
+            continue;
+        }
+        if (!StartDone() || now - windowAt < (ULONGLONG)g_lateGraceMs) continue;
+        if (!viaReShade)
+        {
+            SpotterLook(now);
+            if (g_spot.handle)
+            {
+                NG_LOG(L"overlay: the game made its swap chain before the overlay's hook was in: the overlay draws through Spotter's frame hook, asked for from the mod's own thread");
+                return 0;
+            }
+            if (!wanted)
+            {
+                wanted = true;
+                offeredSeen = c->offered;
+                InterlockedExchange(&g_wantOpen, 1);
+                InterlockedExchange(&g_wantServed, InterlockedIncrement(&c->want));
+                NG_LOG(L"overlay: the game made its swap chain before the overlay's hook was in: asking the other Next Gen mods for it");
+            }
+            if (c->offered != offeredSeen)
+            {
+                offeredSeen = c->offered;
+                IDXGISwapChain *sc = (IDXGISwapChain *)InterlockedExchangePointer(&c->offer, nullptr);
+                if (sc)
+                {
+                    SwapChainOwnGuarded(sc);
+                    const bool took = g_scOwned != 0;
+                    if (took) NG_LOG(L"overlay: the swap chain taken from another Next Gen mod's Present");
+                    else NG_LOG(L"overlay: another Next Gen mod offered the swap chain but it could not be given the overlay's Present (the lines above say why)");
+                    ChainAnswer(); // where SwapChainOwn did not
+                    if (took) return 0;
+                }
+            }
+        }
+        if (!said && now - windowAt >= (ULONGLONG)g_lateWaitMs)
+        {
+            said = true; // the watch goes on: an offer may still come
+            if (viaReShade) NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: ReShade took the overlay as an add-on but handed it no swap chain of the game's");
+            else
+                NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: the game made its swap chain before the overlay's hook was in, and no other Next Gen mod handed it "
+                       L"over; the next swap chain the game makes is taken (a change of the screen mode can make one)");
+            if (viaReShade) return 0;
+        }
     }
-    return 0;
 }
 
 bool NgOverlayStart(const NgClient &client)
 {
     g_client = client;
     SharedJoin();
+    ChainJoin();
     InterlockedExchange(&g_shared->key, KeyLoad());
     if (g_slot < 0)
     {
@@ -2067,8 +2218,8 @@ bool NgOverlayStart(const NgClient &client)
         NG_LOG(L"overlay: the game's exe imports neither CreateDXGIFactory1 nor D3D11CreateDevice: nothing is drawn");
         return false;
     }
-    NG_LOG(L"overlay: the game's swap chains get the overlay's Present as the game makes them (through its import%s of %s), in method tables of their own; "
-           L"DirectX's own stay untouched",
+    NG_LOG(L"overlay: the hooks are in: a swap chain the game makes from now on gets the overlay's Present (through its import%s of %s), in a method table "
+           L"of its own; DirectX's own stay untouched",
            factory && device ? L"s" : L"", factory && device ? L"CreateDXGIFactory1 and D3D11CreateDevice" : factory ? L"CreateDXGIFactory1" : L"D3D11CreateDevice");
     const HANDLE t = CreateThread(nullptr, 0, WatchThread, nullptr, 0, nullptr);
     if (t) CloseHandle(t);

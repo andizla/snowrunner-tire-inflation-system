@@ -162,6 +162,7 @@ extern "C" __declspec(dllexport) int TestKeyFromIni() { return NgMenuKeyFromIni(
 extern "C" __declspec(dllexport) int TestTableCopy() { return NgTableCopySelfCheck(); }
 extern "C" __declspec(dllexport) void TestSpotterReset() { NgSpotterReset(); }
 extern "C" __declspec(dllexport) int TestSpotterState() { return NgSpotterState(); }
+extern "C" __declspec(dllexport) void TestLateWait(int waitMs, int graceMs) { NgLateWaitSet(waitMs, graceMs); }
 
 extern "C" __declspec(dllexport) bool TestStart(const char *tab, int order, volatile LONG *frames)
 {
@@ -466,8 +467,163 @@ static void TestSpotter(HMODULE a, HMODULE b, IDXGISwapChain *sc, const wchar_t 
     FreeLibrary(spotter);
 }
 
-int main()
+// ---- a start after the game's swap chain (BRIEF_overlay_late_hook.md), each case a run of its own ----
+//   overlay_test.exe handover   mod A in before the chain, mod B after it: A offers the chain in its Present, B takes it
+//   overlay_test.exe alone      both mods after the chain: both ask, nobody offers, the next chain is taken by both
+//   overlay_test.exe spotter    a mod after the chain with Spotter in the game: its callback registered from the mod's thread
+
+// The chain block's layout as ng_overlay.h has it (version 1).
+struct NgChainCopy
 {
+    volatile LONG version, want, offered, taken;
+    void *volatile offer;
+};
+
+struct LateChain
+{
+    IDXGISwapChain *sc;
+    ID3D11Device *dev;
+    ID3D11DeviceContext *ctx;
+};
+
+// The game's way: a factory from CreateDXGIFactory1, a device on its WARP adapter, the swap chain from the factory.
+static bool LateChainMake(HWND wnd, LateChain &c)
+{
+    c = {};
+    IDXGIFactory1 *f = nullptr;
+    IDXGIFactory4 *f4 = nullptr;
+    IDXGIAdapter *warp = nullptr;
+    DXGI_SWAP_CHAIN_DESC sd = Desc(wnd);
+    if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&f)) && f && SUCCEEDED(f->QueryInterface(__uuidof(IDXGIFactory4), (void **)&f4)) && f4)
+        f4->EnumWarpAdapter(__uuidof(IDXGIAdapter), (void **)&warp);
+    const bool made = warp && SUCCEEDED(D3D11CreateDevice(warp, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &c.dev, nullptr, &c.ctx)) && c.dev &&
+                      SUCCEEDED(f->CreateSwapChain(c.dev, &sd, &c.sc)) && c.sc;
+    if (warp) warp->Release();
+    if (f4) f4->Release();
+    if (f) f->Release();
+    return made;
+}
+
+static int LateCases(const char *mode)
+{
+    typedef bool (*StartFn)(const char *, int, volatile LONG *);
+    typedef void (*WaitFn)(int, int);
+    typedef void (*SetFn)(unsigned, int);
+    typedef void (*FireFn)(void *);
+    typedef void (*StateFn)(int *, int *, int *, int *);
+    char line[256];
+    const HWND one = Window(L"late one"), other = Window(L"late other");
+    Check(one && other, "two windows, the first shown");
+    if (!one || !other) return 1;
+    ShowWindow(one, SW_SHOWNOACTIVATE);
+    wchar_t dir[MAX_PATH] = {}, pathA[MAX_PATH], pathB[MAX_PATH], pathS[MAX_PATH];
+    GetModuleFileNameW(nullptr, dir, MAX_PATH);
+    *(wcsrchr(dir, L'\\') + 1) = 0;
+    swprintf_s(pathA, L"%sng_mod_a.dll", dir);
+    swprintf_s(pathB, L"%sng_mod_b.dll", dir);
+    swprintf_s(pathS, L"%sSpotter.asi", dir);
+    const bool spotterCase = strcmp(mode, "spotter") == 0, alone = strcmp(mode, "alone") == 0;
+    const HMODULE spotter = spotterCase ? LoadLibraryW(pathS) : nullptr;
+    const HMODULE a = LoadLibraryW(pathA), b = LoadLibraryW(pathB);
+    const StartFn startA = a ? (StartFn)GetProcAddress(a, "TestStart") : nullptr, startB = b ? (StartFn)GetProcAddress(b, "TestStart") : nullptr;
+    const WaitFn waitA = a ? (WaitFn)GetProcAddress(a, "TestLateWait") : nullptr, waitB = b ? (WaitFn)GetProcAddress(b, "TestLateWait") : nullptr;
+    Check(startA && startB && waitA && waitB && a != b, "the two stand-in mods load, each its own copy");
+    if (!startA || !startB || !waitA || !waitB) return 1;
+    waitA(1500, 300);
+    waitB(1500, 300);
+    static volatile LONG framesA = 0, framesB = 0;
+    wchar_t name[64];
+    swprintf_s(name, L"Local\\NextGen.Chain.%lu", GetCurrentProcessId());
+    LateChain c1, c2;
+    if (spotterCase)
+    {
+        const FireFn fire = spotter ? (FireFn)GetProcAddress(spotter, "StubFire") : nullptr;
+        const StateFn state = spotter ? (StateFn)GetProcAddress(spotter, "StubState") : nullptr;
+        Check(fire && state, "the stand-in Spotter.asi loads");
+        Check(LateChainMake(one, c1), "the swap chain is made before the mod's hooks");
+        if (!fire || !state || !c1.sc) return 1;
+        Check(startA("A", 1, &framesA), "mod A starts after the swap chain");
+        int live = 0, unregs = 0, mask = 0, inputs = 0;
+        const ULONGLONG from = GetTickCount64();
+        while (!live && GetTickCount64() - from < 3000) Sleep(20), state(&live, &unregs, &mask, &inputs);
+        Check(live == 1, "with no chain taken the mod registers with Spotter from its own thread");
+        Presents(c1.sc, 5);
+        Check(framesA == 0, "its own Present is on no chain: nothing drawn by it");
+        for (int i = 0; i < 5; i++) fire(c1.sc);
+        sprintf_s(line, "Spotter's five frames draw the mod's five (%ld)", framesA);
+        Check(framesA == 5, line);
+        Sleep(1800); // past the wait: Spotter draws, so nothing is asked and no line in capitals comes (see the output)
+        const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+        const NgChainCopy *k = map ? (const NgChainCopy *)MapViewOfFile(map, FILE_MAP_READ, 0, 0, sizeof(NgChainCopy)) : nullptr;
+        Check(k && k->version == 1 && k->want == 0, "the chain is not asked for");
+        return 0;
+    }
+    if (alone)
+    {
+        Check(LateChainMake(one, c1), "the swap chain is made before both mods' hooks");
+        if (!c1.sc) return 1;
+        Check(startA("A", 1, &framesA) && startB("B", 2, &framesB), "both mods start after the swap chain");
+        const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+        const NgChainCopy *k = map ? (const NgChainCopy *)MapViewOfFile(map, FILE_MAP_READ, 0, 0, sizeof(NgChainCopy)) : nullptr;
+        Check(k && k->version == 1, "the chain block is there, version 1");
+        if (!k) return 1;
+        const ULONGLONG from = GetTickCount64();
+        while (GetTickCount64() - from < 2200) Presents(c1.sc, 1), Sleep(20); // past the grace and the wait
+        sprintf_s(line, "both ask (%ld), nobody offers (%ld), nothing is drawn (%ld, %ld)", k->want, k->offered, framesA, framesB);
+        Check(k->want == 2 && k->offered == 0 && k->taken == 0 && framesA == 0 && framesB == 0, line);
+        Check(LateChainMake(other, c2), "a second swap chain");
+        if (!c2.sc) return 1;
+        Presents(c2.sc, 10);
+        sprintf_s(line, "the next chain the game makes is taken by both: 10 presents, %ld and %ld frames", framesA, framesB);
+        Check(framesA == 10 && framesB == 10, line);
+        Check(k->want == 2 && k->taken == 2 && k->offered == 0 && k->offer == nullptr,
+              "both askings are answered by the chain taken at its making: no offer for nothing, no further asking, no pointer left in the block");
+        return 0;
+    }
+    // handover
+    Check(startA("A", 1, &framesA), "mod A starts before the swap chain");
+    Check(LateChainMake(one, c1), "the swap chain is made: mod A has it");
+    if (!c1.sc) return 1;
+    Presents(c1.sc, 5);
+    Check(framesA == 5 && framesB == 0, "mod A draws");
+    Check(startB("B", 2, &framesB), "mod B starts after the swap chain");
+    const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+    const NgChainCopy *k = map ? (const NgChainCopy *)MapViewOfFile(map, FILE_MAP_READ, 0, 0, sizeof(NgChainCopy)) : nullptr;
+    Check(k && k->version == 1, "the chain block is there, version 1");
+    if (!k) return 1;
+    ULONGLONG longest = 0;
+    const ULONGLONG from = GetTickCount64();
+    int presents = 0;
+    while (!framesB && GetTickCount64() - from < 3000)
+    {
+        const ULONGLONG t = GetTickCount64();
+        Presents(c1.sc, 1);
+        presents++;
+        if (GetTickCount64() - t > longest) longest = GetTickCount64() - t;
+        Sleep(10);
+    }
+    sprintf_s(line, "mod B draws after the handover (asked %ld, offered %ld, taken %ld; the longest present %llu ms)", k->want, k->offered, k->taken, longest);
+    Check(framesB > 0 && k->want == 1 && k->offered == 1 && k->taken == 1 && k->offer == nullptr && longest < 150, line);
+    Check(framesA == 5 + presents, "mod A drew on every present meanwhile");
+    const LONG wasA = framesA, wasB = framesB;
+    Presents(c1.sc, 10);
+    Check(framesA - wasA == 10 && framesB - wasB == 10, "both draw on each of 10 presents");
+    Sleep(1800); // past the wait: no line in capitals (see the output)
+    Presents(c1.sc, 3);
+    Check(k->want == 1 && k->offered == 1, "no second asking and no second offer");
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1)
+    {
+        LateCases(argv[1]);
+        printf(g_failed ? "OVERLAY TEST %s FAILED (%d)\n" : "OVERLAY TEST %s OK\n", argv[1], g_failed);
+        fflush(stdout);
+        // the mods' watch threads may still run: no unload, the process ends here
+        ExitProcess(g_failed ? 1 : 0);
+    }
     char line[256];
     HWND one = Window(L"one"), other = Window(L"other");
     Check(one && other, "two hidden windows");

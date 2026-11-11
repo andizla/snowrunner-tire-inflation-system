@@ -21,11 +21,30 @@ struct NgClient
     void (*frame)();                      // every frame: what the mod always draws, into ImGui's background or foreground draw list
     void (*page)();                       // the tab's body, on the frames it shows
     void (*deviceGone)();                 // the game's device is going: free every texture NgTextureMake made
+    bool waitReady;                       // frame() and page() are not called before NgOverlayReady()
+};
+
+// The block of Local\NextGen.Chain.<process id>: a mod that started after the game's swap chain asks for it, a mod that
+// draws offers it inside its own Present (ng_overlay.cpp). All zeros when new.
+static const LONG kNgChainVersion = 1;
+struct NgChain
+{
+    volatile LONG version; // kNgChainVersion
+    volatile LONG want;    // the askings: one a mod and session
+    volatile LONG offered; // the offers made
+    volatile LONG taken;   // the askings answered
+    void *volatile offer;  // the swap chain being presented, only while its Present waits; else null
 };
 
 // Starts the overlay: takes the game's imports (or ReShade's events) that bring its swap chains, so call it before the
 // game makes its DirectX device. false: it cannot start (in the log).
 bool NgOverlayStart(const NgClient &client);
+// With NgClient::waitReady: the client's own start is done (its fonts read, its settings set). One write; frames are
+// drawn from the next present on.
+void NgOverlayReady();
+// How long a window may be up without a swap chain before the log's line in capitals (10 s), and how long before the
+// mod asks the others for the chain (1 s). For the tests.
+void NgLateWaitSet(int waitMs, int graceMs);
 // Puts value in a pointer slot (an import of a module, or a pointer the game keeps) and gives back in was what was
 // there; with expect, only while the slot still holds that. Every Next Gen mod in the process takes one lock around
 // these writes, and a write that faults (the page made read-only again by another writer) is tried again. false: not

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A Next Gen mod could draw nothing for a whole session: on some systems the game is ready sooner than the mod was. Now a mod that came too late gets the picture from another Next Gen mod of this release in the game, and Tire Inflation hands it over the same way. With no such mod the log says after ten seconds, in capitals, that the overlay draws nothing and why, and the mod draws as soon as the game sets up its picture anew.
 - Rolling drag on dirt is lighter: Crr 0.020, down from 0.030. Trucks lost too much speed on plain dirt roads. Mud still counts as dirt, with the mud drag of the game on top.
 - The texts of the tab, the panel and the Graphics tab carry no apostrophe and no contraction: "the Normal pressure", "does not". A test keeps them so.
 - The Graphics tab's text no longer says how Next Gen Graphics' keys behave beside it; the DLL's own lines in the tab say it.

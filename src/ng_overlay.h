@@ -37,6 +37,17 @@ ImTextureID NgTextureMake(const void *rgba, int w, int h);
 void NgTextureFree(ImTextureID tex);
 // Whether the NEXT GEN menu is open, on any tab.
 bool NgMenuOpen();
+// Whether the menu is open on a tab this mod does not draw: open, a tab chosen, and not this mod's own nor the Graphics
+// tab it hosts (BRIEF_full_pass_gameplay.md part 3; the cluster hides under another mod's tab).
+bool NgOtherTabShown();
+// GetTickCount64 at the end of the last frame the overlay drew through, 0 before the first, by either route (its own
+// Present or Spotter's frame hook); and whether a fault ended the overlay (BRIEF_full_pass_tire.md part 3).
+unsigned long long NgLastFrameDrawn();
+bool NgOverlayBroken();
+#ifdef NG_FAULT_TEST
+// The test build only: the next frame faults once, 1 in the client's frame, 2 after the overlay's target is bound.
+void NgFaultArm(int where);
+#endif
 int NgMenuKeyFromIni();                   // the key NextGen.ini gives the menu, read as a start reads it (a missing file is made); for tests
 int NgTableCopySelfCheck();               // the method table copy on tables in memory made for it; 0 when it holds, else the bits that failed; for tests
 // The menu's key, a virtual key code; 0 leaves it. Saved in NextGen.ini, which every Next Gen mod reads at start.

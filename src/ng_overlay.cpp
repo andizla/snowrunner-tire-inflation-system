@@ -1167,6 +1167,25 @@ static IDXGISwapChain *g_sc = nullptr; // the swap chain drawn on (not held: onl
 static ULONGLONG g_scSeen = 0;
 static ID3D11Device *g_dev = nullptr;
 static ID3D11DeviceContext *g_ctx = nullptr;
+// What Frame holds while it draws, kept where a caught fault can give it back (the review of 114, M4): the back buffer,
+// the overlay's view of it, and the game's targets taken to be set back; bound while the overlay's view is the target.
+// Each is cleared where the good path releases it.
+static ID3D11Texture2D *g_heldBb = nullptr;
+static ID3D11RenderTargetView *g_heldRtv = nullptr;
+static ID3D11RenderTargetView *g_heldRtvWas[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+static ID3D11DepthStencilView *g_heldDsvWas = nullptr;
+static bool g_heldBound = false;
+static volatile LONG64 g_lastDrawn = 0; // NgLastFrameDrawn
+#ifdef NG_FAULT_TEST
+static volatile LONG g_faultArm = 0;
+void NgFaultArm(int where) { InterlockedExchange(&g_faultArm, where); }
+static void FaultHere(int where)
+{
+    if (InterlockedCompareExchange(&g_faultArm, 0, where) == where) *(volatile int *)nullptr = 0;
+}
+#else
+static void FaultHere(int) {}
+#endif
 static bool g_context = false, g_keyWas = false;
 static float g_styleScale = 0.0f;
 static LARGE_INTEGER g_rate = {}, g_last = {};
@@ -1406,6 +1425,7 @@ static void Frame(IDXGISwapChain *sc)
     else dev->Release();
     ID3D11Texture2D *bb = nullptr;
     if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&bb)) || !bb) return;
+    g_heldBb = bb;
     D3D11_TEXTURE2D_DESC td = {};
     bb->GetDesc(&td);
     // a picture in linear light (the 16-bit float swap chain of HDR, scRGB) takes the menu at a paper white of 203 nits
@@ -1476,6 +1496,7 @@ static void Frame(IDXGISwapChain *sc)
     ImGui_ImplDX11_NewFrame();
     ImGui::NewFrame();
     if (g_client.frame) g_client.frame();
+    FaultHere(1);
     if (menu) MenuDraw(s);
     ImGui::Render();
     ImDrawData *dd = ImGui::GetDrawData();
@@ -1487,21 +1508,36 @@ static void Frame(IDXGISwapChain *sc)
         ID3D11RenderTargetView *rtv = nullptr;
         if (SUCCEEDED(g_dev->CreateRenderTargetView(bb, &rd, &rtv)) && rtv)
         {
+            g_heldRtv = rtv;
             // the game's render targets back as they were after the overlay's (ImGui's renderer restores the rest)
-            ID3D11RenderTargetView *rtvWas[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-            ID3D11DepthStencilView *dsvWas = nullptr;
-            g_ctx->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvWas, &dsvWas);
+            g_ctx->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, g_heldRtvWas, &g_heldDsvWas);
             g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            g_heldBound = true;
+            FaultHere(2);
             ImGui_ImplDX11_RenderDrawData(dd);
-            g_ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvWas, dsvWas);
-            for (ID3D11RenderTargetView *r : rtvWas)
-                if (r) r->Release();
-            if (dsvWas) dsvWas->Release();
+            g_ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, g_heldRtvWas, g_heldDsvWas);
+            g_heldBound = false;
+            for (ID3D11RenderTargetView *&r : g_heldRtvWas)
+                if (r) r->Release(), r = nullptr;
+            if (g_heldDsvWas) g_heldDsvWas->Release(), g_heldDsvWas = nullptr;
             rtv->Release();
+            g_heldRtv = nullptr;
         }
     }
     bb->Release();
+    g_heldBb = nullptr;
+    InterlockedExchange64(&g_lastDrawn, (LONG64)GetTickCount64()); // a frame drawn through (the stamp of 115, part 3)
 }
+
+bool NgOtherTabShown()
+{
+    const NgShared *sh = g_shared;
+    if (!sh->open) return false;
+    const LONG chosen = sh->chosen;
+    return chosen >= 0 && chosen != g_slot && !(g_gslot >= 0 && chosen == g_gslot);
+}
+unsigned long long NgLastFrameDrawn() { return (unsigned long long)g_lastDrawn; }
+bool NgOverlayBroken() { return g_broken != 0; }
 
 // ---- a fault in the overlay ----
 
@@ -1604,6 +1640,52 @@ static void MenuLeave()
     if (!other) MenuClose();
 }
 
+// After a caught fault in Frame: what it held given back, each step under its own guard and each once (the review of 114,
+// M4). The game's targets set back where the overlay's was bound, then each reference let go; then the mouse and keys
+// claimed through Spotter (HookPresent returns on g_broken before SpotterDraws, so SpotterTakeBack never runs). A later
+// ResizeBuffers is refused while any reference to the back buffer stays.
+static void HeldSetBack()
+{
+    __try
+    {
+        if (g_ctx) g_ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, g_heldRtvWas, g_heldDsvWas);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+static void HeldRelease(IUnknown *p)
+{
+    __try
+    {
+        p->Release();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+static void SpotterClaimBack()
+{
+    __try
+    {
+        if (g_spot.claimed && g_spot.handle && g_spot.input) g_spot.input(g_spot.handle, 0);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    g_spot.claimed = 0;
+}
+static void FrameLetGo()
+{
+    const bool bound = g_heldBound;
+    if (g_heldBound) HeldSetBack();
+    g_heldBound = false;
+    int released = 0;
+    for (ID3D11RenderTargetView *&r : g_heldRtvWas)
+        if (r) HeldRelease(r), r = nullptr, released++;
+    if (g_heldDsvWas) HeldRelease(g_heldDsvWas), g_heldDsvWas = nullptr, released++;
+    if (g_heldRtv) HeldRelease(g_heldRtv), g_heldRtv = nullptr, released++;
+    if (g_heldBb) HeldRelease(g_heldBb), g_heldBb = nullptr, released++;
+    const bool claimed = g_spot.claimed != 0;
+    SpotterClaimBack();
+    NG_LOG(L"overlay: after the fault %d references given back%s%s", released, bound ? L", the game's render targets set back" : L"",
+           claimed ? L", the mouse and keys given back through Spotter" : L"");
+}
+
 // A fault in the overlay ends the overlay, never the game.
 static void FrameGuarded(IDXGISwapChain *sc)
 {
@@ -1616,6 +1698,7 @@ static void FrameGuarded(IDXGISwapChain *sc)
         // an overflow used up the stack's guard page: without a new one the thread's next overflow would end the game
         if (g_faultCode == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
         InterlockedExchange(&g_broken, 1);
+        FrameLetGo();
         MenuLeave();
         FaultLog();
     }
@@ -1646,7 +1729,9 @@ static void SPOTTER_CDECL SpotterFrame(const SpotterPresentInfo *info, void *)
                info->size >= offsetof(SpotterPresentInfo, flags) ? info->rtvFormat : 0u);
     }
     FrameGuarded((IDXGISwapChain *)info->swapChain);
-    SpotterInputFollow();
+    // a fault in that frame gave the claim back (FrameLetGo): it is not taken again for a menu that no longer draws
+    // (the review of 114, F1)
+    if (!g_broken) SpotterInputFollow();
 }
 
 // The overlay draws on its own route again, and why.

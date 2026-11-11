@@ -369,6 +369,36 @@ inline void MarkClear(const std::wstring &file, const std::wstring &section)
     WritePrivateProfileStringW(section.c_str(), L"How", nullptr, file.c_str());
 }
 
+// The file is made by the mod, not by the profile API: a missing file the API makes itself is ANSI and has no note.
+// FileNote is the note for the file's head, set once by the mod that owns the file (lines starting with ";", each
+// ended with a line feed); with none set the API makes the file as before. FileMake writes a missing file as UTF-16
+// with that note. Put is the one write that can make the file: every write that adds a value where the file may be
+// missing goes through it. A removal (a null value) of the API on a missing file leaves an empty file behind, which
+// would then stay without its note: Put does no removal where there is no file. The removals and the writes that call
+// the API as they are all come after a read that found their section or their mark, so their file is there.
+inline const wchar_t *&FileNote()
+{
+    static const wchar_t *note = nullptr;
+    return note;
+}
+inline void FileMake(const std::wstring &file)
+{
+    const wchar_t *note = FileNote();
+    if (!note || GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+    FILE *f = nullptr;
+    if (_wfopen_s(&f, file.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
+    {
+        fputws(note, f);
+        fclose(f);
+    }
+}
+inline BOOL Put(const std::wstring &file, const std::wstring &section, const wchar_t *key, const wchar_t *value)
+{
+    if (value) FileMake(file);
+    else if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) return TRUE; // nothing to remove, and no empty file made
+    return WritePrivateProfileStringW(section.c_str(), key, value, file.c_str());
+}
+
 // An id's line in [Seen]: true and when where it is listed.
 inline bool SeenGet(const std::wstring &file, const char *id, unsigned long long &when)
 {
@@ -386,7 +416,7 @@ inline void SeenPut(const std::wstring &file, const char *id, unsigned long long
     if (!id || !id[0]) return;
     wchar_t at[32];
     _snwprintf_s(at, _TRUNCATE, L"%llu", when);
-    WritePrivateProfileStringW(kSeenSection, Wide(id).c_str(), at, file.c_str());
+    Put(file, kSeenSection, Wide(id).c_str(), at); // the first write of a new install: the file is made with its note first
     auto all = Keys(file, kSeenSection);
     if ((int)all.size() <= kSeenKept) return;
     std::sort(all.begin(), all.end(), [](const auto &a, const auto &b) { return _wcstoui64(a.second.c_str(), nullptr, 10) > _wcstoui64(b.second.c_str(), nullptr, 10); });

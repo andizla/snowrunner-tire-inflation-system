@@ -4075,6 +4075,72 @@ static bool TruckModesTest()
     return ok;
 }
 
+// A fresh trucks file is the mod's own make whichever write comes first (117 part 3): [Seen] first as on a new install,
+// a kind's mode first, a truck's own first. The note at the head, UTF-16 with its mark, and the values read back.
+static bool TrucksFileMakeTest()
+{
+    const std::wstring file = g_dir + L"test_trucks_make.ini";
+    const char *id = "{11111111-2222-3333-4444-555555555555}";
+    auto head = [&](std::wstring &text)
+    {
+        // the file's bytes: the UTF-16 mark, then the text
+        text.clear();
+        FILE *f = _wfsopen(file.c_str(), L"rb", _SH_DENYNO);
+        if (!f) return false;
+        unsigned char mark[2] = {};
+        const bool marked = fread(mark, 1, 2, f) == 2 && mark[0] == 0xFF && mark[1] == 0xFE;
+        wchar_t c;
+        while (fread(&c, sizeof c, 1, f) == 1) text += c;
+        fclose(f);
+        return marked;
+    };
+    const std::wstring noteStart = L"; Each truck's pressure mode: [kind] for every truck of a kind";
+    auto noted = [&]()
+    {
+        std::wstring text;
+        return head(text) && text.compare(0, noteStart.size(), noteStart) == 0 && text.find(L"PerTruck=0 in TirePressure.ini turns this off.") != std::wstring::npos;
+    };
+    // [Seen] first, then a mode
+    DeleteFileW(file.c_str());
+    truckid::SeenPut(file, id, 500);
+    const bool afterSeen = noted();
+    TruckModeSave(file, "test_kind_a", kLow);
+    unsigned long long when = 0;
+    int mode = -1;
+    std::wstring text;
+    bool seenFirst = afterSeen && noted() && truckid::SeenGet(file, id, when) && when == 500 && TruckModeLoad(file, "test_kind_a", mode) && mode == kLow;
+    // the note once, at the head
+    seenFirst = seenFirst && head(text) && text.find(noteStart, 1) == std::wstring::npos;
+    // a kind's mode first, and a truck's own first
+    DeleteFileW(file.c_str());
+    TruckModeSave(file, "test_kind_a", kLow);
+    const bool modeFirst = noted() && TruckModeLoad(file, "test_kind_a", mode) && mode == kLow;
+    DeleteFileW(file.c_str());
+    TruckModeSaveOwn(file, "test_kind_a", id, kLow, true);
+    const bool ownFirst = noted() && GetPrivateProfileIntW(TruckSection("test_kind_a", id).c_str(), L"Own", 0, file.c_str()) == 1;
+    // a removal makes no file, and a file already there is left as it is (one made without the note stays so)
+    DeleteFileW(file.c_str());
+    truckid::Put(file, L"Seen", L"x", nullptr);
+    const bool noFile = GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES;
+    WritePrivateProfileStringW(L"Seen", L"x", L"1", file.c_str());
+    truckid::SeenPut(file, id, 500);
+    const bool oldStays = !noted() && truckid::SeenGet(file, id, when) && when == 500;
+    // with no note set the profile API makes the file as before (the other mod's side of the shared header)
+    DeleteFileW(file.c_str());
+    const wchar_t *note = truckid::FileNote();
+    truckid::FileNote() = nullptr;
+    truckid::SeenPut(file, id, 500);
+    const bool noNote = !noted() && truckid::SeenGet(file, id, when);
+    truckid::FileNote() = note;
+    DeleteFileW(file.c_str());
+    const bool ok = seenFirst && modeFirst && ownFirst && noFile && oldStays && noNote && note == kTruckModesNote;
+    printf("%s trucks file: a fresh one is made with its note at the head as UTF-16 whichever write comes first ([Seen] as on a new install, a kind's mode, "
+           "a truck's own), the note once; a removal makes no file; a file already there stays as it is\n",
+           ok ? "ok  " : "FAIL");
+    if (!ok) printf("     seen %d (after %d) mode %d own %d nofile %d old %d nonote %d\n", seenFirst, afterSeen, modeFirst, ownFirst, noFile, oldStays, noNote);
+    return ok;
+}
+
 // The pressure per owned truck (truck_modes.h, BRIEF_tire_stiff_and_per_truck.md part 2), in out\test. The id and the
 // kind are read with the inputs and expected texts of Next Gen Gameplay's identity tests (its test\truck_test.cpp,
 // "which truck this is", at 88e1ba7), from a truck laid out in this program's own memory as the game has it. Then the
@@ -5793,6 +5859,7 @@ int wmain(int argc, wchar_t **argv)
     if (!FlattenTest()) return 1;
     if (!RealismTest()) return 1;
     if (!TruckModesTest()) return 1;
+    if (!TrucksFileMakeTest()) return 1;
     if (!TruckOwnTest()) return 1;
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;

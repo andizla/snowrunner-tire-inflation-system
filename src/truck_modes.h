@@ -93,37 +93,29 @@ inline TruckModeFound TruckModeFind(const std::wstring &file, const char *kind, 
     return f;
 }
 
-// A missing file is made first with a note at its head on what it is.
-inline void TruckModesFileMake(const std::wstring &file)
-{
-    if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) return;
-    FILE *f = nullptr;
-    if (_wfopen_s(&f, file.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
-    {
-        fwprintf(f, L"; Each truck's pressure mode: [kind] for every truck of a kind, [kind:{id}] for one owned truck by the game's id\n"
-                    L"; for it (Own=1 in force, Own=0 kept). It is written when a mode is chosen and put back when that truck is\n"
-                    L"; driven again. TakenBy and TakenAt mark a truck the game made anew under another id (How=warehouse: matched\n"
-                    L"; out of the warehouse by Tire=). [Seen] lists every truck driven. PerTruck=0 in TirePressure.ini turns this off.\n");
-        fclose(f);
-    }
-}
+// A missing file is made first with this note at its head on what it is. The making is truck_id.h's (FileMake, behind
+// its Put), so the file's first write gets it whichever it is: [Seen] at the first drive comes before any mode.
+static const wchar_t kTruckModesNote[] =
+    L"; Each truck's pressure mode: [kind] for every truck of a kind, [kind:{id}] for one owned truck by the game's id\n"
+    L"; for it (Own=1 in force, Own=0 kept). It is written when a mode is chosen and put back when that truck is\n"
+    L"; driven again. TakenBy and TakenAt mark a truck the game made anew under another id (How=warehouse: matched\n"
+    L"; out of the warehouse by Tire=). [Seen] lists every truck driven. PerTruck=0 in TirePressure.ini turns this off.\n";
+inline const bool kTruckModesNoteSet = (truckid::FileNote() = kTruckModesNote, true);
 
 // The mode for kind, into the kind's section. Key by key through the profile API.
 inline void TruckModeSave(const std::wstring &file, const char *kind, int mode)
 {
     if (mode < 0 || mode >= kModeCount) return;
-    TruckModesFileMake(file);
-    WritePrivateProfileStringW(TruckSection(kind, "").c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
+    truckid::Put(file, TruckSection(kind, ""), L"Mode", kTruckModeNames[mode]);
 }
 
 // The mode for one owned truck, into its own section with Own (1 = in force, 0 = kept).
 inline void TruckModeSaveOwn(const std::wstring &file, const char *kind, const char *id, int mode, bool own)
 {
     if (mode < 0 || mode >= kModeCount || !id || !id[0]) return;
-    TruckModesFileMake(file);
     const std::wstring sec = TruckSection(kind, id);
-    WritePrivateProfileStringW(sec.c_str(), L"Own", own ? L"1" : L"0", file.c_str());
-    WritePrivateProfileStringW(sec.c_str(), L"Mode", kTruckModeNames[mode], file.c_str());
+    truckid::Put(file, sec, L"Own", own ? L"1" : L"0");
+    truckid::Put(file, sec, L"Mode", kTruckModeNames[mode]);
 }
 
 // A mode chosen in the panel for the truck kind/id: it goes into the truck's own section (Own=1), unless This truck only

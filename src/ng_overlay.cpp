@@ -62,7 +62,7 @@ struct NgShared
     volatile LONG64 graphics; // 1 + the slot of the Graphics tab, 0 while none has it (a probe's method table until block version 2)
     struct Slot
     {
-        volatile LONG used, ready;
+        volatile LONG used, ready; // ready: 0 not yet, 1 a tab to draw, kNgReadyKeeps the same and the other mods keep drawing under it
         LONG order;
         char tab[40];
     } slots[kNgSlots];
@@ -71,6 +71,9 @@ struct NgShared
 // version 3 block. A layout that moves it needs a new kNgSharedVersion.
 static_assert(offsetof(NgShared, graphics) == 192, "hid.dll reads NgShared::graphics at byte 192 of block version 3");
 static_assert(sizeof(NgShared) == 616, "the menu block of version 3 is 616 bytes: a change needs a new kNgSharedVersion");
+// A slot's ready of a tab whose mod set NgClient::keepOthers. Every other read of ready asks only whether it is not 0,
+// so a mod with an older overlay sees a ready tab and nothing else: the block keeps its layout and its version.
+static const LONG kNgReadyKeeps = 2;
 static NgShared g_private = {};
 static NgShared *g_shared = &g_private;
 static int g_slot = -1;
@@ -112,7 +115,7 @@ static void SharedJoin()
         {
             sh->slots[i].order = g_client.order;
             strncpy_s(sh->slots[i].tab, g_client.tab ? g_client.tab : "?", _TRUNCATE);
-            InterlockedExchange(&sh->slots[i].ready, 1);
+            InterlockedExchange(&sh->slots[i].ready, g_client.keepOthers ? kNgReadyKeeps : 1);
             g_slot = i;
             break;
         }
@@ -1601,7 +1604,13 @@ bool NgOtherTabShown()
     const NgShared *sh = g_shared;
     if (!sh->open) return false;
     const LONG chosen = sh->chosen;
-    return chosen >= 0 && chosen != g_slot && !(g_gslot >= 0 && chosen == g_gslot);
+    if (chosen < 0 || chosen == g_slot || (g_gslot >= 0 && chosen == g_gslot)) return false;
+    return !(chosen < kNgSlots && sh->slots[chosen].ready == kNgReadyKeeps); // that tab says the others keep drawing
+}
+bool NgOwnTabShown()
+{
+    const NgShared *sh = g_shared;
+    return sh->open && g_slot >= 0 && sh->chosen == g_slot;
 }
 unsigned long long NgLastFrameDrawn() { return (unsigned long long)g_lastDrawn; }
 bool NgOverlayBroken() { return g_broken != 0; }

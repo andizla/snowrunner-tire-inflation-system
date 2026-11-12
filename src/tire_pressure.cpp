@@ -1945,8 +1945,21 @@ static void GroundProbePass(uint64_t vehicle)
     ReleaseSRWLockExclusive(&g_gpLock);
     bool write[kGpWheelsMost] = {};
     if (!GpPick(g_gpState, shot.vehicle, shot.w, shot.count, shot.at, write)) return;
+    // each wheel's Crr in force, from the record of what the drag wrote on the truck update's last frame (the tool's
+    // line reads the same record): with a Crr moved by a slider the table's figure alone would disagree with the drag
+    float inForce[kGpWheelsMost];
+    for (float &c : inForce) c = NAN;
+    if (g_dragOn)
+    {
+        AcquireSRWLockShared(&g_dragLock);
+        if (g_dragStats.vehicle == shot.vehicle && g_dragStats.frames > 0)
+            for (int k = 0; k < shot.count && k < kGpWheelsMost; k++)
+                for (int i = 0; i < g_dragStats.count && i < kRollWheelsMost; i++)
+                    if (g_dragStats.w[i].index == shot.w[k].index) inForce[k] = g_dragStats.w[i].crr * g_dragStats.factor;
+        ReleaseSRWLockShared(&g_dragLock);
+    }
     static wchar_t line[2600];
-    GpLine(line, sizeof line / sizeof line[0], shot.speed, (float)(shot.at - g_gpState.startAt) / 1000.0f, g_dragOn != 0, g_dragFactor, shot.w, write, shot.count, (int)lost);
+    GpLine(line, sizeof line / sizeof line[0], shot.speed, (float)(shot.at - g_gpState.startAt) / 1000.0f, g_dragOn != 0, g_dragFactor, shot.w, write, shot.count, (int)lost, inForce);
     Log(L"%s", line);
 }
 
@@ -7409,6 +7422,15 @@ static bool GroundProbeTest()
     texts = texts && std::wstring(text) == std::wstring(L"ground probe: 3.0000 m/s, t 1.5 s, drag off, 2 passes not written || ") + wheelText;
     const int whole = GpLine(text, 600, -3.0f, 0.0f, true, 1.5f, two, both, 2, 0);
     texts = texts && whole == (int)wcslen(text) && !wcsncmp(text, L"ground probe: -3.0000 m/s, t 0.0 s || 2: sand", 45) && wcsstr(text, L"0.0.1.0.0.0.1 || 3: sand 0.0900 | 1 0.75") != nullptr;
+    // the Crr in force beside the table's, where the drag's record has one; no number leaves it out
+    const float forced[2] = { 0.135f, NAN };
+    GpWheelText(text, 600, w, 1.5f, 0.135f);
+    texts = texts && !wcscmp(text, L"2: sand 0.0900 (in force 0.1350) | 1 0.75 | 0.0120 0.0340 | 1.5 none | 0.25 0 -0.5 2 | 0.1 0 | 3 -1 | 0.0.1.0.0.0.1");
+    GpWheelText(text, 600, w, 1.5f, INFINITY);
+    texts = texts && !wcscmp(text, wheelText);
+    GpLine(text, 600, 3.0f, 1.5f, true, 1.5f, two, both, 2, 0, forced);
+    texts = texts && wcsstr(text, L"|| 2: sand 0.0900 (in force 0.1350) | 1 0.75") != nullptr && wcsstr(text, L"|| 3: sand 0.0900 | 1 0.75") != nullptr &&
+            wcsstr(kGpStart, L"(in force ...)") != nullptr;
     // a line too long for its buffer lands cut
     const int cutTo = GpLine(cut, 40, 3.0f, 1.5f, false, 1.5f, two, both, 2, 0);
     texts = texts && cutTo == 39 && wcslen(cut) == 39;

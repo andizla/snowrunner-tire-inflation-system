@@ -22,6 +22,7 @@ struct NgClient
     void (*page)();                       // the tab's body, on the frames it shows
     void (*deviceGone)();                 // the game's device is going: free every texture NgTextureMake made
     bool waitReady;                       // frame() and page() are not called before NgOverlayReady()
+    bool keepOthers;                      // the other mods keep drawing under this tab: their NgOtherTabShown stays false while it shows (a tool's tab)
 };
 
 // The block of Local\NextGen.Chain.<process id>: a mod that started after the game's swap chain asks for it, a mod that
@@ -57,8 +58,11 @@ void NgTextureFree(ImTextureID tex);
 // Whether the NEXT GEN menu is open, on any tab.
 bool NgMenuOpen();
 // Whether the menu is open on a tab this mod does not draw: open, a tab chosen, and not this mod's own nor the Graphics
-// tab it hosts (BRIEF_full_pass_gameplay.md part 3; the cluster hides under another mod's tab).
+// tab it hosts (BRIEF_full_pass_gameplay.md part 3; the cluster hides under another mod's tab). False under a tab whose
+// mod set NgClient::keepOthers (BRIEF_dials_under_tuning.md): that tab says the others keep drawing.
 bool NgOtherTabShown();
+// Whether the menu is open on this mod's own tab.
+bool NgOwnTabShown();
 // GetTickCount64 at the end of the last frame the overlay drew through, 0 before the first, by either route (its own
 // Present or Spotter's frame hook); and whether a fault ended the overlay (BRIEF_full_pass_tire.md part 3).
 unsigned long long NgLastFrameDrawn();

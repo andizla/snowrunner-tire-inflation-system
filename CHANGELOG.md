@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The ground probe's line (`ProbeGround=1`) gives each wheel's rolling resistance in force beside the table's figure, so a Crr moved by a slider shows in the line.
 - A Next Gen mod could draw nothing for a whole session: on some systems the game is ready sooner than the mod was. Now a mod that came too late gets the picture from another Next Gen mod of this release in the game, and Tire Inflation hands it over the same way. With no such mod the log says after ten seconds, in capitals, that the overlay draws nothing and why, and the mod draws as soon as the game sets up its picture anew.
 - Rolling drag on dirt is lighter: Crr 0.020, down from 0.030. Trucks lost too much speed on plain dirt roads. Mud still counts as dirt, with the mud drag of the game on top.
 - Rolling drag tells snow and mud from the ground under them. Deep snow over hard ground counted as rock, the lowest figure off the road. It now counts as snow. A wheel's figure goes from the ground's own toward Snow's or Mud's by how deep the wheel sits, from 5 to 40 cm. Mud is taken on dirt only. Snow and Mud start at 0.020, as dirt and gravel have it, so by default only snow over rock and over sand rolls differently.

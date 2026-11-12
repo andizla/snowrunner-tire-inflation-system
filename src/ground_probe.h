@@ -118,13 +118,15 @@ static const wchar_t *const kGpStart =
     L"change) and once a second. A line: the truck's m/s, t in seconds since this truck's first line, then each wheel as "
     L"index: ground Crr | +1A4 +128 | +178 +17C | +190 +194 | +1A8 +1AC +1B0 +1BC | +1C4 +1C0 | +1B8 +1D0 | +1C8 to +1CE. "
     L"The ground is rolling drag's pick and Crr its table's times the pressure's factor (what the drag would use where the line says drag off). "
+    L"(in force ...) after it is the Crr the drag reckoned for that wheel on the truck update's last frame, with the sliders and the sink's blend in it. "
     L"? is a failed read, none is FLT_MAX at +194. +1CB can be stale: the game's check does not reset it";
 
 // One wheel's text: "index: ground Crr | +1A4 +128 | +178 +17C | +190 +194 | +1A8 +1AC +1B0 +1BC | +1C4 +1C0 | +1B8 +1D0 | flags".
-// factor: the pressure's factor on Crr. Returns the characters written.
-inline int GpWheelText(wchar_t *out, size_t size, const GpWheel &w, float factor)
+// factor: the pressure's factor on Crr. inForce: the Crr the drag reckoned for the wheel on its last frame, from the
+// record of what was written; no number where there is none, and then it is left out. Returns the characters written.
+inline int GpWheelText(wchar_t *out, size_t size, const GpWheel &w, float factor, float inForce = NAN)
 {
-    wchar_t f[kGpFloats][24], crr[24], ints[kGpInts][16], body[8], ice[8], flags[40];
+    wchar_t f[kGpFloats][24], crr[40], ints[kGpInts][16], body[8], ice[8], flags[40];
     for (int k = 0; k < kGpFloats; k++) GpNum(f[k], 24, (w.ok & (1u << k)) != 0, w.f[k], k == kGpSinkA || k == kGpSinkB, k == kGp194);
     for (int k = 0; k < kGpInts; k++)
     {
@@ -144,7 +146,8 @@ inline int GpWheelText(wchar_t *out, size_t size, const GpWheel &w, float factor
     // the ground as rolling drag picks it: the six flags from + 0x1C8 and the ice byte
     const bool groundOk = (w.ok & kGpOkIce) && (w.ok & kGpOkFlags);
     const RdGround ground = groundOk ? RdGroundOf(w.b + kGpByteFlags, w.b[kGpByteIce]) : kRdDirt;
-    GpNum(crr, 24, groundOk, kRdCrr[ground] * factor, true);
+    int crrUsed = GpNum(crr, 24, groundOk, kRdCrr[ground] * factor, true);
+    if (inForce == inForce && fabsf(inForce) <= FLT_MAX) FmtCut(crr + crrUsed, 40 - crrUsed, L" (in force %.4f)", (double)inForce);
     return FmtCut(out, size, L"%d: %hs %s | %s %s | %s %s | %s %s | %s %s %s %s | %s %s | %s %s | %s", w.index, groundOk ? kRdGroundNames[ground] : "?", crr, body,
                   f[kGpContactShare], f[kGpSinkA], f[kGpSinkB], f[kGp190], f[kGp194], f[kGp1A8], f[kGp1AC], f[kGp1B0], f[kGp1BC], f[kGpIceBlend], ice, ints[0], ints[1],
                   flags);
@@ -152,8 +155,9 @@ inline int GpWheelText(wchar_t *out, size_t size, const GpWheel &w, float factor
 
 // One pass's line: the wheels to write side by side, into a fixed buffer. seconds: since this truck's first pass.
 // dragOn: whether rolling drag writes now. lost: passes the truck update read that no line took. A line too long for
-// the buffer lands cut. Returns the characters written.
-inline int GpLine(wchar_t *out, size_t size, float speed, float seconds, bool dragOn, float factor, const GpWheel *now, const bool *write, int count, int lost)
+// the buffer lands cut. inForce: each wheel's Crr in force (GpWheelText), null for none. Returns the characters written.
+inline int GpLine(wchar_t *out, size_t size, float speed, float seconds, bool dragOn, float factor, const GpWheel *now, const bool *write, int count, int lost,
+                  const float *inForce = nullptr)
 {
     wchar_t v[24];
     GpNum(v, 24, true, speed, true);
@@ -163,7 +167,7 @@ inline int GpLine(wchar_t *out, size_t size, float speed, float seconds, bool dr
     {
         if (!write[k]) continue;
         used += FmtCut(out + used, size - used, L" || ");
-        used += GpWheelText(out + used, size - used, now[k], factor);
+        used += GpWheelText(out + used, size - used, now[k], factor, inForce ? inForce[k] : NAN);
     }
     return used;
 }

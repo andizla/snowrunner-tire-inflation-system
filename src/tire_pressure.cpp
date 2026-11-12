@@ -39,6 +39,7 @@
 #include "roll_probe.h"
 #include "rolling_drag.h"
 #include "ng_tune.h"
+#include "mud_tune.h"
 #include "ground_probe.h"
 #include "crt_line.h"
 #include "stiff_probe.h"
@@ -312,6 +313,8 @@ static void WriteIni(const TpSettings &s)
     // the drag's figures: a Crr with three places, as it is held (RdTuneHeld)
     for (int i = 0; i < kRdTuneCount; i++) put(T, Wide(kRdTune[i].key), kRdTune[i].decimals == 3 ? L"%.3f" : L"%g", s.drag[i]);
     put(T, L"StiffBase", L"%.0f", s.stiffBase ? 1 : 0);
+    put(T, L"MudTuning", L"%.0f", s.mudTuning ? 1 : 0);
+    for (int i = 0; i < kMudTuneCount; i++) put(T, Wide(kMudTune[i].key), L"%g", s.mud[i]);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
     put(T, L"InsaneMode", L"%.0f", s.insaneMode ? 1 : 0);
@@ -453,6 +456,8 @@ static void ReadIni(TpSettings &s)
     for (int i = 0; i < kRdTuneCount; i++) s.drag[i] = RdTuneHeld(i, IniFloat(T, Wide(kRdTune[i].key), s.drag[i], ini));
     RdBandHold(s.drag, -1);
     s.stiffBase = GetPrivateProfileIntW(T, L"StiffBase", s.stiffBase ? 1 : 0, ini.c_str()) != 0;
+    s.mudTuning = GetPrivateProfileIntW(T, L"MudTuning", s.mudTuning ? 1 : 0, ini.c_str()) != 0;
+    for (int i = 0; i < kMudTuneCount; i++) s.mud[i] = MudHeld(i, IniFloat(T, Wide(kMudTune[i].key), s.mud[i], ini));
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
     s.insaneMode = GetPrivateProfileIntW(T, L"InsaneMode", s.insaneMode ? 1 : 0, ini.c_str()) != 0;
@@ -473,6 +478,8 @@ static void UiSet()
 // The rolling drag's figures in force (s with a mode's preset in it): each held to its range and checked to be a
 // number here, on the mod's thread, then the finished table the truck update reads. No lock: a frame with some
 // figures old and some new is harmless, and the frame takes one copy.
+static void MudSettingsApply(const TpSettings &s, bool log);
+static void ProbeBodiesSet(bool on);
 static void DragSettingsApply(const TpSettings &s, bool log)
 {
     float v[kRdTuneCount];
@@ -577,6 +584,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_ambientC = s.ambientC;
     g_dragSetting = s.rollingDrag;
     DragSettingsApply(s, log);
+    MudSettingsApply(s, log);
     if (log) Log(s.rollingDrag ? L"rolling drag: on (RollingDrag%s), by ground and pressure in the wheels' damping" : L"rolling drag: off (RollingDrag=0)",
                  in.insaneMode ? L", insanity mode" : in.hardMode ? L", hard mode" : L"=1");
     g_hardMode = in.hardMode || in.insaneMode;
@@ -659,6 +667,7 @@ static void LoadIni()
     GetPrivateProfileStringW(L"TirePressure", L"ProbeRollDamping", L"0.5,2,8", roll, 128, ini.c_str());
     g_rollValueCount = RollParseValues(roll, g_rollValues);
     g_probeGround = GetPrivateProfileIntW(L"TirePressure", L"ProbeGround", 0, ini.c_str()) != 0;
+    ProbeBodiesSet(GetPrivateProfileIntW(L"TirePressure", L"ProbeBodies", 0, ini.c_str()) != 0);
     if (g_probeGround) Log(L"%s", kGpStart);
     if (g_probeRoll)
     {
@@ -1415,6 +1424,8 @@ static volatile LONG g_rollBackPending = 0, g_rollBackDone = -1, g_rollBackOf = 
 static int RollStockBack(const std::vector<WheelRef> &wheels);
 static void RollingDragTruckUpdate(uint64_t vehicle);
 static void GroundProbeTruckUpdate(uint64_t vehicle);
+static void MudTruckUpdate(uint64_t vehicle);
+static void BodiesTruckUpdate(uint64_t vehicle);
 
 static void OnTruckUpdate(uint64_t returnSlot)
 {
@@ -1437,6 +1448,8 @@ static void OnTruckUpdate(uint64_t returnSlot)
     {
         RollingDragTruckUpdate(updVehicle);
         GroundProbeTruckUpdate(updVehicle); // reads only; with ProbeGround=0 it returns at once
+        MudTruckUpdate(updVehicle);         // with MudTuning=0 and nothing of the mod's in the mud it returns at once
+        BodiesTruckUpdate(updVehicle);      // notes the vehicle while the body list probe is armed, else returns at once
     }
     if (!g_jobPending) return;
     uint64_t first = 0, vehicle = 0;
@@ -2366,18 +2379,346 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
         (long)s.frames, (long)s.writes, (long)s.cappedFrames, kRdMost, list.c_str());
 }
 
+// ---- the mud on three factors (ini MudTuning, MudLift, MudDrag, MudDepth; mud_tune.h has the places and the judging) ----
+// The mod's thread only sets what is wanted (g_mudWant). Every read of the volume and every write to it is in the truck
+// update, on the game's thread, where the drag's damping is written: the game frees the volume at a map change, and a
+// write from another thread could land in memory freed between its check and its write. Each pass walks from the
+// holder again, reads the type again and judges the four figures again (MudJudge); nothing is kept from an earlier
+// pass but the mod's own record of what it wrote. One pass a 100 ms, in the driven truck's update: with no truck
+// update nothing is written and the mud stays the game's. With the switch off and nothing of the mod's in the volume
+// nothing is read. The switch going off puts the game's figures back through the same pass. Nothing is written when
+// the game ends. The three floats are three writes, so a step of the game may read two new and one old: harmless at
+// these ranges.
+struct MudAt { uint64_t holder, global[kMudFloats]; }; // addresses in this process
+static MudAt g_mudAt = {};                             // set by the mod's thread before g_mudFound goes to 1
+static volatile LONG g_mudFound = 0;                   // 0 not looked for, 1 found, -1 not in this build
+static MudWant g_mudWant = { false, { 1.0f, 1.0f, 1.0f } }; // the mod's thread sets it, the truck update takes a copy a pass: plain floats, no lock
+static MudRecord g_mudRec = {};                        // the game's thread's only
+static ULONGLONG g_mudNextAt = 0;                      // the same: the next pass is due then
+struct MudStatus { MudState state; uint64_t volume; uint32_t type; float inVolume[kMudFloats], global[kMudFloats], sink; bool sinkOk; ULONGLONG at; };
+static SRWLOCK g_mudLock = SRWLOCK_INIT;
+static MudStatus g_mudStatus = {};                     // under g_mudLock: the last pass's, for the mod's thread to show and log
+
+// One pass on a volume reached from the holder. st: what it found, the figures as they are after it.
+static void MudPass(const MudAt &at, const MudWant &want, MudRecord &rec, MudStatus &st)
+{
+    st.state = kMudNoMap;
+    uint64_t owner = 0, volume = 0;
+    if (!Read(at.holder, owner) || !owner || !Read(owner + kMudVolumeAt, volume) || !volume)
+    {
+        rec = MudRecord{}; // no map: not there yet, and whatever was written went with the volume
+        return;
+    }
+    if (volume != rec.volume)
+    {
+        rec = MudRecord{}; // another volume is judged anew; the old one is never written again
+        rec.volume = volume;
+    }
+    st.volume = volume;
+    uint32_t inVolume[kMudFloats] = {}, global[kMudFloats] = {};
+    if (!Read(volume + kMudTypeAt, st.type) || !Read(volume + kMudFloatsAt, inVolume)) return;
+    for (int k = 0; k < kMudFloats; k++)
+        if (!Read(at.global[k], global[k])) return;
+    for (int k = 0; k < kMudFloats; k++) st.inVolume[k] = MudFloat(inVolume[k]), st.global[k] = MudFloat(global[k]);
+    if (rec.refused)
+    {
+        st.state = rec.state;
+        return;
+    }
+    MudPlan plan = {};
+    plan.state = kMudNotMud;
+    if (st.type == kMudType) plan = MudJudge(rec, inVolume, global, want);
+    if (plan.state == kMudNotMud || plan.state == kMudNotStock || plan.state == kMudForeign)
+    {
+        rec.refused = true; // nothing more is written to this volume: the mod does not fight
+        rec.active = false;
+        rec.state = st.state = plan.state;
+        return;
+    }
+    bool have = false;
+    for (int k = 0; k < kMudFloats; k++)
+    {
+        if (plan.write[k] && WriteAs(volume + kMudFloatsAt + 4 * k, plan.value[k]))
+        {
+            rec.wrote[k] = MudBits(plan.value[k]);
+            rec.have[k] = true;
+            st.inVolume[k] = plan.value[k];
+        }
+        have = have || rec.have[k];
+    }
+    rec.active = want.on && have;
+    if (!want.on) memset(rec.have, 0, sizeof rec.have); // put back: the volume is the game's again
+    rec.state = st.state = plan.state;
+}
+
+static void MudTruckUpdate(uint64_t vehicle)
+{
+    const MudWant want = g_mudWant;
+    if (!want.on && !g_mudRec.active)
+    {
+        g_mudRec = MudRecord{}; // off, and nothing of the mod's in the volume: nothing is read
+        return;
+    }
+    if (g_mudFound != 1) return;
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_mudNextAt) return;
+    if (CurrentVehicle() != vehicle) return; // another truck's update
+    g_mudNextAt = now + 100;
+    MudStatus st = {};
+    MudPass(g_mudAt, want, g_mudRec, st);
+    uint64_t driven = 0;
+    const std::vector<WheelRef> wheels = CurrentWheels(&driven);
+    for (size_t i = 0; driven == vehicle && i < wheels.size(); i++)
+    {
+        float sink = 0.0f;
+        if (!DragSinkRead(wheels[i].wheel, sink) || !isfinite(sink)) continue;
+        if (!st.sinkOk || sink > st.sink) st.sink = sink;
+        st.sinkOk = true;
+    }
+    st.at = now;
+    if (!TryAcquireSRWLockExclusive(&g_mudLock)) return; // the mod's thread is reading: next pass
+    g_mudStatus = st;
+    ReleaseSRWLockExclusive(&g_mudLock);
+}
+
+static bool CopyOwnImage(std::vector<uint8_t> &out);
+// The places, looked for once, when the switch first goes on (the mod's thread).
+static void MudFind()
+{
+    std::vector<uint8_t> copy;
+    MudPlaces p;
+    std::wstring why = L"the game's image could not be read";
+    if (CopyOwnImage(copy) && MudPlacesFind({ copy.data(), copy.size(), g_base }, p, why))
+    {
+        g_mudAt.holder = g_base + p.holder;
+        for (int k = 0; k < kMudFloats; k++) g_mudAt.global[k] = g_base + p.global[k];
+        InterlockedExchange(&g_mudFound, 1);
+        Log(L"mud tuning: the game's copy of the mud's figures is at +0x%llx: the holder +0x%llx, the friction +0x%llx, the drag +0x%llx, the full depth +0x%llx, the lift +0x%llx",
+            p.function, p.holder, p.global[kMudFriction], p.global[kMudDrag], p.global[kMudDepth], p.global[kMudLift]);
+    }
+    else
+    {
+        InterlockedExchange(&g_mudFound, -1);
+        Log(L"mud tuning: off for this session: %s", why.c_str());
+    }
+}
+// The settings in force: each factor held to its range and checked to be a number here, on the mod's thread.
+static void MudSettingsApply(const TpSettings &s, bool log)
+{
+    MudWant w = { s.mudTuning, {} };
+    for (int t = 0; t < kMudTuneCount; t++) w.factor[t] = MudHeld(t, s.mud[t]);
+    if (w.on && g_mudFound == 0) MudFind();
+    for (int t = 0; t < kMudTuneCount; t++) g_mudWant.factor[t] = w.factor[t];
+    g_mudWant.on = w.on && g_mudFound == 1;
+    if (log && s.mudTuning)
+        Log(L"mud tuning: on (MudTuning=1): the lift x%g, the drag x%g, the full depth x%g of the game's own, written in the truck update", w.factor[kMudtLift], w.factor[kMudtDrag],
+            w.factor[kMudtDepth]);
+}
+// What the truck update's pass found, said once for each volume and state (the mod's thread).
+static MudStatus MudStatusGet()
+{
+    MudStatus s;
+    AcquireSRWLockShared(&g_mudLock);
+    s = g_mudStatus;
+    ReleaseSRWLockShared(&g_mudLock);
+    return s;
+}
+static void MudSay()
+{
+    static uint64_t saidVolume = 0;
+    static int saidState = -1;
+    const MudStatus s = MudStatusGet();
+    if (!s.at || s.state == kMudIdle || s.state == kMudNoMap || (s.volume == saidVolume && (int)s.state == saidState)) return;
+    saidVolume = s.volume;
+    saidState = (int)s.state;
+    const wchar_t *what = s.state == kMudWrites ? L"in force" : s.state == kMudStock ? L"on with every factor at 1, so nothing is written" : s.state == kMudBack ? L"the game's figures put back" :
+                          s.state == kMudNotMud ? L"refused, as the volume is not of the mud's type (0x68); nothing is written to it" :
+                          s.state == kMudNotStock ? L"refused, as the volume's figures are not the game's before the mod's first write; nothing is written to it" :
+                                                    L"stopped, as a figure in the volume is neither the mod's nor the game's: somebody else writes it; nothing more is written to it";
+    Log(L"mud tuning: volume %p (type 0x%X): %s; in the volume the friction %g, the drag %g, the full depth %g, the lift %g; the game's %g, %g, %g, %g", (void *)s.volume, s.type, what,
+        s.inVolume[kMudFriction], s.inVolume[kMudDrag], s.inVolume[kMudDepth], s.inVolume[kMudLift], s.global[kMudFriction], s.global[kMudDrag], s.global[kMudDepth], s.global[kMudLift]);
+}
+// The lines to read for the tuning tool. fresh: a pass ran within the last second.
+struct MudLive { char state[32], lift[32], drag[32], depth[32], sink[32]; };
+static void MudLiveMake(bool tuning, ULONGLONG now, MudLive &out)
+{
+    const MudStatus s = MudStatusGet();
+    const bool fresh = s.at && now >= s.at && now - s.at < 1000, figures = tuning && fresh && s.volume && s.state != kMudNoMap;
+    snprintf(out.state, sizeof out.state, "%s", !tuning ? "off" : g_mudFound == -1 ? "not in this build" : !g_foregroundReal ? "no truck update" : !fresh ? "no truck" : kMudStateNames[s.state]);
+    snprintf(out.lift, sizeof out.lift, "no read");
+    snprintf(out.drag, sizeof out.drag, "no read");
+    snprintf(out.depth, sizeof out.depth, "no read");
+    snprintf(out.sink, sizeof out.sink, "no read");
+    if (figures)
+    {
+        snprintf(out.lift, sizeof out.lift, "%.1f, the game %.1f", s.inVolume[kMudLift], s.global[kMudLift]);
+        snprintf(out.drag, sizeof out.drag, "%.1f, the game %.1f", s.inVolume[kMudDrag], s.global[kMudDrag]);
+        snprintf(out.depth, sizeof out.depth, "%.2f m, the game %.2f", s.inVolume[kMudDepth], s.global[kMudDepth]);
+    }
+    if (tuning && fresh && s.sinkOk) snprintf(out.sink, sizeof out.sink, "%.0f cm", s.sink * 100.0f);
+}
+
+// ---- the body list probe (ini ProbeBodies=1, or the tuning tool's button "Log bodies"; BRIEF_mud_setting.md part B) ----
+// Read only, for the gravity setting's brief: which bodies a truck is made of and what each holds at + 0x282. A physics
+// model keeps its bodies in a list at model + 0x260 to + 0x268, 0x20 bytes an entry with the body at + 8. The probe
+// walks the driven truck's list, then each of its wheels' bodies from the wheel object with whether it is in the list,
+// then the list of every other truck the truck update ran for in the half second after the press, marked not driven
+// (a hitched trailer is expected among them). How an addon or cargo is reached is not known, so none is named: the
+// lists show what they hold. A line a body: its pointer, its mass (1 over body + 0x22C), the word at + 0x282 as hex
+// and as a float (0 is a state, not a figure), and the motion's type (body + 0x160 by Havok's layout of the motion, of
+// which the damping at + 0x214, the inertia at + 0x220 and the gravity at + 0x282 are confirmed). Every read goes
+// through Read. With the key 0 and no press nothing is read and the truck update notes nothing.
+static const uint32_t kBpListAt = 0x260, kBpEntry = 0x20, kBpBodyAt = 8, kBpMotionTypeAt = 0x160;
+static const int kBpMost = 256, kBpTrucksMost = 32;
+static int g_probeBodies = 0;
+static volatile LONG g_bodiesAsked = 0;                  // a press of the button
+static volatile LONG g_bodiesArmed = 0;                  // set by the mod's thread: the truck update notes the vehicles it runs for
+static volatile LONG64 g_bodiesSeen[kBpTrucksMost] = {}; // written by the truck update while armed
+static volatile LONG g_bodiesSeenCount = 0;
+
+static void BodiesTruckUpdate(uint64_t vehicle)
+{
+    if (!g_bodiesArmed) return;
+    const LONG count = g_bodiesSeenCount;
+    for (LONG i = 0; i < count && i < kBpTrucksMost; i++)
+        if ((uint64_t)g_bodiesSeen[i] == vehicle) return;
+    if (count >= kBpTrucksMost) return;
+    g_bodiesSeen[count] = (LONG64)vehicle;
+    g_bodiesSeenCount = count + 1;
+}
+static void ProbeBodiesSet(bool on)
+{
+    g_probeBodies = on ? 1 : 0;
+    if (on) Log(L"probe: ProbeBodies=1, the bodies of each truck driven go into the log once (read only)");
+}
+// The list is read while the game may change it: the end not before the begin, the length a multiple of an entry, at
+// most kBpMost entries.
+static bool BodiesListSane(uint64_t begin, uint64_t end, int &count)
+{
+    count = 0;
+    if (!begin || end < begin || (end - begin) % kBpEntry || (end - begin) / kBpEntry > (uint64_t)kBpMost) return false;
+    count = (int)((end - begin) / kBpEntry);
+    return true;
+}
+static void BodiesLine(const wchar_t *who, const wchar_t *what, int index, uint64_t body, const wchar_t *tail)
+{
+    wchar_t mass[32] = L"mass not read", word[48] = L"+0x282 not read", type[32] = L"motion type not read";
+    float inv = 0.0f;
+    WORD half = 0;
+    BYTE motion = 0;
+    if (Read(body + 0x22C, inv)) _snwprintf_s(mass, _TRUNCATE, L"mass %.1f kg", inv > 0.0f ? 1.0f / inv : 0.0f);
+    if (Read(body + kDragGravityAt, half)) _snwprintf_s(word, _TRUNCATE, L"+0x282 %04X = %.3f", half, HalfToFloat(half));
+    if (Read(body + kBpMotionTypeAt, motion)) _snwprintf_s(type, _TRUNCATE, L"motion type %u", motion);
+    Log(L"bodies: %s %s %d: body %p, %s, %s, %s%s", who, what, index, (void *)body, mass, word, type, tail);
+}
+// One truck's list. bodies, where given, takes the pointers. Lines written.
+static int BodiesLogTruck(uint64_t vehicle, const wchar_t *who, std::vector<uint64_t> *bodies)
+{
+    uint64_t model = 0, begin = 0, end = 0;
+    if (!Read(vehicle + 0x60, model) || !model || !Read(model + kBpListAt, begin) || !Read(model + kBpListAt + 8, end))
+    {
+        Log(L"bodies: %s truck %p: its model or its list could not be read", who, (void *)vehicle);
+        return 1;
+    }
+    int count = 0;
+    if (!BodiesListSane(begin, end, count))
+    {
+        Log(L"bodies: %s truck %p, model %p: the list is not sane (%p to %p), not walked", who, (void *)vehicle, (void *)model, (void *)begin, (void *)end);
+        return 1;
+    }
+    Log(L"bodies: %s truck %p, model %p: %d bodies in the list at model+0x260 (%p to %p)", who, (void *)vehicle, (void *)model, count, (void *)begin, (void *)end);
+    int lines = 1;
+    for (int i = 0; i < count; i++)
+    {
+        uint64_t body = 0;
+        if (!Read(begin + (uint64_t)i * kBpEntry + kBpBodyAt, body) || !body)
+        {
+            Log(L"bodies: %s list %d: the entry holds no body or could not be read", who, i);
+            lines++;
+            continue;
+        }
+        if (bodies) bodies->push_back(body);
+        BodiesLine(who, L"list", i, body, L"");
+        lines++;
+    }
+    return lines;
+}
+// The driven truck with its wheels, then the others the truck update ran for.
+static int BodiesLog(uint64_t driven, const std::vector<WheelRef> &wheels, const uint64_t *others, int otherCount)
+{
+    std::vector<uint64_t> list;
+    int lines = BodiesLogTruck(driven, L"driven", &list);
+    for (const WheelRef &w : wheels)
+    {
+        uint64_t body = 0;
+        if (!Read(w.wheel + 0x18, body) || !body) continue;
+        bool in = false;
+        for (uint64_t b : list) in = in || b == body;
+        BodiesLine(L"driven", L"wheel", w.index, body, in ? L", in the list" : L", not in the list");
+        lines++;
+    }
+    int trucks = 0;
+    for (int i = 0; i < otherCount; i++)
+    {
+        if (!others[i] || others[i] == driven) continue;
+        lines += BodiesLogTruck(others[i], L"not driven", nullptr);
+        trucks++;
+    }
+    Log(L"bodies: done, %d lines; %d other trucks had a truck update in the half second after the press", lines + 1, trucks);
+    return lines + 1;
+}
+// The mod's thread, each pass: a press, or a new truck with ProbeBodies=1, arms the truck update for half a second,
+// then the lists are logged. With the key 0 and no press nothing is read.
+static void BodiesProbePass(uint64_t vehicle, ULONGLONG now)
+{
+    static uint64_t lastVehicle = 0;
+    static ULONGLONG dueAt = 0;
+    bool ask = InterlockedExchange(&g_bodiesAsked, 0) != 0;
+    if (g_probeBodies && vehicle && vehicle != lastVehicle) ask = true;
+    if (g_probeBodies) lastVehicle = vehicle;
+    if (ask && !dueAt)
+    {
+        g_bodiesSeenCount = 0;
+        InterlockedExchange(&g_bodiesArmed, 1);
+        dueAt = now + 500;
+    }
+    if (!dueAt || now < dueAt) return;
+    dueAt = 0;
+    InterlockedExchange(&g_bodiesArmed, 0);
+    if (!vehicle)
+    {
+        Log(L"bodies: no driven truck, nothing to log");
+        return;
+    }
+    uint64_t others[kBpTrucksMost] = {}, driven = 0;
+    const LONG seen = min(g_bodiesSeenCount, (LONG)kBpTrucksMost);
+    for (LONG i = 0; i < seen; i++) others[i] = (uint64_t)g_bodiesSeen[i];
+    std::vector<WheelRef> wheels = CurrentWheels(&driven);
+    if (driven != vehicle) wheels.clear();
+    BodiesLog(vehicle, wheels, others, (int)seen);
+}
+
 // ---- the rolling drag's figures for the tuning tool (ng_tune.h; BRIEF_rolling_drag_sliders.md) ----
 // The mod's thread alone touches the block; no hook and no thread of the game's does. Each pass: what the tool asked is
 // taken (held to the range and the step by NgTuneTake, the band by RdBandHold) into the settings by the road the mod's
 // own page takes (SettingsPut: in force on this pass, saved once nothing new came for a second), then the values in
 // force and the live read are written. With no tool in the game the block is written and nobody reads it.
-enum { kTuneGround = kRdTuneCount, kTuneCrr, kTuneSlowing, kTuneSink, kTuneDepth, kTuneCount };
+// After them the mud's switch, its three factors and its lines (mud_tune.h), and the body list probe's button.
+enum { kTuneGround = kRdTuneCount, kTuneCrr, kTuneSlowing, kTuneSink, kTuneDepth, kTuneMudSwitch, kTuneMud, kTuneMudLines = kTuneMud + kMudTuneCount,
+       kTuneBodies = kTuneMudLines + kMudLineCount, kTuneCount };
+static const char kTuneProbes[] = "Probes", kTuneBodiesName[] = "Log bodies",
+                  kTuneBodiesTip[] = "Writes every body of the driven truck into the log, with its mass and its gravity word. Reads only.";
 static NgTuneMod g_tune = {};
 static int DragTuneItems(NgTuneItem *items)
 {
     for (int i = 0; i < kRdTuneCount; i++)
         items[i] = { kNgTuneSlider, kRdTune[i].name, kRdTuneGroup, kRdTune[i].tip, kRdTune[i].least, kRdTune[i].most, kRdTune[i].def, kRdTune[i].step, kRdTune[i].decimals };
     for (int i = 0; i < kRdLineCount; i++) items[kRdTuneCount + i] = { kNgTuneLine, kRdLines[i].name, kRdTuneGroup, kRdLines[i].tip, 0.0f, 0.0f, 0.0f, 0.0f, kRdLines[i].decimals };
+    items[kTuneMudSwitch] = { kNgTuneSwitch, kMudSwitchName, kMudGroup, kMudSwitchTip, 0.0f, 1.0f, 0.0f, 1.0f, 0 };
+    for (int i = 0; i < kMudTuneCount; i++)
+        items[kTuneMud + i] = { kNgTuneSlider, kMudTune[i].name, kMudGroup, kMudTune[i].tip, kMudTune[i].least, kMudTune[i].most, kMudTune[i].def, kMudTune[i].step, kMudTune[i].decimals };
+    for (int i = 0; i < kMudLineCount; i++) items[kTuneMudLines + i] = { kNgTuneLine, kMudLines[i].name, kMudGroup, kMudLines[i].tip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
+    items[kTuneBodies] = { kNgTuneButton, kTuneBodiesName, kTuneProbes, kTuneBodiesTip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
     return kTuneCount;
 }
 // What the tool asked, into the settings. A greyed entry (the drag off, or a mode) takes nothing: NgTuneTake drops it.
@@ -2394,6 +2735,21 @@ static bool DragTuneTake(uint8_t *block)
         s.drag[i] = RdTuneHeld(i, held);
         RdBandHold(s.drag, i); // the one of the band's two that was not moved gives way, and is published as held
     }
+    float held = 0.0f;
+    if (NgTuneTake(block, kTuneMudSwitch, held) > 0)
+    {
+        if (!any) SettingsGet(s);
+        any = true;
+        s.mudTuning = held >= 0.5f;
+    }
+    for (int i = 0; i < kMudTuneCount; i++)
+    {
+        if (NgTuneTake(block, kTuneMud + i, held) <= 0) continue;
+        if (!any) SettingsGet(s);
+        any = true;
+        s.mud[i] = MudHeld(i, held);
+    }
+    if (NgTuneTake(block, kTuneBodies, held) > 0) InterlockedExchange(&g_bodiesAsked, 1); // a press, however many came in one pass
     if (any) SettingsPut(s);
     return any;
 }
@@ -2423,6 +2779,11 @@ static void DragTunePublish(uint8_t *block, ULONGLONG now)
     SettingsGet(s);
     const bool mode = s.hardMode || s.insaneMode, off = !mode && !s.rollingDrag;
     const char *why = mode ? kRdWhyMode : off ? kRdWhyOff : nullptr;
+    const bool mudOn = s.mudTuning;
+    float mud[kMudTuneCount];
+    for (int i = 0; i < kMudTuneCount; i++) mud[i] = MudHeld(i, s.mud[i]);
+    MudLive mudLive;
+    MudLiveMake(mudOn, now, mudLive);
     PresetSettings(s);
     RdLive live;
     const bool truck = g_tuneVehicle && now >= g_tuneTruckAt && now - g_tuneTruckAt < 1000;
@@ -2434,6 +2795,15 @@ static void DragTunePublish(uint8_t *block, ULONGLONG now)
     NgTuneValue(block, kTuneSlowing, live.slowing, live.slowingText);
     NgTuneValue(block, kTuneSink, live.sinkCm, live.sinkText);
     NgTuneValue(block, kTuneDepth, live.depth, live.depthText);
+    // the mud: with the switch off its three factors are greyed, the first carries why
+    NgTuneValue(block, kTuneMudSwitch, mudOn ? 1.0f : 0.0f);
+    for (int i = 0; i < kMudTuneCount; i++) NgTuneValue(block, kTuneMud + i, mud[i], !mudOn && i == 0 ? kMudWhyOff : nullptr, !mudOn);
+    NgTuneValue(block, kTuneMudLines + kMudLineState, 0.0f, mudLive.state);
+    NgTuneValue(block, kTuneMudLines + kMudLineLift, 0.0f, mudLive.lift);
+    NgTuneValue(block, kTuneMudLines + kMudLineDrag, 0.0f, mudLive.drag);
+    NgTuneValue(block, kTuneMudLines + kMudLineDepth, 0.0f, mudLive.depth);
+    NgTuneValue(block, kTuneMudLines + kMudLineSink, 0.0f, mudLive.sink);
+    NgTuneValue(block, kTuneBodies, 0.0f);
     NgTuneEnd(block, now);
 }
 static void DragTunePass(ULONGLONG now)
@@ -2449,6 +2819,8 @@ static void DragTunePass(ULONGLONG now)
                 GetCurrentProcessId(), g_tune.n, count);
         else Log(L"tuning: the rolling drag's figures are not published (the shared memory could not be made); they stay in the ini");
     }
+    MudSay();
+    BodiesProbePass(g_tuneVehicle && now >= g_tuneTruckAt && now - g_tuneTruckAt < 1000 ? g_tuneVehicle : 0, now);
     if (!g_tune.block) return;
     DragTuneTake(g_tune.block);
     DragTunePublish(g_tune.block, now);
@@ -3767,6 +4139,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
     for (int i = 0; i < kRdTuneCount; i++) same = same && a.drag[i] == b.drag[i];
+    same = same && a.mudTuning == b.mudTuning && a.mud[0] == b.mud[0] && a.mud[1] == b.mud[1] && a.mud[2] == b.mud[2];
     same = same && a.asphaltFloor == b.asphaltFloor && a.wornGrip == b.wornGrip && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) same = same && a.mode[m][k] == b.mode[m][k];
@@ -4096,6 +4469,8 @@ static bool IniTest(const wchar_t *givenIni)
     c.stiffBase = false;
     c.rollingDrag = false;
     for (int i = 0; i < kRdTuneCount; i++) c.drag[i] = RdTuneHeld(i, kRdTune[i].least + (kRdTune[i].most - kRdTune[i].least) * (0.31f + 0.02f * (float)i));
+    c.mudTuning = false; // off in the round trip, or putting c in force would look for the mud's places
+    for (int i = 0; i < kMudTuneCount; i++) c.mud[i] = MudHeld(i, kMudTune[i].least + (kMudTune[i].most - kMudTune[i].least) * (0.4f + 0.1f * (float)i));
     c.ambientC = -3.0f;
     c.hardMode = true;
     c.insaneMode = true;
@@ -4109,6 +4484,7 @@ static bool IniTest(const wchar_t *givenIni)
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
     for (int i = 0; i < 2; i++) unchanged += c.padCurve[i] == d.padCurve[i];
     for (int i = 0; i < kRdTuneCount; i++) unchanged += c.drag[i] == d.drag[i];
+    for (int i = 0; i < kMudTuneCount; i++) unchanged += c.mud[i] == d.mud[i];
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor || c.wornGrip == d.wornGrip ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
@@ -6411,9 +6787,9 @@ static bool DragTuneTest()
     static uint8_t block[kNgTuneBlockMost];
     NgTuneItem items[kTuneCount];
     const int count = DragTuneItems(items);
-    bool blockOk = count == 16 && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count);
+    bool blockOk = count == kTuneCount && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count);
     static NgTuneSeen seen;
-    blockOk = blockOk && NgTuneRead(block, sizeof block, seen) && seen.count == 16 && !strcmp(seen.e[kRdtSnow].name, "Snow") && !strcmp(seen.e[kTuneGround].name, "Ground") &&
+    blockOk = blockOk && NgTuneRead(block, sizeof block, seen) && seen.count == kTuneCount && !strcmp(seen.e[kRdtSnow].name, "Snow") && !strcmp(seen.e[kTuneGround].name, "Ground") &&
               seen.e[kTuneGround].kind == kNgTuneLine && !strcmp(seen.e[0].group, "Rolling drag") && seen.e[kRdtDirt].def == 0.020f && seen.e[kRdtMudFull].least == 10.0f;
     for (int i = 0; i < count; i++) blockOk = blockOk && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'');
     auto want = [&](int i, float v) {
@@ -6537,6 +6913,462 @@ static bool DragTuneTest()
                "stockBack %d oneCopy %d snowFrame %d capLive %d (%s | %s | %s | %s) hardLive %d block %d published %d wanted %d nothing %d bandBlock %d reset %d fuel %d off %d mode %d\n",
                noKeys, held, heldPair, lands, strength, effect, asBefore, mudOk, rows, oldByte, under, bandOk, frameDefaults, liveOk, twoAndTwo, slight, stockBack, oneCopy, snowFrame, capLive,
                live.ground, live.slowingText, live.sinkText, live.depthText, hardLive, blockOk, published, wanted, nothing, bandBlock, reset, fuel, offOk, modeOk);
+    return ok;
+}
+
+// The mud's places (mud_tune.h) in an image of the game's exe in a file: the function once, and what it leads to makes
+// sense as the game has it: four figures that are numbers above 0, each another, and a holder inside the image. The
+// addresses are printed for a look and are not kept here. No file named: nothing to test.
+static bool MudImageTest(const wchar_t *file)
+{
+    if (!file || !*file) return true;
+    std::vector<uint8_t> image;
+    uint64_t base = 0;
+    if (!LoadImageFile(file, image, base)) { printf("FAIL mud tuning's places: %ls could not be read as an exe\n", file); return false; }
+    const BuildImage im = { image.data(), image.size(), base };
+    MudPlaces p;
+    std::wstring why;
+    const bool found = MudPlacesFind(im, p, why);
+    float f[kMudFloats] = {};
+    bool figures = found;
+    for (int k = 0; found && k < kMudFloats; k++)
+    {
+        f[k] = MudFloat(im.u32((size_t)p.global[k]));
+        figures = figures && isfinite(f[k]) && f[k] > 0.0f && f[k] < 1000.0f;
+    }
+    const bool ok = found && figures;
+    printf("%s mud tuning's places in a real image (stamp %08x): the game's copy once at %llx, the holder at %llx (it holds %llx), the friction at %llx (%g), the drag at %llx (%g), "
+           "the full depth at %llx (%g), the lift at %llx (%g)%ls%ls\n",
+           ok ? "ok  " : "FAIL", im.u32(im.header() + 8), (unsigned long long)p.function, (unsigned long long)p.holder, found ? (unsigned long long)im.u64((size_t)p.holder) : 0ull,
+           (unsigned long long)p.global[kMudFriction], f[kMudFriction], (unsigned long long)p.global[kMudDrag], f[kMudDrag], (unsigned long long)p.global[kMudDepth], f[kMudDepth],
+           (unsigned long long)p.global[kMudLift], f[kMudLift], found ? L"" : L": ", why.c_str());
+    return ok;
+}
+
+// The mud on three factors (BRIEF_mud_setting.md part A with the Reviewer's addendum): the places in a made up image,
+// the judging, and passes on a stand-in holder, owner, volume and globals in this process.
+static bool MudTest()
+{
+    auto bits = [](float f) { return MudBits(f); };
+    // ---- the places: a small image with one code section, the game's function in it byte for byte but for its addresses ----
+    std::vector<uint8_t> image(0x3000, 0);
+    auto put32 = [&](size_t at, uint32_t v) { memcpy(image.data() + at, &v, 4); };
+    auto put16 = [&](size_t at, uint16_t v) { memcpy(image.data() + at, &v, 2); };
+    put32(0x3C, 0x40);
+    put16(0x40 + 6, 1);       // one section
+    put16(0x40 + 20, 0xF0);   // the optional header's size
+    const size_t section = 0x40 + 24 + 0xF0;
+    put32(section + 8, 0x1000);
+    put32(section + 12, 0x1000);
+    put32(section + 36, 0x20000000);
+    const std::vector<int> pattern = BuildPattern(kMudPattern);
+    const uint32_t loads[kMudFloats] = { 0x09, 0x16, 0x1E, 0x29 };
+    const uint32_t function = 0x1100, getter = 0x1300, holder = 0x2000, globals[kMudFloats] = { 0x2010, 0x2020, 0x2030, 0x2040 };
+    auto place = [&](uint32_t at, uint32_t callTo, const uint32_t g[kMudFloats]) {
+        for (size_t i = 0; i < pattern.size(); i++) image[at + i] = (uint8_t)(pattern[i] < 0 ? 0 : pattern[i]);
+        put32(at + 5, callTo - (at + 9));
+        for (int k = 0; k < kMudFloats; k++) put32(at + loads[k] + 4, g[k] - (at + loads[k] + 8));
+    };
+    auto getterPut = [&](uint32_t at, uint32_t to) {
+        const uint8_t lea[3] = { 0x48, 0x8D, 0x05 };
+        memcpy(image.data() + at, lea, 3);
+        put32(at + 3, to - (at + 7));
+        image[at + 7] = 0xC3;
+    };
+    auto find = [&](MudPlaces &p) {
+        std::wstring why;
+        const bool ok = MudPlacesFind({ image.data(), image.size(), 0 }, p, why);
+        return ok && why.empty() ? 1 : !ok && !why.empty() ? 0 : -1;
+    };
+    MudPlaces p;
+    const int none = find(p);
+    place(function, getter, globals);
+    getterPut(getter, holder);
+    const bool found = find(p) == 1 && p.function == function && p.holder == holder && p.global[kMudFriction] == 0x2010 && p.global[kMudDrag] == 0x2020 && p.global[kMudDepth] == 0x2030 &&
+                       p.global[kMudLift] == 0x2040;
+    place(0x1600, getter, globals);
+    const int twice = find(p);
+    memset(image.data() + 0x1600, 0, pattern.size());
+    image[getter + 7] = 0x90;
+    const int noRet = find(p);
+    getterPut(getter, 0x2FFC); // the holder's eight bytes end past the image
+    const int holderOut = find(p);
+    getterPut(getter, holder);
+    const uint32_t out[kMudFloats] = { 0x2010, 0x2020, 0x2030, 0x3000 }, same[kMudFloats] = { 0x2010, 0x2020, 0x2020, 0x2040 }, odd[kMudFloats] = { 0x2010, 0x2022, 0x2030, 0x2040 };
+    place(function, getter, out);
+    const int globalOut = find(p);
+    place(function, getter, same);
+    const int globalSame = find(p);
+    place(function, getter, odd);
+    const int globalOdd = find(p);
+    place(function, getter, globals);
+    image[function + 0x4F] ^= 1; // one byte of the shuffles to the store: not the function
+    const int shuffled = find(p);
+    const bool places = none == 0 && found && twice == 0 && noRet == 0 && holderOut == 0 && globalOut == 0 && globalSame == 0 && globalOdd == 0 && shuffled == 0;
+
+    // ---- the judging ----
+    const float stock[kMudFloats] = { 2.2f, 10.0f, 1.2f, 36.0f };
+    uint32_t g[kMudFloats], v[kMudFloats];
+    for (int k = 0; k < kMudFloats; k++) g[k] = v[k] = bits(stock[k]);
+    MudRecord rec = {};
+    MudWant want = { true, { 1.0f, 1.0f, 1.0f } };
+    MudPlan plan = MudJudge(rec, v, g, want);
+    const bool atOne = plan.state == kMudStock && !plan.write[kMudFriction] && !plan.write[kMudDrag] && !plan.write[kMudDepth] && !plan.write[kMudLift];
+    want = { true, { 5.0f, 2.0f, 0.5f } };
+    plan = MudJudge(rec, v, g, want);
+    const bool scaled = plan.state == kMudWrites && !plan.write[kMudFriction] && plan.write[kMudLift] && plan.value[kMudLift] == 180.0f && plan.write[kMudDrag] && plan.value[kMudDrag] == 20.0f &&
+                        plan.write[kMudDepth] && plan.value[kMudDepth] == 0.6f;
+    uint32_t shallow[kMudFloats];
+    memcpy(shallow, g, sizeof g);
+    shallow[kMudDepth] = bits(0.1f);
+    want = { true, { 1.0f, 1.0f, 0.25f } };
+    plan = MudJudge(rec, shallow, shallow, want);
+    const bool depthHeld = plan.write[kMudDepth] && plan.value[kMudDepth] == 0.05f;
+    want = { true, { nanf(""), 2.0f, -1.0f } };
+    plan = MudJudge(rec, v, g, want);
+    const bool noNumber = !plan.write[kMudLift] && !plan.write[kMudDepth] && plan.write[kMudDrag] && plan.value[kMudDrag] == 20.0f;
+    want = { true, { 5.0f, 2.0f, 0.5f } };
+    uint32_t other[kMudFloats];
+    memcpy(other, v, sizeof v);
+    other[kMudLift] = bits(40.0f);
+    const bool notStock = MudJudge(rec, other, g, want).state == kMudNotStock;
+    rec.have[kMudLift] = true;
+    rec.wrote[kMudLift] = bits(180.0f);
+    const bool foreign = MudJudge(rec, other, g, want).state == kMudForeign;
+    other[kMudLift] = bits(180.0f);
+    plan = MudJudge(rec, other, g, want);
+    const bool own = plan.state == kMudWrites && !plan.write[kMudLift] && plan.write[kMudDrag];
+    memcpy(other, v, sizeof v);
+    other[kMudFriction] = bits(2.3f);
+    const bool friction = MudJudge(rec, other, g, want).state == kMudForeign;
+    other[kMudFriction] = g[kMudFriction];
+    other[kMudLift] = bits(180.0f);
+    want.on = false;
+    plan = MudJudge(rec, other, g, want);
+    const bool back = plan.state == kMudBack && plan.write[kMudLift] && bits(plan.value[kMudLift]) == g[kMudLift] && !plan.write[kMudDrag] && !plan.write[kMudDepth];
+    const bool ranges = MudHeld(kMudtLift, 9.0f) == 5.0f && MudHeld(kMudtLift, 0.1f) == 0.25f && MudHeld(kMudtDrag, 9.0f) == 4.0f && MudHeld(kMudtDepth, 9.0f) == 2.0f &&
+                        MudHeld(kMudtDepth, nanf("")) == 1.0f && MudHeld(kMudtLift, 1.234f) == 1.23f;
+    const bool judged = atOne && scaled && depthHeld && noNumber && notStock && foreign && own && friction && back && ranges;
+
+    // ---- passes on stand-ins ----
+    static uint64_t holderAt;
+    static uint8_t owner[0x40], volA[0x80], volB[0x80];
+    static float glob[kMudFloats];
+    auto volume = [&](uint8_t *vol, uint32_t type) {
+        for (int i = 0; i < 0x80; i++) vol[i] = (uint8_t)(0x40 + i);
+        memcpy(vol + kMudTypeAt, &type, 4);
+        memcpy(vol + kMudFloatsAt, glob, sizeof glob);
+    };
+    auto figure = [&](const uint8_t *vol, int k) { float f; memcpy(&f, vol + kMudFloatsAt + 4 * k, 4); return f; };
+    auto holds = [&](const uint8_t *vol, float fr, float dr, float de, float li) { return bits(figure(vol, 0)) == bits(fr) && bits(figure(vol, 1)) == bits(dr) && bits(figure(vol, 2)) == bits(de) && bits(figure(vol, 3)) == bits(li); };
+    auto rest = [&](const uint8_t *vol, uint32_t type) {
+        bool ok = true;
+        for (int i = 0; i < 0x80; i++)
+            if (i < (int)kMudFloatsAt || i >= (int)kMudFloatsAt + 16) ok = ok && (i >= (int)kMudTypeAt && i < (int)kMudTypeAt + 4 ? true : vol[i] == (uint8_t)(0x40 + i));
+        uint32_t t;
+        memcpy(&t, vol + kMudTypeAt, 4);
+        return ok && t == type;
+    };
+    memcpy(glob, stock, sizeof glob);
+    MudAt at = { (uint64_t)&holderAt, { (uint64_t)&glob[0], (uint64_t)&glob[1], (uint64_t)&glob[2], (uint64_t)&glob[3] } };
+    auto point = [&](uint8_t *vol) { const uint64_t a = (uint64_t)vol; memcpy(owner + kMudVolumeAt, &a, 8); holderAt = vol ? (uint64_t)owner : 0; };
+    MudStatus st = {};
+    rec = MudRecord{};
+    want = { true, { 5.0f, 2.0f, 0.5f } };
+    volume(volA, kMudType);
+    volume(volB, kMudType);
+    // no map for a hundred passes is no refusal; then the volume is taken
+    point(nullptr);
+    bool waited = true;
+    for (int i = 0; i < 100; i++)
+    {
+        MudPass(at, want, rec, st);
+        waited = waited && st.state == kMudNoMap && !rec.refused;
+    }
+    waited = waited && holds(volA, 2.2f, 10.0f, 1.2f, 36.0f); // wanted by the mod's thread, and untouched until a pass reaches it
+    point(volA);
+    MudPass(at, want, rec, st);
+    const bool written = waited && st.state == kMudWrites && holds(volA, 2.2f, 20.0f, 0.6f, 180.0f) && rest(volA, kMudType) && rec.active && st.inVolume[kMudLift] == 180.0f && st.global[kMudLift] == 36.0f;
+    // a global changed in the session: the volume follows it times the factor
+    glob[kMudLift] = 30.0f;
+    MudPass(at, want, rec, st);
+    const bool follows = st.state == kMudWrites && holds(volA, 2.2f, 20.0f, 0.6f, 150.0f);
+    glob[kMudLift] = 36.0f;
+    MudPass(at, want, rec, st);
+    // the game's own copy over the mod's figures (a map load on the same volume): written again
+    memcpy(volA + kMudFloatsAt, glob, sizeof glob);
+    MudPass(at, want, rec, st);
+    const bool again = st.state == kMudWrites && holds(volA, 2.2f, 20.0f, 0.6f, 180.0f);
+    // the holder points at another volume: that one is written, the old one never again
+    point(volB);
+    want = { true, { 2.0f, 2.0f, 0.5f } };
+    MudPass(at, want, rec, st);
+    MudPass(at, want, rec, st);
+    const bool moved = holds(volB, 2.2f, 20.0f, 0.6f, 72.0f) && holds(volA, 2.2f, 20.0f, 0.6f, 180.0f) && st.volume == (uint64_t)volB;
+    // somebody else writes the volume: stopped, both figures in the status, nothing more written whatever is wanted
+    const float theirs = 50.0f;
+    memcpy(volB + kMudFloatsAt + 4 * kMudLift, &theirs, 4);
+    MudPass(at, want, rec, st);
+    want = { true, { 3.0f, 3.0f, 1.0f } };
+    MudPass(at, want, rec, st);
+    const bool stopped = st.state == kMudForeign && rec.refused && !rec.active && holds(volB, 2.2f, 20.0f, 0.6f, 50.0f) && st.inVolume[kMudLift] == 50.0f && st.global[kMudLift] == 36.0f;
+    // a volume of another type: refused; a new pointer is judged anew
+    volume(volA, 0x69);
+    point(volA);
+    MudPass(at, want, rec, st);
+    const bool notMud = st.state == kMudNotMud && rec.refused && holds(volA, 2.2f, 10.0f, 1.2f, 36.0f) && st.type == 0x69;
+    volume(volB, kMudType);
+    point(volB);
+    MudPass(at, want, rec, st);
+    const bool anew = st.state == kMudWrites && holds(volB, 2.2f, 30.0f, 1.2f, 108.0f);
+    // the switch off: the game's figures back to the bit, then nothing of the mod's is in the volume
+    want.on = false;
+    MudPass(at, want, rec, st);
+    const bool putBack = st.state == kMudBack && holds(volB, 2.2f, 10.0f, 1.2f, 36.0f) && rest(volB, kMudType) && !rec.active && !rec.have[kMudLift];
+    // on with every factor at 1: nothing is written
+    want = { true, { 1.0f, 1.0f, 1.0f } };
+    rec = MudRecord{};
+    MudPass(at, want, rec, st);
+    const bool stockIsStock = st.state == kMudStock && !rec.have[kMudLift] && !rec.have[kMudDrag] && !rec.have[kMudDepth] && !rec.active && holds(volB, 2.2f, 10.0f, 1.2f, 36.0f);
+    // the truck update with the switch off and nothing of the mod's in the volume: no read
+    const MudWant wantWas = g_mudWant;
+    const MudRecord recWas = g_mudRec;
+    const LONG foundWas = g_mudFound;
+    g_mudWant = { false, { 5.0f, 2.0f, 0.5f } };
+    g_mudRec = MudRecord{};
+    g_mudFound = 1;
+    const long readsFrom = g_testReads;
+    MudTruckUpdate(0x12345678);
+    const bool offReads = g_testReads == readsFrom;
+    // the ini: no number is the factor 1, out of range is held
+    TpSettings iniWas, r;
+    ReadIni(iniWas);
+    const std::wstring ini = g_dir + L"TirePressure.ini";
+    WritePrivateProfileStringW(L"TirePressure", L"MudLift", L"nan", ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"MudDrag", L"40", ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"MudDepth", L"0.01", ini.c_str());
+    WritePrivateProfileStringW(L"TirePressure", L"MudTuning", L"1", ini.c_str());
+    ReadIni(r);
+    const bool iniHeld = r.mudTuning && r.mud[kMudtLift] == 1.0f && r.mud[kMudtDrag] == 4.0f && r.mud[kMudtDepth] == 0.25f;
+    WriteIni(iniWas);
+    // the settings in force are what the truck update is to want, held
+    TpSettings s;
+    SettingsDefaults(s);
+    s.mudTuning = true;
+    s.mud[kMudtLift] = 99.0f;
+    s.mud[kMudtDrag] = nanf("");
+    MudSettingsApply(s, false);
+    const bool wantHeld = g_mudWant.on && g_mudWant.factor[kMudtLift] == 5.0f && g_mudWant.factor[kMudtDrag] == 1.0f && g_mudWant.factor[kMudtDepth] == 1.0f;
+    g_mudFound = -1;
+    MudSettingsApply(s, false);
+    const bool notFoundOff = !g_mudWant.on;
+    g_mudWant = wantWas;
+    g_mudRec = recWas;
+    g_mudFound = foundWas;
+    const bool passes = written && follows && again && moved && stopped && notMud && anew && putBack && stockIsStock && offReads && iniHeld && wantHeld && notFoundOff;
+    const bool ok = places && judged && passes;
+    printf("%s mud tuning: the places in a made up image, and none with no pattern, the pattern twice, a call that is not the holder's, the holder or a figure outside the image, two "
+           "figures the same, one unaligned or a byte of the store's shuffles off; the judging: at 1 nothing written, the lift x5 180, the drag x2 20, the depth x0.5 0.6, the depth held at "
+           "0.05, no number not written, the friction never; passes on stand-ins: no map for 100 passes is no refusal, then written with the rest of the volume left; a changed global "
+           "followed; the game's copy written over again; another volume written and the old one left; somebody else's figure stops it; another type refused and a new pointer judged anew; "
+           "the switch off puts the game's back to the bit; off reads nothing; the ini and the settings held\n",
+           ok ? "ok  " : "FAIL");
+    if (!ok)
+        printf("     places %d (none %d found %d twice %d noRet %d holderOut %d globalOut %d same %d odd %d shuffled %d) judged %d (atOne %d scaled %d depthHeld %d noNumber %d notStock %d foreign %d "
+               "own %d friction %d back %d ranges %d) passes: waited %d written %d follows %d again %d moved %d stopped %d notMud %d anew %d putBack %d stock %d offReads %d ini %d want %d notFound %d\n",
+               places, none, found, twice, noRet, holderOut, globalOut, globalSame, globalOdd, shuffled, judged, atOne, scaled, depthHeld, noNumber, notStock, foreign, own, friction, back, ranges,
+               waited, written, follows, again, moved, stopped, notMud, anew, putBack, stockIsStock, offReads, iniHeld, wantHeld, notFoundOff);
+    return ok;
+}
+
+// The mud's entries and the body list probe's button in the tuning block, and the probe itself on stand-in trucks.
+static bool MudBlockAndBodiesTest()
+{
+    TpSettings setWas;
+    SettingsGet(setWas);
+    const MudWant wantWas = g_mudWant;
+    const LONG foundWas = g_mudFound, askedWas = g_bodiesAsked;
+    const int probeWas = g_probeBodies;
+    g_mudFound = 1; // the places are not looked for in the test's own exe
+    static uint8_t block[kNgTuneBlockMost];
+    NgTuneItem items[kTuneCount];
+    const int count = DragTuneItems(items);
+    bool blockOk = count == 26 && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count) && items[kTuneMudSwitch].kind == kNgTuneSwitch && items[kTuneBodies].kind == kNgTuneButton &&
+                   !strcmp(items[kTuneMud + kMudtLift].name, "Mud lift") && items[kTuneMud + kMudtLift].most == 5.0f && items[kTuneMud + kMudtDrag].most == 4.0f &&
+                   items[kTuneMud + kMudtDepth].most == 2.0f && items[kTuneMud].least == 0.25f && !strcmp(items[kTuneMudSwitch].group, "Mud") && !strcmp(items[kTuneBodies].group, "Probes");
+    for (int i = 0; i < count; i++) blockOk = blockOk && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'');
+    auto want = [&](int i, float v) {
+        NgTuneEntry *e = NgTuneAt(block, i);
+        e->wanted = v;
+        InterlockedIncrement(&e->wantedCount);
+    };
+    auto pass = [&]() {
+        const bool took = DragTuneTake(block);
+        if (InterlockedExchange(&g_setDirty, 0))
+        {
+            TpSettings s;
+            SettingsGet(s);
+            MudSettingsApply(s, false);
+        }
+        DragTunePublish(block, 1000);
+        return took;
+    };
+    auto now = [&]() { TpSettings s; SettingsGet(s); return s; };
+    auto shown = [&](int i) { return NgTuneAt(block, i)->value; };
+    auto greyed = [&](int i) { return (NgTuneAt(block, i)->flags & kNgTuneDisabled) != 0; };
+    auto text = [&](int i) { return NgTuneAt(block, i)->text; };
+    TpSettings g;
+    SettingsDefaults(g);
+    SettingsPut(g);
+    pass();
+    // off: the switch shows 0, the three factors greyed with why, a factor asked is not taken
+    bool off = shown(kTuneMudSwitch) == 0.0f && !greyed(kTuneMudSwitch) && greyed(kTuneMud) && greyed(kTuneMud + 2) && !strcmp(text(kTuneMud), "Mud tuning is off.") && !text(kTuneMud + 1)[0] &&
+               !strcmp(text(kTuneMudLines + kMudLineState), "off") && !strcmp(text(kTuneMudLines + kMudLineLift), "no read") && !g_mudWant.on;
+    want(kTuneMud + kMudtLift, 3.0f);
+    off = off && !pass() && now().mud[kMudtLift] == 1.0f;
+    // the switch on through the block, then a factor past its range held, and one that is no number dropped
+    want(kTuneMudSwitch, 1.0f);
+    pass();
+    bool on = now().mudTuning && shown(kTuneMudSwitch) == 1.0f && !greyed(kTuneMud) && g_mudWant.on && !text(kTuneMud)[0];
+    want(kTuneMud + kMudtLift, 9.0f);
+    want(kTuneMud + kMudtDepth, 0.5f);
+    pass();
+    on = on && now().mud[kMudtLift] == 5.0f && shown(kTuneMud + kMudtLift) == 5.0f && now().mud[kMudtDepth] == 0.5f && g_mudWant.factor[kMudtLift] == 5.0f && g_mudWant.factor[kMudtDepth] == 0.5f;
+    want(kTuneMud + kMudtDrag, nanf(""));
+    on = on && !pass() && now().mud[kMudtDrag] == 1.0f && g_mudWant.factor[kMudtDrag] == 1.0f;
+    // with no truck update's pass the state line says so
+    HWND (WINAPI *const hookWas)() = g_foregroundReal;
+    g_foregroundReal = GetForegroundWindow;
+    AcquireSRWLockExclusive(&g_mudLock);
+    const MudStatus statusWas = g_mudStatus;
+    g_mudStatus = MudStatus{};
+    ReleaseSRWLockExclusive(&g_mudLock);
+    pass();
+    bool lines = !strcmp(text(kTuneMudLines + kMudLineState), "no truck");
+    MudStatus made = {};
+    made.state = kMudWrites;
+    made.volume = 0x1000;
+    made.inVolume[kMudLift] = 180.0f, made.global[kMudLift] = 36.0f, made.inVolume[kMudDrag] = 10.0f, made.global[kMudDrag] = 10.0f, made.inVolume[kMudDepth] = 0.6f, made.global[kMudDepth] = 1.2f;
+    made.sink = 0.37f;
+    made.sinkOk = true;
+    made.at = 900;
+    AcquireSRWLockExclusive(&g_mudLock);
+    g_mudStatus = made;
+    ReleaseSRWLockExclusive(&g_mudLock);
+    pass();
+    lines = lines && !strcmp(text(kTuneMudLines + kMudLineState), "in force") && !strcmp(text(kTuneMudLines + kMudLineLift), "180.0, the game 36.0") &&
+            !strcmp(text(kTuneMudLines + kMudLineDrag), "10.0, the game 10.0") && !strcmp(text(kTuneMudLines + kMudLineDepth), "0.60 m, the game 1.20") &&
+            !strcmp(text(kTuneMudLines + kMudLineSink), "37 cm");
+    g_foregroundReal = nullptr;
+    pass();
+    lines = lines && !strcmp(text(kTuneMudLines + kMudLineState), "no truck update");
+    g_foregroundReal = hookWas;
+    AcquireSRWLockExclusive(&g_mudLock);
+    g_mudStatus = statusWas;
+    ReleaseSRWLockExclusive(&g_mudLock);
+    // the button: a press is asked of the probe, once for however many came in a pass
+    g_bodiesAsked = 0;
+    want(kTuneBodies, 0.0f);
+    want(kTuneBodies, 0.0f);
+    pass();
+    const bool pressed = g_bodiesAsked == 1;
+    g_bodiesAsked = 0;
+
+    // ---- the probe on stand-ins: a truck of three bodies in its list and two wheels, and another truck of one body ----
+    static uint8_t vehicle[0x100], model[0x300], list[4 * 0x20], body[5][0x300], wheel[2][0x40], vehicle2[0x100], model2[0x300], list2[0x20];
+    auto put = [](uint8_t *o, size_t k, auto v) { memcpy(o + k, &v, sizeof v); };
+    memset(vehicle, 0, sizeof vehicle), memset(model, 0, sizeof model), memset(list, 0, sizeof list), memset(body, 0, sizeof body), memset(wheel, 0, sizeof wheel);
+    memset(vehicle2, 0, sizeof vehicle2), memset(model2, 0, sizeof model2), memset(list2, 0, sizeof list2);
+    put(vehicle, 0x60, (uint64_t)model);
+    put(model, kBpListAt, (uint64_t)list);
+    put(model, kBpListAt + 8, (uint64_t)(list + 3 * 0x20));
+    const float masses[5] = { 1000.0f, 50.0f, 12.5f, 50.0f, 300.0f };
+    const WORD words[5] = { HavokHalf(1.4f), HavokHalf(1.0f), 0, HavokHalf(1.0f), HavokHalf(2.0f) };
+    for (int i = 0; i < 5; i++)
+    {
+        put(body[i], 0x22C, 1.0f / masses[i]);
+        put(body[i], kDragGravityAt, words[i]);
+        put(body[i], kBpMotionTypeAt, (BYTE)(2 + i));
+    }
+    for (int i = 0; i < 3; i++) put(list, (size_t)i * 0x20 + kBpBodyAt, (uint64_t)body[i]);
+    put(wheel[0], 0x18, (uint64_t)body[1]); // a wheel whose body is in the list
+    put(wheel[1], 0x18, (uint64_t)body[3]); // and one whose body is not
+    std::vector<WheelRef> wheels = { { (uint64_t)wheel[0], (uint64_t)body[1], 0, 0, 0 }, { (uint64_t)wheel[1], (uint64_t)body[3], 0, 0, 1 } };
+    put(vehicle2, 0x60, (uint64_t)model2);
+    put(model2, kBpListAt, (uint64_t)list2);
+    put(model2, kBpListAt + 8, (uint64_t)(list2 + 0x20));
+    put(list2, kBpBodyAt, (uint64_t)body[4]);
+    // the list's sanity
+    int n = 0;
+    const bool sane = BodiesListSane(0x1000, 0x1060, n) && n == 3 && BodiesListSane(0x1000, 0x1000, n) && n == 0 && !BodiesListSane(0x1000, 0x0FE0, n) && !BodiesListSane(0x1000, 0x1010, n) &&
+                      !BodiesListSane(0, 0x60, n) && !BodiesListSane(0x1000, 0x1000 + 257 * 0x20, n) && BodiesListSane(0x1000, 0x1000 + 256 * 0x20, n) && n == 256;
+    // off is off: with the key 0 and no press the pass reads nothing and the truck update notes nothing
+    g_probeBodies = 0;
+    g_bodiesArmed = 0;
+    g_bodiesSeenCount = 0;
+    const long readsFrom = g_testReads;
+    BodiesProbePass((uint64_t)vehicle, 5000);
+    BodiesTruckUpdate((uint64_t)vehicle2);
+    const bool offIsOff = g_testReads == readsFrom && g_bodiesSeenCount == 0 && !g_bodiesArmed;
+    // a press arms the truck update, which notes each truck once
+    g_bodiesAsked = 1;
+    BodiesProbePass((uint64_t)vehicle, 6000);
+    const bool armed = g_bodiesArmed == 1 && g_testReads == readsFrom;
+    BodiesTruckUpdate((uint64_t)vehicle);
+    BodiesTruckUpdate((uint64_t)vehicle2);
+    BodiesTruckUpdate((uint64_t)vehicle2);
+    const bool noted = g_bodiesSeenCount == 2 && (uint64_t)g_bodiesSeen[0] == (uint64_t)vehicle && (uint64_t)g_bodiesSeen[1] == (uint64_t)vehicle2;
+    InterlockedExchange(&g_bodiesArmed, 0);
+    // the log of it, and not a byte of the stand-ins changed
+    static uint8_t before[sizeof body];
+    memcpy(before, body, sizeof body);
+    static uint8_t modelBefore[sizeof model], listBefore[sizeof list];
+    memcpy(modelBefore, model, sizeof model);
+    memcpy(listBefore, list, sizeof list);
+    const uint64_t others[2] = { (uint64_t)vehicle, (uint64_t)vehicle2 };
+    const int lineCount = BodiesLog((uint64_t)vehicle, wheels, others, 2);
+    // a list that is not sane is named and not walked
+    put(model2, kBpListAt + 8, (uint64_t)(list2 + 0x10));
+    const int insaneLines = BodiesLogTruck((uint64_t)vehicle2, L"not driven", nullptr);
+    const bool untouched = !memcmp(before, body, sizeof body) && !memcmp(modelBefore, model, sizeof model) && !memcmp(listBefore, list, sizeof list);
+    std::string logText;
+    FILE *lf = _wfsopen((g_dir + L"TirePressure.log").c_str(), L"rb", _SH_DENYNO);
+    if (lf)
+    {
+        char buf[4096];
+        size_t got;
+        while ((got = fread(buf, 1, sizeof buf, lf)) > 0) logText.append(buf, got);
+        fclose(lf);
+    }
+    char want0[160], want2[160], wantWheel0[160], wantWheel1[160], wantOther[160];
+    _snprintf_s(want0, _TRUNCATE, "bodies: driven list 0: body %p, mass 1000.0 kg, +0x282 %04X = %.3f, motion type 2", (void *)body[0], words[0], HalfToFloat(words[0]));
+    _snprintf_s(want2, _TRUNCATE, "bodies: driven list 2: body %p, mass 12.5 kg, +0x282 0000 = 0.000, motion type 4", (void *)body[2]);
+    _snprintf_s(wantWheel0, _TRUNCATE, "bodies: driven wheel 0: body %p, mass 50.0 kg, +0x282 %04X = %.3f, motion type 3, in the list", (void *)body[1], words[1], HalfToFloat(words[1]));
+    _snprintf_s(wantWheel1, _TRUNCATE, "bodies: driven wheel 1: body %p, mass 50.0 kg, +0x282 %04X = %.3f, motion type 5, not in the list", (void *)body[3], words[3], HalfToFloat(words[3]));
+    _snprintf_s(wantOther, _TRUNCATE, "bodies: not driven list 0: body %p, mass 300.0 kg, +0x282 %04X = %.3f, motion type 6", (void *)body[4], words[4], HalfToFloat(words[4]));
+    const bool logged = lineCount == 9 && insaneLines == 1 && logText.find(want0) != std::string::npos && logText.find(want2) != std::string::npos && logText.find(wantWheel0) != std::string::npos &&
+                        logText.find(wantWheel1) != std::string::npos && logText.find(wantOther) != std::string::npos && logText.find("3 bodies in the list at model+0x260") != std::string::npos &&
+                        logText.find("the list is not sane") != std::string::npos && logText.find("bodies: done, 9 lines; 1 other trucks") != std::string::npos;
+
+    AcquireSRWLockExclusive(&g_setLock);
+    g_set = setWas;
+    ReleaseSRWLockExclusive(&g_setLock);
+    InterlockedExchange(&g_setDirty, 0);
+    g_mudWant = wantWas;
+    g_mudFound = foundWas;
+    g_bodiesAsked = askedWas;
+    g_probeBodies = probeWas;
+    g_bodiesSeenCount = 0;
+    const bool ok = blockOk && off && on && lines && pressed && sane && offIsOff && armed && noted && untouched && logged;
+    printf("%s mud tuning in the block and the body list probe: a switch, three factors and five lines under Mud and a button under Probes; off greys the factors with why and takes none; "
+           "the switch on through the block, 9 held at 5, no number dropped; the lines say no truck, the figures in force beside the game's and the sink, or no truck update; two presses in "
+           "a pass are one; the probe: the list's sanity; with the key 0 and no press nothing read and nothing noted; a press arms the truck update, which notes each truck once; a line a "
+           "body with its mass, word and motion type, a wheel in the list and one not, another truck marked not driven, a list that is not sane named; not a byte changed\n",
+           ok ? "ok  " : "FAIL");
+    if (!ok)
+        printf("     block %d off %d on %d lines %d (%s | %s | %s) pressed %d sane %d offIsOff %d armed %d noted %d untouched %d logged %d (%d lines, %d)\n", blockOk, off, on, lines,
+               text(kTuneMudLines + kMudLineState), text(kTuneMudLines + kMudLineLift), text(kTuneMudLines + kMudLineSink), pressed, sane, offIsOff, armed, noted, untouched, logged, lineCount,
+               insaneLines);
     return ok;
 }
 
@@ -6789,6 +7621,8 @@ int wmain(int argc, wchar_t **argv)
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
     if (!DragTuneTest()) return 1;
+    if (!MudTest()) return 1;
+    if (!MudBlockAndBodiesTest()) return 1;
     if (!DragFuelTest()) return 1;
     if (!StiffBaseTest()) return 1;
     if (!TextCutTest()) return 1;
@@ -6827,6 +7661,7 @@ int wmain(int argc, wchar_t **argv)
     wchar_t imageFile[1024] = {};
     GetEnvironmentVariableW(L"SR_IMAGE", imageFile, 1024);
     if (!BuildTest(imageFile)) return 1;
+    if (!MudImageTest(imageFile)) return 1;
     volatile LONG stop = 0;
     const HANDLE t = CreateThread(nullptr, 0, TestWriter, (void *)&stop, 0, nullptr);
     Sleep(100);

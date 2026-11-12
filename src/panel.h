@@ -69,6 +69,8 @@ struct TpSettings
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
     float drag[kRdTuneCount]; // the rolling drag's figures (rolling_drag.h, kRdTune: RollingDragStrength, CrrPaved .. MudFullCm), for every truck; no slider on the page, the tuning tool has them
+    bool mudTuning;          // MudTuning: the mud of the game scaled by the three factors below (mud_tune.h); off by default, a test setting with no box on the page
+    float mud[3];            // MudLift, MudDrag, MudDepth: a factor of the game's own figure each (mud_tune.h, kMudTune)
     bool stiffBase;          // StiffBase: every tire starts at least as stiff as the game's Stiff preset (stiff_probe.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
@@ -131,6 +133,8 @@ inline void SettingsDefaults(TpSettings &s)
     s.temperature = true;
     s.rollingDrag = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     RdTuneDefaults(s.drag);
+    s.mudTuning = false;
+    s.mud[0] = s.mud[1] = s.mud[2] = 1.0f;
     s.stiffBase = true;
     s.ambientC = 15.0f;
     s.hardMode = false;

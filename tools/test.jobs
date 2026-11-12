@@ -19,4 +19,4 @@ overlay_handover row :: out\test\overlay\overlay_test.exe handover
 overlay_alone row :: out\test\overlay\overlay_test.exe alone
 overlay_spotter row :: out\test\overlay\overlay_test.exe spotter
 # the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
-player_texts :: python -I test\player_texts.py src\rolling_drag.h src\panel.h src\panel.cpp src\panel_draw.h src\settings_page.h src\ng_overlay.cpp
+player_texts :: python -I test\player_texts.py src\rolling_drag.h src\mud_tune.h src\panel.h src\panel.cpp src\panel_draw.h src\settings_page.h src\ng_overlay.cpp

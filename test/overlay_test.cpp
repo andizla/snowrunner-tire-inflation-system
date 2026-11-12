@@ -556,6 +556,17 @@ static int LateCases(const char *mode)
         const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
         const NgChainCopy *k = map ? (const NgChainCopy *)MapViewOfFile(map, FILE_MAP_READ, 0, 0, sizeof(NgChainCopy)) : nullptr;
         Check(k && k->version == 1 && k->want == 0, "the chain is not asked for");
+        if (!k) return 1;
+        // Spotter stops drawing (the review of 140, S2): no present of the mod's own would notice, so its watch does. After the
+        // wait the line in capitals comes (see the output) and the chain is asked for
+        const SetFn set = (SetFn)GetProcAddress(spotter, "StubSet");
+        Check(set != nullptr, "the stand-in Spotter can be told to stop drawing");
+        if (!set) return 1;
+        set(1, 0);
+        const ULONGLONG gone = GetTickCount64();
+        while (!k->want && GetTickCount64() - gone < 5000) Sleep(50);
+        sprintf_s(line, "Spotter not drawing for the wait: the chain is asked for after %llu ms (the wait 1500)", GetTickCount64() - gone);
+        Check(k->want == 1 && GetTickCount64() - gone >= 1400, line);
         return 0;
     }
     if (alone)

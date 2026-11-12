@@ -1438,7 +1438,7 @@ struct SpotterLink
     SpotterUnregisterPresentFn remove;
     SpotterRequestInputFn input;
     SpotterInputOwnerFn owner;
-    uint64_t handle;              // registered, 0 not
+    volatile uint64_t handle;     // registered, 0 not; written last and whole, as the presents read it while the watch thread may look
     volatile LONG missed;         // the overlay's own presents since the callback last ran
     bool drawn;                   // the first frame through it is logged
     int claimed;                  // the input mask last asked for
@@ -1867,7 +1867,7 @@ static void SpotterLookInner(ULONGLONG now)
     }
     const int available = g_spot.available();
     if (!available) return; // it may still come up within the 60 s
-    g_spot.handle = g_spot.add(&SpotterFrame, nullptr, 0);
+    InterlockedExchange64((volatile LONG64 *)&g_spot.handle, (LONG64)g_spot.add(&SpotterFrame, nullptr, 0));
     g_spot.done = true;
     if (!g_spot.handle)
     {
@@ -2109,11 +2109,12 @@ static BOOL CALLBACK WindowUpEach(HWND w, LPARAM out)
 static DWORD WINAPI WatchThread(void *viaReShade)
 {
     ULONGLONG windowAt = 0;
-    bool wanted = false, said = false;
+    bool wanted = false, said = false, spotterSaid = false, spotterGone = false;
+    ULONGLONG spotterQuietAt = 0;
     LONG offeredSeen = g_chain->offered;
     for (;;)
     {
-        Sleep(20);
+        Sleep(spotterSaid && !spotterGone ? 250 : 20);
         if (g_ownBroken) return 0;
         NgChain *c = g_chain;
         if (g_scOwned) return 0; // one came after all, at its making; SwapChainOwn answered the asking
@@ -2129,10 +2130,21 @@ static DWORD WINAPI WatchThread(void *viaReShade)
         if (!viaReShade)
         {
             SpotterLook(now);
-            if (g_spot.handle)
+            if (g_spot.handle && !spotterGone)
             {
-                NG_LOG(L"overlay: the game made its swap chain before the overlay's hook was in: the overlay draws through Spotter's frame hook, asked for from the mod's own thread");
-                return 0;
+                if (!spotterSaid) NG_LOG(L"overlay: no swap chain came within a second of a window (the game likely made its own before the overlay's hook was in): the overlay draws through Spotter's frame hook, asked for from the mod's own thread");
+                spotterSaid = true;
+                // on Spotter's road the overlay has no Present of its own, so no present would notice Spotter stopping: the watch
+                // asks it. Not drawing for the wait's length: said once, and the asking and the next chain are the roads left
+                const bool draws = GetModuleHandleW(L"Spotter.asi") && g_spot.available && g_spot.available() != 0;
+                if (draws) spotterQuietAt = 0;
+                else if (!spotterQuietAt) spotterQuietAt = now;
+                else if (now - spotterQuietAt >= (ULONGLONG)g_lateWaitMs)
+                {
+                    spotterGone = said = true;
+                    NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: Spotter says it draws no more and the overlay has no swap chain of its own; the other Next Gen mods are asked, and the next swap chain the game makes is taken");
+                }
+                if (!spotterGone) continue;
             }
             if (!wanted)
             {
@@ -2140,7 +2152,7 @@ static DWORD WINAPI WatchThread(void *viaReShade)
                 offeredSeen = c->offered;
                 InterlockedExchange(&g_wantOpen, 1);
                 InterlockedExchange(&g_wantServed, InterlockedIncrement(&c->want));
-                NG_LOG(L"overlay: the game made its swap chain before the overlay's hook was in: asking the other Next Gen mods for it");
+                NG_LOG(L"overlay: no swap chain came within a second of a window (the game likely made its own before the overlay's hook was in): asking the other Next Gen mods for it");
             }
             if (c->offered != offeredSeen)
             {
@@ -2162,8 +2174,8 @@ static DWORD WINAPI WatchThread(void *viaReShade)
             said = true; // the watch goes on: an offer may still come
             if (viaReShade) NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: ReShade took the overlay as an add-on but handed it no swap chain of the game's");
             else
-                NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: the game made its swap chain before the overlay's hook was in, and no other Next Gen mod handed it "
-                       L"over; the next swap chain the game makes is taken (a change of the screen mode can make one)");
+                NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: no swap chain came while a window was up (the game likely made its own before the overlay's hook was in), "
+                       L"and no other Next Gen mod handed one over; the next swap chain the game makes is taken (a change of the screen mode can make one)");
             if (viaReShade) return 0;
         }
     }

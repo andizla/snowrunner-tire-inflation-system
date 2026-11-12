@@ -183,6 +183,11 @@ def main(argv):
                 for j in jobs:
                     if j.state == "waiting":
                         j.state = "skipped"
+            # a job that waits on a failed or skipped job will not run, so it holds nothing back: not the row's jobs,
+            # which start once every other job has ended (the list has a job's needs before it, so one pass is enough)
+            for j in jobs:
+                if j.state == "waiting" and any(by_name[n].failed() or by_name[n].state == "skipped" for n in j.needs):
+                    j.state = "skipped"
             # what may start now
             row_running = any(j.row for j in running)
             others_left = any(not j.row and not j.beside and j.state in ("waiting", "running") for j in jobs)

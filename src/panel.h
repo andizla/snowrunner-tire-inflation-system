@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "rolling_drag.h"
 
 // The pressure modes from the lowest pressure up; the panel's gauge runs from Low (left) to the highest one in use
 // (right). Increased is optional (ini Increased).
@@ -67,6 +68,7 @@ struct TpSettings
     bool perTruck;           // PerTruck: each truck keeps its own pressure mode (TirePressure.trucks.ini: the owned truck's, else its kind's); 0 = one mode for all, the highest on offer at every start
     bool temperature;       // Temperature: the tires feel the outside temperature (the air in them, the rubber's grip; outside.h)
     bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
+    float drag[kRdTuneCount]; // the rolling drag's figures (rolling_drag.h, kRdTune: RollingDragStrength, CrrPaved .. MudFullCm), for every truck; no slider on the page, the tuning tool has them
     bool stiffBase;          // StiffBase: every tire starts at least as stiff as the game's Stiff preset (stiff_probe.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
     bool hardMode;           // HardMode: the realistic numbers and options (HardSettings) in place of the settings above and the modes
@@ -128,6 +130,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.perTruck = true;
     s.temperature = true;
     s.rollingDrag = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
+    RdTuneDefaults(s.drag);
     s.stiffBase = true;
     s.ambientC = 15.0f;
     s.hardMode = false;
@@ -220,6 +223,7 @@ inline void PresetSettings(TpSettings &s)
 {
     if (s.insaneMode) InsaneSettings(s);
     else if (s.hardMode) HardSettings(s);
+    if (s.insaneMode || s.hardMode) RdTuneDefaults(s.drag); // a mode is a fixed thing and its fuel counts on the drag: the default figures under it
 }
 
 void SettingsGet(TpSettings &out);        // the settings in force (any thread)

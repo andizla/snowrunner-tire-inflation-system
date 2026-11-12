@@ -38,6 +38,7 @@
 #include "truck_modes.h"
 #include "roll_probe.h"
 #include "rolling_drag.h"
+#include "ng_tune.h"
 #include "ground_probe.h"
 #include "crt_line.h"
 #include "stiff_probe.h"
@@ -105,7 +106,13 @@ static volatile LONG g_rollOnceOn = 0; // the probe's once step holds its own da
 // Rolling drag (RollingDrag, rolling_drag.h): the mod's thread sets these, the truck update reads them on the game's thread.
 static bool g_dragSetting = false;            // the setting in force (RollingDrag, or hard or insanity mode)
 static volatile LONG g_dragOn = 0;            // and the truck update hook is in: the truck update writes the drag
-static volatile float g_dragFactor = 1.0f;    // the pressure's factor on Crr now (RdPressureFactor)
+static volatile float g_dragFactor = 1.0f;    // the pressure's factor on Crr now (RdPressureFactorWith), the effect in it
+static RdTable g_dragTable = RdTableDefault(); // the figures in force, finished (RdTableMake): the mod's thread writes it, the truck update takes one copy a frame
+static float g_dragEffect = 1.0f;             // the mod's thread's: the pressure effect in force, 1 the default curve
+static bool g_dragNone = false;               // the mod's thread's: Strength 0, no drag is given, so the fuel goes by the mode's row
+#ifdef TP_PROBE_TEST
+static void (*g_dragFrameMid)() = nullptr;    // the tests': called in a frame after its first wheel
+#endif
 static long long g_watchA = -1, g_watchB = -1, g_watchC = -1;
 
 // cylinder: the collision cylinder's stock radius; writtenCylinder: the radius written last; room: how many metres the
@@ -302,6 +309,8 @@ static void WriteIni(const TpSettings &s)
     put(T, L"PerTruck", L"%.0f", s.perTruck ? 1 : 0);
     put(T, L"Temperature", L"%.0f", s.temperature ? 1 : 0);
     put(T, L"RollingDrag", L"%.0f", s.rollingDrag ? 1 : 0);
+    // the drag's figures: a Crr with three places, as it is held (RdTuneHeld)
+    for (int i = 0; i < kRdTuneCount; i++) put(T, Wide(kRdTune[i].key), kRdTune[i].decimals == 3 ? L"%.3f" : L"%g", s.drag[i]);
     put(T, L"StiffBase", L"%.0f", s.stiffBase ? 1 : 0);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
@@ -357,6 +366,11 @@ static void ReadIni(TpSettings &s)
                         L"; pressure in them, cold rubber less grip. RollingDrag=1 (on by default): the tires roll harder on soft ground and when aired\n"
                         L"; down (rolling resistance by ground and pressure, in the wheels' damping). StiffBase=1 (on by default): every tire starts\n"
                         L"; at least as stiff as the game's Stiff tires, so a soft tire is no flatter than a Stiff one in any mode; 0 = each tire's own.\n"
+                        L"; The rolling drag's figures, for every truck: RollingDragStrength in percent (0 to 300, 100 by default); the rolling\n"
+                        L"; resistance by ground CrrPaved, CrrRock, CrrGravel, CrrDirt, CrrMud, CrrSnow and CrrSand (0 to 0.1);\n"
+                        L"; RollingDragPressure in percent (0 to 200: how much airing down raises the drag); MudFromCm and MudFullCm: how deep\n"
+                        L"; a wheel sits where mud and snow begin to count and where they count in full (MudFullCm at least 5 over MudFromCm).\n"
+                        L"; Hard mode and insanity mode take the defaults of all of them.\n"
                         L"; HardMode=1: the realistic numbers and options in place of the\n"
                         L"; grip, mode and damage keys and Seconds (WornGrip 10 there); the keys here keep your own.\n"
                         L"; PerTruck=1: each truck keeps its own pressure mode in TirePressure.trucks.ini, put back when that truck is driven\n"
@@ -436,6 +450,8 @@ static void ReadIni(TpSettings &s)
     s.perTruck = GetPrivateProfileIntW(T, L"PerTruck", s.perTruck ? 1 : 0, ini.c_str()) != 0;
     s.temperature = GetPrivateProfileIntW(T, L"Temperature", s.temperature ? 1 : 0, ini.c_str()) != 0;
     s.rollingDrag = GetPrivateProfileIntW(T, L"RollingDrag", s.rollingDrag ? 1 : 0, ini.c_str()) != 0;
+    for (int i = 0; i < kRdTuneCount; i++) s.drag[i] = RdTuneHeld(i, IniFloat(T, Wide(kRdTune[i].key), s.drag[i], ini));
+    RdBandHold(s.drag, -1);
     s.stiffBase = GetPrivateProfileIntW(T, L"StiffBase", s.stiffBase ? 1 : 0, ini.c_str()) != 0;
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
@@ -452,6 +468,23 @@ static void UiSet()
     g_ui = g_uiWanted && g_overlayOk && g_overlayDraws;
     if (g_ui) PadMasks(g_padOpen, g_padLower, g_padRaise, g_padConfirm, g_padCancel);
     else PadMasks(0, 0, 0, 0, 0);
+}
+
+// The rolling drag's figures in force (s with a mode's preset in it): each held to its range and checked to be a
+// number here, on the mod's thread, then the finished table the truck update reads. No lock: a frame with some
+// figures old and some new is harmless, and the frame takes one copy.
+static void DragSettingsApply(const TpSettings &s, bool log)
+{
+    float v[kRdTuneCount];
+    for (int i = 0; i < kRdTuneCount; i++) v[i] = RdTuneHeld(i, s.drag[i]);
+    RdBandHold(v, -1);
+    g_dragTable = RdTableMake(v);
+    g_dragEffect = v[kRdtPressure] / 100.0f;
+    g_dragNone = !(v[kRdtStrength] > 0.0f);
+    if (log && !RdTuneIsDefault(v))
+        Log(L"rolling drag: figures off their defaults: strength %g %%, Crr paved %.3f, rock %.3f, gravel %.3f, dirt %.3f, mud %.3f, snow %.3f, sand %.3f (before the strength), "
+            L"pressure effect %g %%, mud and snow blended in by the wheel's sink from %g to %g cm",
+            v[kRdtStrength], v[kRdtPaved], v[kRdtRock], v[kRdtGravel], v[kRdtDirt], v[kRdtMud], v[kRdtSnow], v[kRdtSand], v[kRdtPressure], v[kRdtMudFrom], v[kRdtMudFull]);
 }
 
 // Puts settings in force: the key, the panel, the pad bindings, the modes with the base grip in them.
@@ -543,6 +576,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_temperature = s.temperature;
     g_ambientC = s.ambientC;
     g_dragSetting = s.rollingDrag;
+    DragSettingsApply(s, log);
     if (log) Log(s.rollingDrag ? L"rolling drag: on (RollingDrag%s), by ground and pressure in the wheels' damping" : L"rolling drag: off (RollingDrag=0)",
                  in.insaneMode ? L", insanity mode" : in.hardMode ? L", hard mode" : L"=1");
     g_hardMode = in.hardMode || in.insaneMode;
@@ -1565,7 +1599,9 @@ static bool g_dragGravityKnown = true;
 struct DragKept { WheelRef w; RdRecord rec; };
 static std::vector<DragKept> g_dragKept; // the game's thread's only
 static uint64_t g_dragVehicle = 0;       // the same
-struct DragWheelStat { int index; RdGround ground; float crr, r, wheelR, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written; }; // r: the one reckoned with (DragRadius), wheelR: wheel + 0x94
+struct DragWheelStat { int index; RdGround ground; float crr, r, wheelR, inertia, spin, stock, c, mass, gravity; bool grounded, broken, written;
+                       int blend; float share, sink, depth, cIn; bool sinkOk, hard, capped; }; // the blend (RdPickOf), wheel + 0x178 and + 0x1BC, the c the body holds, the hard flag, c held at the cap
+// // r: the one reckoned with (DragRadius), wheelR: wheel + 0x94
 struct DragStats { uint64_t vehicle; float mass, chassis, files, gravity, gravityRead, factor, n; int count, grounded, capped; LONG frames, writes, cappedFrames;
                    RdWhy why; int told, reckoned; float inertia3[3]; // whether the drag acts on the truck (RdActsWhy), and the first wheel's inertia about x, y, z
                    DragWheelStat w[kRollWheelsMost]; };
@@ -1620,6 +1656,9 @@ static int DragStockBack()
 // by RdRollRadius's rule against the wheel's own figure handed in (wheel + 0x94). The frame, the stats and the probe's
 // lines all take it here, so the log never proves another figure than the one in force. The cylinder is written on
 // the mod's thread and read here in the truck update: one float, whole on this machine, no lock.
+// A wheel's sink, wheel + 0x178 in metres: the one reader of it. false where it cannot be read.
+static bool DragSinkRead(uint64_t wheel, float &sink) { return Read(wheel + 0x178, sink); }
+
 static float DragRadius(const WheelRef &w, float wheelRadius)
 {
     float cylinder = 0.0f;
@@ -1675,8 +1714,12 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
     }
     std::vector<DragKept> kept;
     int writes = 0;
+    const RdTable table = g_dragTable; // one copy for every wheel of the frame
     for (size_t i = 0; i < count; i++)
     {
+#ifdef TP_PROBE_TEST
+        if (i == 1 && g_dragFrameMid) g_dragFrameMid();
+#endif
         const WheelRef &w = wheels[i];
         DragWheelStat st = {};
         st.index = w.index;
@@ -1687,9 +1730,15 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
             if (k.w.wheel == w.wheel && k.w.body == w.body) was = &k;
         BYTE broken = 0, flags[6] = {}, ice = 0;
         WORD word = 0;
-        float r = 0, stock = 0;
+        float r = 0, stock = 0, sink = 0, depth = 0;
+        int32_t material = -1;
         const bool read = Read(w.model + 0x328, broken) && Read(w.wheel + 0x1C8, flags) && Read(w.wheel + 0x1C0, ice) && Read(w.wheel + 0x94, r) &&
                           Read(w.wheel + 0xAC, stock) && Read(w.body + 0x216, word) && stock >= 0.0f && stock < 1000.0f;
+        // the ground's material, the sink and the layer's depth with the flags, in the one pass of reads the pick is made
+        // from; a material that cannot be read is none, a sink that cannot be read gives no blend
+        if (!Read(w.wheel + 0x1D0, material)) material = -1;
+        const bool sinkOk = DragSinkRead(w.wheel, sink);
+        Read(w.wheel + 0x1BC, depth);
         const int axle = bodies[i].ok ? RollAxle(bodies[i].inv) : -1;
         if (axle >= 0) told++;
         if (axle >= 0 && read && !broken) reckoned++;
@@ -1697,8 +1746,15 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         if (read) r = DragRadius(w, r); // the one r from here on: the torque's arm, the floor's spin and the stats
         st.broken = broken != 0;
         st.grounded = contact[i] != 0;
-        st.ground = RdGroundOf(flags, ice);
-        st.crr = kRdCrr[st.ground];
+        const RdPick pick = RdPickOf(table, flags, ice, material, sinkOk, sink);
+        st.ground = pick.ground;
+        st.crr = pick.crr;
+        st.blend = pick.blend;
+        st.share = pick.share;
+        st.sink = sink;
+        st.sinkOk = sinkOk;
+        st.depth = depth;
+        st.hard = flags[5] != 0;
         st.r = r;
         st.stock = stock;
         st.inertia = axle >= 0 ? Inverse(bodies[i].inv[axle]) : 0.0f;
@@ -1713,13 +1769,14 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
         {
             // off the ground (or nothing to reckon by): the stock, where the body holds the mod's word
             if (was && word == was->rec.word && WriteAs(w.body + 0x216, HavokHalf(stock))) InterlockedIncrement(&g_dragBacks);
-            st.c = stock;
+            st.c = st.cIn = stock;
             if (stats) stats->w[i] = st;
             continue;
         }
         bool capped = false;
         const float c = RdDamping(stock, st.crr, factor, n, r, st.inertia, st.spin, &capped);
         st.c = c;
+        st.capped = capped;
         if (capped && stats) stats->capped++;
         RdRecord rec = was ? was->rec : RdRecord{ w.wheel, 0, 0.0f };
         if (RdWrite(was ? &was->rec : nullptr, w.wheel, word, c))
@@ -1733,6 +1790,7 @@ static int RollingDragFrame(uint64_t vehicle, const std::vector<WheelRef> &wheel
             }
             else continue;
         }
+        st.cIn = rec.c; // what the body holds: the last c written, which the 2 percent rule may have left in
         kept.push_back({ w, rec });
         if (stats) stats->w[i] = st;
     }
@@ -2195,6 +2253,13 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
 // (the setting, or hard or insanity mode, and the hook found), as the drag charges a soft tire's fuel itself; else the
 // mode's Fuel use row. The row keeps its value for when the drag is off.
 static float FuelInForce(float row, bool dragOn) { return dragOn ? 1.0f : row; }
+// Whether the drag is there to charge the fuel: in force, and not with a Strength of 0, which gives no drag (only the
+// 0: no curve over the strength).
+static bool DragChargesFuel() { return g_dragOn != 0 && !g_dragNone; }
+// RollingDragPass's last truck and speed, for the tuning block's live read (the mod's thread's)
+static uint64_t g_tuneVehicle = 0;
+static float g_tuneSpeed = 0.0f;
+static ULONGLONG g_tuneTruckAt = 0;
 
 // Whether the drag acts on the truck the mod's thread serves, by the truck update's last answer for it (RdFuelTake):
 // where it does not, the wheels get no drag and the mode's Fuel use row holds as with RollingDrag off, said in one
@@ -2231,8 +2296,11 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
     static uint64_t truckSaid = 0;
     static ULONGLONG secondAt = 0;
     const bool truck = vehicle && !wheels.empty();
-    const float factor = RdPressureFactor(g_pressure);
+    const float factor = RdPressureFactorWith(g_pressure, g_dragEffect);
     g_dragFactor = factor;
+    g_tuneVehicle = truck ? vehicle : 0;
+    g_tuneSpeed = speed;
+    g_tuneTruckAt = GetTickCount64();
     const bool hook = g_foregroundReal != nullptr;
     const bool on = g_dragSetting && hook;
     InterlockedExchange(&g_dragOn, on ? 1 : 0);
@@ -2275,9 +2343,10 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
                        s.gravityRead);
         Log(L"rolling drag: truck %p, the chassis's own body 1/w %.1f kg, the files' sum of its bodies %.0f kg (model+0x784), the wheels %s (%.1f kg); %s; "
             L"N %.0f N a wheel on %d on the ground, the mass %.0f kg; cargo and a trailer not in it; the first wheel I %.2f kg m2 about its axle, r %.3f m (its cylinder's where that lies within %g to %g of wheel+0x94, which reads %.3f m), "
-            L"stock damping %.3f; Crr paved %.3f, rock %.3f, gravel %.3f, dirt %.3f (with no flag, mud too), sand %.3f, ice 0; x%.2f at %s",
-            (void *)s.vehicle, s.chassis, s.files, wheelsText.c_str(), wheelSum, gravity, s.n, s.grounded, s.mass, w.inertia, w.r, kRdCylLo, kRdCylHi, w.wheelR, w.stock, kRdCrr[kRdPaved],
-            kRdCrr[kRdRock], kRdCrr[kRdGravel], kRdCrr[kRdDirt], kRdCrr[kRdSand], s.factor, g_modes[g_mode].name);
+            L"stock damping %.3f; Crr in force paved %.3f, rock %.3f, gravel %.3f, dirt %.3f, mud %.3f and snow %.3f (blended in by the wheel's sink from %.0f to %.0f cm), sand %.3f, ice 0; x%.2f at %s",
+            (void *)s.vehicle, s.chassis, s.files, wheelsText.c_str(), wheelSum, gravity, s.n, s.grounded, s.mass, w.inertia, w.r, kRdCylLo, kRdCylHi, w.wheelR, w.stock, g_dragTable.crr[kRdPaved],
+            g_dragTable.crr[kRdRock], g_dragTable.crr[kRdGravel], g_dragTable.crr[kRdDirt], g_dragTable.mud, g_dragTable.snow, g_dragTable.from * 100.0f, g_dragTable.full * 100.0f,
+            g_dragTable.crr[kRdSand], s.factor, g_modes[g_mode].name);
     }
     if (!g_probeRoll || passAt < secondAt || speed < 0.5f) return;
     secondAt = passAt + 1000;
@@ -2295,6 +2364,94 @@ static void RollingDragPass(uint64_t vehicle, const std::vector<WheelRef> &wheel
     }
     Log(L"rolling drag: %.2f m/s, x%.2f at %s, N %.0f N, %ld frames, %ld writes, %ld frames with a wheel held at %g%s", speed, s.factor, g_modes[g_mode].name, s.n,
         (long)s.frames, (long)s.writes, (long)s.cappedFrames, kRdMost, list.c_str());
+}
+
+// ---- the rolling drag's figures for the tuning tool (ng_tune.h; BRIEF_rolling_drag_sliders.md) ----
+// The mod's thread alone touches the block; no hook and no thread of the game's does. Each pass: what the tool asked is
+// taken (held to the range and the step by NgTuneTake, the band by RdBandHold) into the settings by the road the mod's
+// own page takes (SettingsPut: in force on this pass, saved once nothing new came for a second), then the values in
+// force and the live read are written. With no tool in the game the block is written and nobody reads it.
+enum { kTuneGround = kRdTuneCount, kTuneCrr, kTuneSlowing, kTuneSink, kTuneDepth, kTuneCount };
+static NgTuneMod g_tune = {};
+static int DragTuneItems(NgTuneItem *items)
+{
+    for (int i = 0; i < kRdTuneCount; i++)
+        items[i] = { kNgTuneSlider, kRdTune[i].name, kRdTuneGroup, kRdTune[i].tip, kRdTune[i].least, kRdTune[i].most, kRdTune[i].def, kRdTune[i].step, kRdTune[i].decimals };
+    for (int i = 0; i < kRdLineCount; i++) items[kRdTuneCount + i] = { kNgTuneLine, kRdLines[i].name, kRdTuneGroup, kRdLines[i].tip, 0.0f, 0.0f, 0.0f, 0.0f, kRdLines[i].decimals };
+    return kTuneCount;
+}
+// What the tool asked, into the settings. A greyed entry (the drag off, or a mode) takes nothing: NgTuneTake drops it.
+static bool DragTuneTake(uint8_t *block)
+{
+    TpSettings s;
+    bool any = false;
+    for (int i = 0; i < kRdTuneCount; i++)
+    {
+        float held = 0.0f;
+        if (NgTuneTake(block, i, held) <= 0) continue;
+        if (!any) SettingsGet(s);
+        any = true;
+        s.drag[i] = RdTuneHeld(i, held);
+        RdBandHold(s.drag, i); // the one of the band's two that was not moved gives way, and is published as held
+    }
+    if (any) SettingsPut(s);
+    return any;
+}
+// The live read from the truck update's last frame for the truck the mod's thread serves.
+static void DragLive(uint64_t vehicle, float speed, RdLive &live)
+{
+    DragStats s;
+    AcquireSRWLockShared(&g_dragLock);
+    s = g_dragStats;
+    ReleaseSRWLockShared(&g_dragLock);
+    RdLiveWheel w[kRollWheelsMost];
+    int n = 0;
+    const bool have = g_dragOn && vehicle && s.vehicle == vehicle && s.frames > 0;
+    for (int i = 0; have && i < s.count && i < kRollWheelsMost; i++)
+    {
+        const DragWheelStat &d = s.w[i];
+        w[n++] = { d.grounded && !d.broken, d.sinkOk, d.hard, d.capped, d.ground, d.blend, d.share, d.crr, d.cIn, d.stock, d.inertia, d.spin, d.r, d.sink, d.depth };
+    }
+    RdLiveMake(w, n, s.factor, s.mass, speed, live);
+    if (!have) snprintf(live.ground, sizeof live.ground, "no read");
+}
+// The values in force and the live read, under the block's sequence. Under a mode the defaults are in force and the
+// sliders are greyed; with the drag off they are greyed too. The first slider carries why.
+static void DragTunePublish(uint8_t *block, ULONGLONG now)
+{
+    TpSettings s;
+    SettingsGet(s);
+    const bool mode = s.hardMode || s.insaneMode, off = !mode && !s.rollingDrag;
+    const char *why = mode ? kRdWhyMode : off ? kRdWhyOff : nullptr;
+    PresetSettings(s);
+    RdLive live;
+    const bool truck = g_tuneVehicle && now >= g_tuneTruckAt && now - g_tuneTruckAt < 1000;
+    DragLive(truck ? g_tuneVehicle : 0, g_tuneSpeed, live);
+    NgTuneBegin(block);
+    for (int i = 0; i < kRdTuneCount; i++) NgTuneValue(block, i, s.drag[i], i == 0 ? why : nullptr, why != nullptr);
+    NgTuneValue(block, kTuneGround, 0.0f, live.ground);
+    NgTuneValue(block, kTuneCrr, live.crr, live.any ? nullptr : "no read");
+    NgTuneValue(block, kTuneSlowing, live.slowing, live.slowingText);
+    NgTuneValue(block, kTuneSink, live.sinkCm, live.sinkText);
+    NgTuneValue(block, kTuneDepth, live.depth, live.depthText);
+    NgTuneEnd(block, now);
+}
+static void DragTunePass(ULONGLONG now)
+{
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        NgTuneItem items[kTuneCount];
+        const int count = DragTuneItems(items);
+        if (NgTuneOpen(g_tune, "Tire Inflation", 2, items, count))
+            Log(L"tuning: the rolling drag's figures are published in Local\\NextGen.Tune.%lu.%d (ng_tune.h, %d entries) for the tuning tool; nothing reads it where the tool is not in the game",
+                GetCurrentProcessId(), g_tune.n, count);
+        else Log(L"tuning: the rolling drag's figures are not published (the shared memory could not be made); they stay in the ini");
+    }
+    if (!g_tune.block) return;
+    DragTuneTake(g_tune.block);
+    DragTunePublish(g_tune.block, now);
 }
 
 // ---- diagnostics (ini ProbeFriction, ProbeWriters; both 0 unless set by hand) ----
@@ -2833,6 +2990,7 @@ static DWORD WINAPI Run(void *)
                 UiSet();
             }
         }
+        DragTunePass(GetTickCount64()); // what the tuning tool asked goes in as the page's edits do, just below
         // the settings page: edits count on this pass (an edited factor counts at once) and go
         // into the ini once they have rested a second; "read the ini again" applies the file as it is
         bool edited = false;
@@ -3340,7 +3498,7 @@ static DWORD WINAPI Run(void *)
         Mode forVehicle = g_now;
         if (!rolling) forVehicle.fuel = 1.0f;
         // each pass, so a change of the drag puts it in at once; the drag only where it acts on this truck (DragFuelActs)
-        forVehicle.fuel = FuelInForce(forVehicle.fuel, g_dragOn != 0 && DragFuelActs(vehicle));
+        forVehicle.fuel = FuelInForce(forVehicle.fuel, DragChargesFuel() && DragFuelActs(vehicle));
         // the gears make up for the smaller collision cylinders, but for what a real tire loses (the wheels' mean)
         float roll = 0.0f;
         int rolled = 0;
@@ -3608,6 +3766,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
     for (int i = 0; i < 5; i++) same = same && !strcmp(a.pad[i], b.pad[i]);
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
+    for (int i = 0; i < kRdTuneCount; i++) same = same && a.drag[i] == b.drag[i];
     same = same && a.asphaltFloor == b.asphaltFloor && a.wornGrip == b.wornGrip && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) same = same && a.mode[m][k] == b.mode[m][k];
@@ -3936,6 +4095,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.temperature = false;
     c.stiffBase = false;
     c.rollingDrag = false;
+    for (int i = 0; i < kRdTuneCount; i++) c.drag[i] = RdTuneHeld(i, kRdTune[i].least + (kRdTune[i].most - kRdTune[i].least) * (0.31f + 0.02f * (float)i));
     c.ambientC = -3.0f;
     c.hardMode = true;
     c.insaneMode = true;
@@ -3948,6 +4108,7 @@ static bool IniTest(const wchar_t *givenIni)
         }
     for (int i = 0; i < 5; i++) unchanged += !strcmp(c.pad[i], d.pad[i]);
     for (int i = 0; i < 2; i++) unchanged += c.padCurve[i] == d.padCurve[i];
+    for (int i = 0; i < kRdTuneCount; i++) unchanged += c.drag[i] == d.drag[i];
     unchanged += c.key == d.key || c.seconds == d.seconds || c.soundVolume == d.soundVolume || c.uiScale == d.uiScale || c.confirmSeconds == d.confirmSeconds || c.base[0] == d.base[0] ||
                  c.base[1] == d.base[1] || c.base[2] == d.base[2] || c.balanceStrength == d.balanceStrength || c.asphaltFloor == d.asphaltFloor || c.wornGrip == d.wornGrip ||
                  c.beep == d.beep || c.ui == d.ui || c.vanillaBalance == d.vanillaBalance || c.increased == d.increased || c.tireDamage == d.tireDamage ||
@@ -5968,6 +6129,417 @@ static bool TextCutTest()
     return ok;
 }
 
+// The rolling drag's figures on sliders (BRIEF_rolling_drag_sliders.md, the Reviewer's addenda 1, 3, 4 and 5): the
+// ini's keys, the finished table, the pressure effect, the pick with mud and snow, frames on a made up truck, the live
+// read, and the tuning block from both sides in a buffer of this process.
+static RdTable g_dragTestMid;
+static bool DragTuneTest()
+{
+    const Build saved = g_buildFound;
+    const bool gravityKnown = g_dragGravityKnown;
+    g_dragGravityKnown = false;
+    g_buildFound.wheelVtable = 0x100;
+    g_buildFound.cylinderVtable = 0x200;
+    const RdTable tableWas = g_dragTable;
+    const float effectWas = g_dragEffect;
+    const bool noneWas = g_dragNone;
+    const LONG onWas = g_dragOn;
+    TpSettings setWas, iniWas;
+    SettingsGet(setWas);
+    ReadIni(iniWas);
+    const std::wstring ini = g_dir + L"TirePressure.ini";
+    const wchar_t *S = L"TirePressure";
+    const RdTable def = RdTableDefault();
+    auto bits = [](float f) { uint32_t b; memcpy(&b, &f, 4); return b; };
+    auto sameTable = [](const RdTable &x, const RdTable &y) { return !memcmp(&x, &y, sizeof x); };
+    const float notANumber = nanf("");
+
+    // ---- the ini ----
+    // none of the keys: the mod as it was, the table the old constants to the bit
+    for (int i = 0; i < kRdTuneCount; i++) WritePrivateProfileStringW(S, Wide(kRdTune[i].key).c_str(), nullptr, ini.c_str());
+    TpSettings r;
+    ReadIni(r);
+    bool noKeys = RdTuneIsDefault(r.drag) && sameTable(RdTableMake(r.drag), def) && def.mud == kRdCrr[kRdDirt] && def.snow == 0.020f && def.from == 0.05f && def.full == 0.4f;
+    for (int g = 0; g < kRdGroundCount; g++) noKeys = noKeys && bits(def.crr[g]) == bits(kRdCrr[g]);
+    // out of range held, no number the default, a Crr to three places, a crossed band held (Mud full gives way)
+    WritePrivateProfileStringW(S, L"RollingDragStrength", L"900", ini.c_str());
+    WritePrivateProfileStringW(S, L"CrrPaved", L"-1", ini.c_str());
+    WritePrivateProfileStringW(S, L"CrrSand", L"nan", ini.c_str());
+    WritePrivateProfileStringW(S, L"CrrGravel", L"7", ini.c_str());
+    WritePrivateProfileStringW(S, L"CrrRock", L"0.0126", ini.c_str());
+    WritePrivateProfileStringW(S, L"RollingDragPressure", L"250", ini.c_str());
+    WritePrivateProfileStringW(S, L"MudFromCm", L"20", ini.c_str());
+    WritePrivateProfileStringW(S, L"MudFullCm", L"10", ini.c_str());
+    ReadIni(r);
+    const bool held = r.drag[kRdtStrength] == 300.0f && r.drag[kRdtPaved] == 0.0f && r.drag[kRdtSand] == 0.060f && r.drag[kRdtGravel] == 0.1f && r.drag[kRdtRock] == 0.013f &&
+                      r.drag[kRdtPressure] == 200.0f && r.drag[kRdtMudFrom] == 20.0f && r.drag[kRdtMudFull] == 25.0f && RdTuneHeld(kRdtDirt, notANumber) == 0.020f &&
+                      RdTuneHeld(kRdtMudFull, 3.0f) == 10.0f && RdTuneHeld(kRdtMudFrom, 99.0f) == 20.0f;
+    WriteIni(r);
+    TpSettings r2;
+    ReadIni(r2);
+    wchar_t rockText[16] = {};
+    GetPrivateProfileStringW(S, L"CrrRock", L"", rockText, 16, ini.c_str());
+    const bool heldPair = SameSettings(r, r2) && r2.drag[kRdtMudFrom] == 20.0f && r2.drag[kRdtMudFull] == 25.0f && !wcscmp(rockText, L"0.013");
+    // each key lands on its ground: the tab's order is not the table's
+    bool lands = true;
+    for (int i = kRdtPaved; i <= kRdtSand; i++)
+    {
+        float v[kRdTuneCount];
+        RdTuneDefaults(v);
+        v[i] = 0.090f;
+        RdTable want = def;
+        (i == kRdtPaved ? want.crr[kRdPaved] : i == kRdtRock ? want.crr[kRdRock] : i == kRdtGravel ? want.crr[kRdGravel] : i == kRdtDirt ? want.crr[kRdDirt] : i == kRdtMud ? want.mud :
+         i == kRdtSnow ? want.snow : want.crr[kRdSand]) = 0.090f;
+        lands = lands && sameTable(RdTableMake(v), want);
+    }
+    WriteIni(iniWas);
+    WritePrivateProfileStringW(S, L"CrrSand", L"0.090", ini.c_str());
+    ReadIni(r);
+    RdTable sandWant = RdTableMake(iniWas.drag);
+    sandWant.crr[kRdSand] = 0.090f * (iniWas.drag[kRdtStrength] / 100.0f);
+    lands = lands && sameTable(RdTableMake(r.drag), sandWant);
+    WriteIni(iniWas);
+    // the strength scales every ground but ice; 0 is none
+    float v3[kRdTuneCount];
+    RdTuneDefaults(v3);
+    v3[kRdtStrength] = 300.0f;
+    const RdTable three = RdTableMake(v3);
+    v3[kRdtStrength] = 0.0f;
+    const RdTable zero = RdTableMake(v3);
+    const bool strength = three.crr[kRdIce] == 0.0f && fabsf(three.crr[kRdSand] - 0.18f) < 1e-6f && fabsf(three.mud - 0.06f) < 1e-6f && zero.crr[kRdPaved] == 0.0f && zero.snow == 0.0f &&
+                          RdDamping(0.05f, zero.crr[kRdSand], 1.5f, 3000.0f, 0.45f, 10.0f, 20.0f) == 0.05f;
+
+    // ---- the pressure effect ----
+    bool effect = true;
+    const float pressures[5] = { 0.01f, kModePressure[kLow], kModePressure[kReduced], 1.0f, kModePressure[kIncreased] };
+    for (float p : pressures)
+        effect = effect && RdPressureFactorWith(p, 0.0f) == 1.0f && bits(RdPressureFactorWith(p, 1.0f)) == bits(RdPressureFactor(p)) &&
+                 fabsf(RdPressureFactorWith(p, 2.0f) - 1.0f / (p > 0.05f ? p : 0.05f)) < 1e-4f / (p > 0.05f ? p : 0.05f) &&
+                 fabsf(RdPressureFactorWith(p, 0.5f) - sqrtf(RdPressureFactor(p))) < 1e-4f;
+    const float effects[4] = { 0.0f, 0.5f, 1.0f, 2.0f };
+    for (float e : effects) effect = effect && RdPressureFactorWith(1.0f, e) == 1.0f;
+    effect = effect && fabsf(RdPressureFactorWith(kModePressure[kLow], 2.0f) - 2.222f) < 0.001f && fabsf(RdPressureFactorWith(0.0f, 2.0f) - 20.0f) < 0.001f;
+
+    // ---- the pick ----
+    // rows of flags + 0x1C8 .. + 0x1CD: paved, gravel, sand, + 0x1CB, + 0x1CC, hard
+    const uint8_t none[6] = {}, paved[6] = { 1, 0, 0, 0, 0, 0 }, gravel[6] = { 0, 1, 0, 0, 0, 0 }, sand[6] = { 0, 0, 1, 0, 0, 0 }, rock[6] = { 0, 0, 0, 0, 0, 1 };
+    const uint8_t snowRock[6] = { 0, 0, 0, 1, 1, 1 }, snowDirt[6] = { 0, 0, 0, 1, 1, 0 }, oldSnow[6] = { 0, 0, 0, 1, 0, 0 }, snowGravel[6] = { 0, 1, 0, 0, 1, 0 }, snowSand[6] = { 0, 0, 1, 0, 1, 0 };
+    const uint8_t *const plain[5] = { none, paved, gravel, sand, rock };
+    const float sinks[5] = { 0.0f, 0.03f, 0.2f, 0.4f, 2.0f };
+    // the defaults give the old figure to the bit on every wheel that is not snow, at any sink
+    bool asBefore = true;
+    for (const uint8_t *f : plain)
+        for (float s : sinks)
+            for (int ice = 0; ice < 2; ice++)
+            {
+                const RdPick p = RdPickOf(def, f, (uint8_t)ice, 2, true, s);
+                asBefore = asBefore && bits(p.crr) == bits(kRdCrr[RdGroundOf(f, (uint8_t)ice)]) && p.ground == RdGroundOf(f, (uint8_t)ice) && p.blend != kRdBlendSnow;
+            }
+    // mud by the sink, on a dirt wheel only
+    float vm[kRdTuneCount];
+    RdTuneDefaults(vm);
+    vm[kRdtMud] = 0.060f;
+    const RdTable mud = RdTableMake(vm);
+    const float midSink = 0.5f * (mud.from + mud.full);
+    bool mudOk = bits(RdPickOf(mud, none, 0, 2, true, 0.0f).crr) == bits(0.020f) && bits(RdPickOf(mud, none, 0, 2, true, 0.05f).crr) == bits(0.020f) &&
+                 bits(RdPickOf(mud, none, 0, 2, true, 0.4f).crr) == bits(0.060f) && bits(RdPickOf(mud, none, 0, 2, true, 2.0f).crr) == bits(0.060f) &&
+                 fabsf(RdPickOf(mud, none, 0, 2, true, midSink).crr - 0.040f) < 1e-6f && RdPickOf(mud, none, 0, 2, true, midSink).blend == kRdBlendMud &&
+                 bits(RdPickOf(mud, none, 0, 2, false, 0.4f).crr) == bits(0.020f) && bits(RdPickOf(mud, none, 0, 2, true, notANumber).crr) == bits(0.020f) &&
+                 bits(RdPickOf(mud, none, 0, 2, true, -0.4f).crr) == bits(0.020f) && RdShare(0.4f, 0.05f, 0.05f) == 1.0f && RdShare(0.05f, 0.05f, 0.05f) == 0.0f;
+    for (int k = 1; k < 5; k++) mudOk = mudOk && bits(RdPickOf(mud, plain[k], 0, 2, true, 0.4f).crr) == bits(kRdCrr[RdGroundOf(plain[k], 0)]) && RdPickOf(mud, plain[k], 0, 2, true, 0.4f).blend == kRdBlendNone;
+    mudOk = mudOk && RdPickOf(mud, none, 1, 2, true, 0.4f).crr == 0.0f;
+    // snow: the snow map's rows (deep snow over hard ground was read as rock), + 0x1CB only with a material read, and
+    // the blend from the ground under it
+    float vs[kRdTuneCount];
+    RdTuneDefaults(vs);
+    vs[kRdtMud] = 0.060f;
+    vs[kRdtSnow] = 0.030f;
+    const RdTable snow = RdTableMake(vs);
+    const RdPick row1 = RdPickOf(def, snowRock, 0, 2, true, 0.40f), row2 = RdPickOf(def, snowDirt, 0, 2, true, 0.40f), row3 = RdPickOf(def, oldSnow, 0, 2, true, 0.40f),
+                 row4 = RdPickOf(def, snowDirt, 0, -1, true, 0.38f), row5 = RdPickOf(def, rock, 0, 4, true, 0.10f);
+    const bool rows = row1.blend == kRdBlendSnow && row1.ground == kRdRock && bits(row1.crr) == bits(0.020f) && row2.blend == kRdBlendSnow && row2.ground == kRdDirt && row3.blend == kRdBlendSnow &&
+                      row4.blend == kRdBlendSnow && row5.blend == kRdBlendNone && row5.ground == kRdRock && bits(row5.crr) == bits(0.015f);
+    const bool oldByte = RdPickOf(snow, oldSnow, 0, 2, true, 0.4f).blend == kRdBlendSnow && RdPickOf(snow, oldSnow, 0, -1, true, 0.4f).blend == kRdBlendMud &&
+                         bits(RdPickOf(snow, oldSnow, 0, -1, true, 0.4f).crr) == bits(0.060f) && RdPickOf(snow, oldSnow, 0, 2, true, 0.04f).blend == kRdBlendMud;
+    bool under = bits(RdPickOf(snow, snowRock, 0, 2, true, 0.0f).crr) == bits(0.015f) && bits(RdPickOf(snow, snowRock, 0, 2, true, 0.4f).crr) == bits(0.030f) &&
+                 bits(RdPickOf(snow, snowDirt, 0, 2, true, 0.4f).crr) == bits(0.030f) && RdPickOf(snow, snowDirt, 0, 2, true, 0.4f).blend == kRdBlendSnow &&
+                 RdPickOf(snow, snowRock, 1, 2, true, 0.4f).crr == 0.0f;
+    const uint8_t *const snowOn[4] = { snowSand, snowGravel, snowRock, snowDirt };
+    const float snowSinks[3] = { 0.0f, 0.2f, 0.4f }, snowShares[3] = { 0.0f, (0.2f - 0.05f) / (0.4f - 0.05f), 1.0f };
+    for (const uint8_t *f : snowOn)
+        for (int k = 0; k < 3; k++)
+        {
+            const float base = snow.crr[RdGroundOf(f, 0)], want = k == 2 ? snow.snow : base + snowShares[k] * (snow.snow - base);
+            const RdPick p = RdPickOf(snow, f, 0, 2, true, snowSinks[k]);
+            under = under && bits(p.crr) == bits(want) && p.blend == kRdBlendSnow && fabsf(p.share - snowShares[k]) < 1e-6f;
+        }
+
+    // ---- the band ----
+    auto band = [](float from, float full, int first, float firstTo, int second, float secondTo, float wantFrom, float wantFull) {
+        float v[kRdTuneCount];
+        RdTuneDefaults(v);
+        v[kRdtMudFrom] = from, v[kRdtMudFull] = full;
+        v[first] = RdTuneHeld(first, firstTo);
+        RdBandHold(v, first);
+        v[second] = RdTuneHeld(second, secondTo);
+        RdBandHold(v, second);
+        return v[kRdtMudFrom] == wantFrom && v[kRdtMudFull] == wantFull;
+    };
+    const bool bandOk = band(5, 40, kRdtMudFrom, 20, kRdtMudFull, 10, 5, 10) && band(5, 40, kRdtMudFull, 10, kRdtMudFrom, 20, 20, 25) && band(20, 25, kRdtMudFrom, 5, kRdtMudFull, 40, 5, 40) &&
+                        band(20, 25, kRdtMudFull, 40, kRdtMudFrom, 5, 5, 40) && band(5, 10, kRdtMudFrom, 20, kRdtMudFrom, 20, 20, 25) && kRdBandLeast == 5.0f;
+
+    // ---- frames on a made up truck: four dirt wheels at 10 m/s ----
+    static FakeTruck a;
+    std::vector<WheelRef> wa;
+    FakeTruckMake(a, wa);
+    const float roll = 0.45f, inertia = 10.0f, stock = 0.05f, spin = 10.0f / roll;
+    const WORD stockWord = HavokHalf(stock);
+    auto fresh = [&]() {
+        g_dragKept.clear();
+        g_dragVehicle = 0;
+        for (FakeWheel &f : a.w)
+        {
+            memcpy(f.body + 0x216, &stockWord, 2);
+            FakeSpin(f, spin);
+        }
+    };
+    auto ground = [](FakeWheel &f, const uint8_t flags[6], int32_t material, float sink) {
+        memcpy(f.wheel + 0x1C8, flags, 6);
+        memcpy(f.wheel + 0x1D0, &material, 4);
+        memcpy(f.wheel + 0x178, &sink, 4);
+    };
+    auto frame = [&](DragStats &st) { st = {}; return RollingDragFrame((uint64_t)a.vehicle, wa, true, 1.0f, &st); };
+    auto words = [&](WORD w0, WORD w1, WORD w2, WORD w3) { return FakeWord(a.w[0]) == w0 && FakeWord(a.w[1]) == w1 && FakeWord(a.w[2]) == w2 && FakeWord(a.w[3]) == w3; };
+    DragStats st = {};
+    // the defaults: dirt's figure to the bit at sinks of 0, 0.03, 0.2 and 2 m
+    g_dragTable = def;
+    const float dirtSinks[4] = { 0.0f, 0.03f, 0.2f, 2.0f };
+    for (int i = 0; i < 4; i++) ground(a.w[i], none, 2, dirtSinks[i]);
+    fresh();
+    const int firstWrites = frame(st);
+    const float n = st.n;
+    const WORD dirtWord = HavokHalf(RdDamping(stock, kRdCrr[kRdDirt], 1.0f, n, roll, inertia, spin));
+    bool frameDefaults = firstWrites == 4 && dirtWord != stockWord && words(dirtWord, dirtWord, dirtWord, dirtWord);
+    for (int i = 0; i < 4; i++) frameDefaults = frameDefaults && bits(st.w[i].crr) == bits(0.020f) && st.w[i].sinkOk && st.w[i].sink == dirtSinks[i];
+    // the live read of that frame: dirt, 0.020, a slowing of Crr x g, the deepest wheel's sink
+    AcquireSRWLockExclusive(&g_dragLock);
+    g_dragStats = st;
+    g_dragStats.frames = 1;
+    ReleaseSRWLockExclusive(&g_dragLock);
+    g_dragOn = 1;
+    RdLive live;
+    DragLive((uint64_t)a.vehicle, 10.0f, live);
+    const float slowWant = 0.020f * kRdG;
+    bool liveOk = live.any && !strcmp(live.ground, "dirt") && fabsf(live.crr - 0.020f) < 1e-6f && fabsf(live.slowing - slowWant) < 0.01f * slowWant && !live.capped && !live.slow &&
+                  !strcmp(live.sinkText, "200 cm, 100 percent") && strstr(live.slowingText, " m/s2") && !strstr(live.slowingText, ",");
+    DragLive(0, 10.0f, live);
+    liveOk = liveOk && !live.any && !strcmp(live.ground, "no read") && !strcmp(live.slowingText, "no read");
+    g_dragOn = 0;
+    // two wheels deep in mud, two on the road, Mud 0.060: each wheel its own figure
+    g_dragTable = mud;
+    const float twoSinks[4] = { 0.4f, 0.4f, 0.0f, 0.0f };
+    for (int i = 0; i < 4; i++) ground(a.w[i], none, 2, twoSinks[i]);
+    fresh();
+    frame(st);
+    const WORD mudWord = HavokHalf(RdDamping(stock, 0.060f, 1.0f, n, roll, inertia, spin));
+    const bool twoAndTwo = mudWord != dirtWord && words(mudWord, mudWord, dirtWord, dirtWord) && bits(st.w[0].crr) == bits(0.060f) && bits(st.w[3].crr) == bits(0.020f) &&
+                           st.w[0].blend == kRdBlendMud && st.w[0].share == 1.0f && st.w[3].share == 0.0f;
+    // a figure moved by under 2 percent of the damping does not write, and what the body holds is what is reported
+    float vSlight[kRdTuneCount];
+    RdTuneDefaults(vSlight);
+    vSlight[kRdtMud] = 0.0605f;
+    g_dragTable = RdTableMake(vSlight);
+    const float heldC = st.w[0].cIn;
+    const int slightWrites = frame(st);
+    const bool slight = slightWrites == 0 && st.w[0].cIn == heldC && st.w[0].c != heldC && !st.w[0].written;
+    // Strength 0, and a ground at 0.000: the stock's word back, to the bit, on the next frame
+    g_dragTable = zero;
+    const int zeroWrites = frame(st);
+    bool stockBack = zeroWrites == 4 && words(stockWord, stockWord, stockWord, stockWord) && st.w[0].cIn == stock;
+    g_dragTable = mud;
+    frame(st);
+    float vNoDirt[kRdTuneCount];
+    RdTuneDefaults(vNoDirt);
+    vNoDirt[kRdtDirt] = 0.0f;
+    vNoDirt[kRdtMud] = 0.060f;
+    g_dragTable = RdTableMake(vNoDirt);
+    frame(st);
+    stockBack = stockBack && words(mudWord, mudWord, stockWord, stockWord);
+    // the frame's table is one copy: a change after its first wheel does not split the wheels
+    g_dragTable = def;
+    for (int i = 0; i < 4; i++) ground(a.w[i], none, 2, 0.0f);
+    fresh();
+    g_dragTestMid = zero;
+    g_dragFrameMid = [] { g_dragTable = g_dragTestMid; };
+    frame(st);
+    g_dragFrameMid = nullptr;
+    bool oneCopy = words(dirtWord, dirtWord, dirtWord, dirtWord) && sameTable(g_dragTable, zero);
+    frame(st);
+    oneCopy = oneCopy && words(stockWord, stockWord, stockWord, stockWord);
+    // snow over hard ground in a frame: read as snow on rock, not rock
+    g_dragTable = snow;
+    for (int i = 0; i < 4; i++) ground(a.w[i], snowRock, 2, 0.4f);
+    for (FakeWheel &f : a.w)
+    {
+        const float depth = 4.0f;
+        memcpy(f.wheel + 0x1BC, &depth, 4);
+    }
+    fresh();
+    frame(st);
+    const WORD snowWord = HavokHalf(RdDamping(stock, 0.030f, 1.0f, n, roll, inertia, spin));
+    const bool snowFrame = words(snowWord, snowWord, snowWord, snowWord) && st.w[0].blend == kRdBlendSnow && st.w[0].ground == kRdRock && st.w[0].hard && st.w[0].depth == 4.0f;
+    fresh();
+
+    // ---- the live read at the cap: what was written, and said ----
+    bool capHit = false;
+    const float capC = RdDamping(stock, 0.67f, 1.0f, 50000.0f, 0.5f, 0.1f, 0.0f, &capHit);
+    RdLiveWheel lw[4];
+    for (RdLiveWheel &w : lw) w = { true, true, true, capHit, kRdRock, kRdBlendSnow, 0.62f, 0.018f, capC, stock, 10.0f, 2.0f, 0.45f, 0.27f, 4.0f };
+    lw[3].sink = 0.31f;
+    lw[3].hard = false;
+    lw[3].depth = 0.52f;
+    RdLiveMake(lw, 4, 1.0f, 1400.0f, 0.9f, live);
+    const float capSlow = 4.0f * (kRdMost - stock) * 10.0f * 2.0f / 0.45f / 1400.0f;
+    const bool capLive = capHit && capC == kRdMost && live.capped && live.slow && fabsf(live.slowing - capSlow) < 1e-4f && !strcmp(live.ground, "snow on rock, 62 percent") &&
+                         !strcmp(live.slowingText, "2.53 m/s2, capped, under 2 m/s") && !strcmp(live.sinkText, "31 cm, 62 percent") && !strcmp(live.depthText, "0.52 m") &&
+                         fabsf(live.crr - 0.018f) < 1e-6f;
+    lw[3].sink = 0.1f;
+    RdLiveMake(lw, 4, 1.0f, 1400.0f, 9.0f, live);
+    const bool hardLive = !strcmp(live.depthText, "hard") && !live.slow && !strcmp(live.slowingText, "2.53 m/s2, capped");
+
+    // ---- the tuning block, the mod's side with a stand-in for the tool's writes ----
+    static uint8_t block[kNgTuneBlockMost];
+    NgTuneItem items[kTuneCount];
+    const int count = DragTuneItems(items);
+    bool blockOk = count == 16 && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count);
+    static NgTuneSeen seen;
+    blockOk = blockOk && NgTuneRead(block, sizeof block, seen) && seen.count == 16 && !strcmp(seen.e[kRdtSnow].name, "Snow") && !strcmp(seen.e[kTuneGround].name, "Ground") &&
+              seen.e[kTuneGround].kind == kNgTuneLine && !strcmp(seen.e[0].group, "Rolling drag") && seen.e[kRdtDirt].def == 0.020f && seen.e[kRdtMudFull].least == 10.0f;
+    for (int i = 0; i < count; i++) blockOk = blockOk && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'');
+    auto want = [&](int i, float v) {
+        NgTuneEntry *e = NgTuneAt(block, i);
+        e->wanted = v;
+        InterlockedIncrement(&e->wantedCount);
+    };
+    // one pass of the mod's thread as Run does it: take, apply what was edited, publish
+    auto pass = [&]() {
+        const bool took = DragTuneTake(block);
+        if (InterlockedExchange(&g_setDirty, 0))
+        {
+            TpSettings s;
+            SettingsGet(s);
+            PresetSettings(s);
+            DragSettingsApply(s, false);
+        }
+        DragTunePublish(block, 1000);
+        return took;
+    };
+    auto now = [&]() { TpSettings s; SettingsGet(s); return s; };
+    auto shown = [&](int i) { return NgTuneAt(block, i)->value; };
+    auto greyed = [&](int i) { return (NgTuneAt(block, i)->flags & kNgTuneDisabled) != 0; };
+    TpSettings g;
+    SettingsDefaults(g);
+    SettingsPut(g);
+    pass();
+    bool published = ((NgTuneHead *)block)->tick == 1000 && !(((NgTuneHead *)block)->sequence & 1) && !greyed(0);
+    for (int i = 0; i < kRdTuneCount; i++) published = published && shown(i) == kRdTune[i].def;
+    // past the range: held; in force on that pass, on the mod's own settings, and in the ini when they are saved
+    want(kRdtStrength, 500.0f);
+    const bool took = pass();
+    WriteIni(now());
+    ReadIni(r);
+    const bool wanted = took && now().drag[kRdtStrength] == 300.0f && shown(kRdtStrength) == 300.0f && fabsf(g_dragTable.crr[kRdSand] - 0.18f) < 1e-6f && r.drag[kRdtStrength] == 300.0f;
+    WriteIni(iniWas);
+    // no number: nothing changes
+    want(kRdtSand, notANumber);
+    const TpSettings before = now();
+    const bool nothing = !pass() && SameSettings(now(), before) && shown(kRdtSand) == 0.060f;
+    // the band through the block: the one not moved gives way, and the held figure is the one shown
+    want(kRdtMudFrom, 20.0f);
+    want(kRdtMudFull, 10.0f);
+    pass();
+    bool bandBlock = now().drag[kRdtMudFrom] == 5.0f && now().drag[kRdtMudFull] == 10.0f && shown(kRdtMudFrom) == 5.0f && shown(kRdtMudFull) == 10.0f && g_dragTable.full == 0.1f;
+    want(kRdtMudFrom, 20.0f);
+    pass();
+    bandBlock = bandBlock && now().drag[kRdtMudFull] == 25.0f && shown(kRdtMudFull) == 25.0f && shown(kRdtMudFrom) == 20.0f && g_dragTable.from == 0.2f && g_dragTable.full == 0.25f;
+    // the tool's Reset: every default asked; the block's keys the defaults, the other settings as they were
+    for (int i = 0; i < kRdTuneCount; i++) want(i, kRdTune[i].def);
+    pass();
+    const bool reset = RdTuneIsDefault(now().drag) && SameSettings(now(), g) && sameTable(g_dragTable, def) && g_dragEffect == 1.0f;
+    // Strength 0 is no drag for the fuel, 1 is; only the 0
+    g_dragOn = 1;
+    want(kRdtStrength, 0.0f);
+    pass();
+    const float row = 1.5f;
+    bool fuel = g_dragNone && !DragChargesFuel() && FuelInForce(row, DragChargesFuel()) == row;
+    want(kRdtStrength, 1.0f);
+    pass();
+    fuel = fuel && DragChargesFuel() && FuelInForce(row, DragChargesFuel()) == 1.0f;
+    g_dragOn = 0;
+    fuel = fuel && !DragChargesFuel();
+    want(kRdtStrength, 100.0f);
+    pass();
+    // the drag off: greyed with why, and nothing is taken
+    g.rollingDrag = false;
+    SettingsPut(g);
+    pass();
+    bool offOk = greyed(0) && greyed(kRdtMudFull) && !strcmp(NgTuneAt(block, 0)->text, "Rolling drag is off.") && !NgTuneAt(block, 1)->text[0] && !greyed(kTuneGround);
+    want(kRdtDirt, 0.050f);
+    offOk = offOk && !pass() && now().drag[kRdtDirt] == 0.020f;
+    // a mode: the defaults in force and shown, greyed with why; the player's own figure stays in the settings
+    g.rollingDrag = true;
+    g.hardMode = true;
+    g.drag[kRdtDirt] = 0.050f;
+    SettingsPut(g);
+    pass();
+    bool modeOk = greyed(kRdtDirt) && !strcmp(NgTuneAt(block, 0)->text, "Fixed while a hard mode is on.") && shown(kRdtDirt) == 0.020f && sameTable(g_dragTable, def) && now().drag[kRdtDirt] == 0.050f;
+    want(kRdtDirt, 0.070f);
+    modeOk = modeOk && !pass() && now().drag[kRdtDirt] == 0.050f;
+    g.hardMode = false;
+    g.insaneMode = true;
+    SettingsPut(g);
+    pass();
+    modeOk = modeOk && greyed(0) && sameTable(g_dragTable, def);
+    g.insaneMode = false;
+    SettingsPut(g);
+    pass();
+    modeOk = modeOk && !greyed(0) && g_dragTable.crr[kRdDirt] == 0.050f && shown(kRdtDirt) == 0.050f;
+
+    // everything as it was
+    AcquireSRWLockExclusive(&g_setLock);
+    g_set = setWas;
+    ReleaseSRWLockExclusive(&g_setLock);
+    InterlockedExchange(&g_setDirty, 0);
+    WriteIni(iniWas);
+    g_dragTable = tableWas;
+    g_dragEffect = effectWas;
+    g_dragNone = noneWas;
+    g_dragOn = onWas;
+    AcquireSRWLockExclusive(&g_dragLock);
+    g_dragStats = DragStats{};
+    ReleaseSRWLockExclusive(&g_dragLock);
+    g_dragKept.clear();
+    g_dragVehicle = 0;
+    g_buildFound = saved;
+    g_dragGravityKnown = gravityKnown;
+    const bool ok = noKeys && held && heldPair && lands && strength && effect && asBefore && mudOk && rows && oldByte && under && bandOk && frameDefaults && liveOk && twoAndTwo && slight &&
+                    stockBack && oneCopy && snowFrame && capLive && hardLive && blockOk && published && wanted && nothing && bandBlock && reset && fuel && offOk && modeOk;
+    printf("%s rolling drag on sliders: an ini with none of the keys is the mod as it was, the table the old constants to the bit; out of range held, no number the default, "
+           "a crossed band held and saved held; each key moves its own ground alone; the strength scales all but ice; the pressure effect 1 at 0, the old curve to the bit at 100, "
+           "1 over p at 200, Normal 1 at every effect; the defaults give the old figure to the bit on every wheel that is not snow at any sink; mud by the sink on a dirt wheel only, "
+           "the sink not read or no number dirt; the snow map's rows snow and the hard row rock, +0x1CB only with a material, snow blended from the ground under it; "
+           "frames: dirt's word at four sinks, two wheels in mud and two on the road each their own, under 2 %% no write, Strength 0 and a ground at 0 the stock's word, one table a frame, "
+           "snow on rock; the live read from what was written, capped and under 2 m/s said; the block: published, 500 held at 300 and in the ini, no number nothing, the band held and "
+           "shown held, Reset the defaults with the other settings kept, Strength 0 no drag for the fuel, the drag off and a mode greyed with why and nothing taken\n",
+           ok ? "ok  " : "FAIL");
+    if (!ok)
+        printf("     noKeys %d held %d heldPair %d lands %d strength %d effect %d asBefore %d mud %d rows %d oldByte %d under %d band %d frameDefaults %d live %d twoAndTwo %d slight %d "
+               "stockBack %d oneCopy %d snowFrame %d capLive %d (%s | %s | %s | %s) hardLive %d block %d published %d wanted %d nothing %d bandBlock %d reset %d fuel %d off %d mode %d\n",
+               noKeys, held, heldPair, lands, strength, effect, asBefore, mudOk, rows, oldByte, under, bandOk, frameDefaults, liveOk, twoAndTwo, slight, stockBack, oneCopy, snowFrame, capLive,
+               live.ground, live.slowingText, live.sinkText, live.depthText, hardLive, blockOk, published, wanted, nothing, bandBlock, reset, fuel, offOk, modeOk);
+    return ok;
+}
+
 // The ground probe (ProbeGround, ground_probe.h): the line's text, which wheels get a line, and on a made up truck the
 // truck update's reads with the key off and on.
 static bool GroundProbeTest()
@@ -6106,7 +6678,8 @@ static bool GroundProbeTest()
     // the key off (review M2): the truck update reads what it read before the probe was there, with rolling drag off
     // and with it on. The two counts are those of this same test with GroundProbeTruckUpdate's call taken out of
     // OnTruckUpdate, the only line of it that changed. And nothing is kept.
-    const long kOffDragOff = 2, kOffDragOn = 97;
+    // 109: 97 as the probe was built, and since the drag reads each wheel sink, material and layer depth (three reads a wheel, four wheels).
+    const long kOffDragOff = 2, kOffDragOn = 109;
     g_probeGround = 0;
     const long offDragOff = reads();
     g_dragOn = 1;
@@ -6215,6 +6788,7 @@ int wmain(int argc, wchar_t **argv)
     if (!TireStateTest()) return 1;
     if (!RollProbeTest()) return 1;
     if (!RollingDragTest()) return 1;
+    if (!DragTuneTest()) return 1;
     if (!DragFuelTest()) return 1;
     if (!StiffBaseTest()) return 1;
     if (!TextCutTest()) return 1;

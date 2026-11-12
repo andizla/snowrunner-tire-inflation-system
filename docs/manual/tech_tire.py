@@ -400,9 +400,40 @@ contact (+0x1A4). <i>p</i> is the mod's pressure share as it moves. <i>c</i> is 
 <p>ω is the body's own spin, not <i>v</i> / <i>r</i>, so a wheel spinning in sand gets the same torque as one rolling. Above the
 floor the torque is Crr·<i>N</i>·<i>r</i>. Below it the torque falls with the spin, to nothing standing: the damping never
 pushes a wheel. Over all the wheels the drag slows the truck by Crr · <i>f</i> · <i>g</i>, whatever its mass.</p>
-{table(['Ground', 'Flag', 'Crr', 'At Normal, m/s²', 'At Low, m/s²'], [['Paved', '<code>+0x1C8</code>', '0.010', '0.10', '0.15'], ['Rock', '<code>+0x1CD</code>', '0.015', '0.15', '0.22'], ['Gravel', '<code>+0x1C9</code>', '0.020', '0.20', '0.29'], ['Dirt, mud and no flag', 'none', '0.020', '0.20', '0.29'], ['Sand', '<code>+0x1CA</code>', '0.060', '0.59', '0.88'], ['Ice', '<code>+0x1C0</code>', '0', '0', '0']], 'Crr by the ground flags the game\'s check leaves in the wheel')}
-<p>Where several flags are set: ice, then paved, sand, gravel, rock, and dirt for the rest. No flag counts as dirt. Mud sets
-none, so mud gets dirt's 0.020 on top of the game's own mud drag; +0x1CE is not mud (it is on over paved road). Ice is 0.</p>
+{table(['Ground', 'Read by', 'Key', 'Crr, default', 'At Normal, m/s²', 'At Low, m/s²'], [['Paved', '<code>+0x1C8</code>', '<code>CrrPaved</code>', '0.010', '0.10', '0.15'], ['Rock', '<code>+0x1CD</code>', '<code>CrrRock</code>', '0.015', '0.15', '0.22'], ['Gravel', '<code>+0x1C9</code>', '<code>CrrGravel</code>', '0.020', '0.20', '0.29'], ['Dirt and no flag', 'none', '<code>CrrDirt</code>', '0.020', '0.20', '0.29'], ['Mud', 'dirt, by the sink', '<code>CrrMud</code>', '0.020', '0.20', '0.29'], ['Snow', '<code>+0x1CC</code>, or <code>+0x1CB</code> with a material', '<code>CrrSnow</code>', '0.020', '0.20', '0.29'], ['Sand', '<code>+0x1CA</code>', '<code>CrrSand</code>', '0.060', '0.59', '0.88'], ['Ice', '<code>+0x1C0</code>', 'none', '0', '0', '0']], 'Crr by what the game\'s check leaves in the wheel, at the defaults')}
+<p>Where several flags are set: ice, then paved, sand, gravel, rock, and dirt for the rest. No flag counts as dirt. Ice is 0 at
+every strength. Ice and paved take no blend. On the other grounds one blend follows (<code>RdPickOf</code>), by the wheel's sink
+(wheel +0x178, metres). The share is 0 up to <code>MudFromCm</code>, 1 from <code>MudFullCm</code> on and a straight line between.
+The figure is the ground's + share × (the other's − the ground's), so equal figures give the ground's to the bit at any sink. The
+other is Snow where the wheel is snow, else Mud where the ground is dirt. A wheel is snow where +0x1CC is set, which the game's
+check resets every pass, or where +0x1CB is set with a material read in the same pass (+0x1D0 not −1) and a sink past the band's
+start. +0x1CB is not reset, so without a material it is an old byte. Deep snow over hard ground sets +0x1CD too and was read as
+rock before. Mud comes on top of the game's own drag in mud. The flags, the material, the sink and the layer's depth (+0x1BC) are
+read in the one pass of the truck update. A sink that cannot be read or is no number gives no blend. +0x1CE is not mud (it is on
+over paved road).</p>
+<p><b>The figures.</b> Each figure has an ini key, a range and a default (<code>kRdTune</code>). <code>RollingDragStrength</code>
+(percent, 0 to 300, 100) scales every Crr. The seven Crr keys run from 0 to 0.1 and are held to three places.
+<code>RollingDragPressure</code> (percent, 0 to 200, 100) scales the exponent of <i>f</i>(<i>p</i>): Normal stays 1, 0 gives 1 at
+every pressure, 200 gives 1 / <i>p</i>, with the pressure's floor of 0.05 inside. <code>MudFromCm</code> (0 to 20, 5) and
+<code>MudFullCm</code> (10 to 60, 40) are held at least 5 cm apart, and the one that was not moved gives way.
+<code>ReadIni</code> holds each to its range and takes the default for what is no number. The mod's thread makes the finished
+table from them (<code>RdTableMake</code>: each Crr with the strength in it, the band in metres) and the pressure's factor with
+the effect in it. The truck update takes one copy of the table at a frame's start and reckons no percent and no power. The
+figures are for every truck: <code>PerTruck</code> does not hold them. Hard and insanity mode take the defaults. A Crr in force
+of 0 gives the stock damping, written over the mod's last word on the next frame. At a strength of 0 the drag does not count as
+on for the fuel. Where any figure is off its default the log's start has the line "rolling drag: figures off their defaults:" with all of them.</p>
+<p><b>The tuning block.</b> The mod publishes the figures and a live read in named shared memory,
+<code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>, the same file in every Next Gen mod):
+a head and one entry a figure, with its name, group, tip, range, default, step and the value in force, and no pointer. A tuning
+tool, which is not part of a release, draws a slider for each and writes a wanted value with a count. The mod's thread takes it
+at its next pass (the count, the value, the count again), holds it to the range and the step and puts it into the settings by
+the road the tab's own edits take. So it is in force on that pass and saved a second after the last change. The mod writes
+under a sequence that is odd while it writes. Only the mod's thread touches the block, and no hook does. Under hard or insanity
+mode and with rolling drag off the sliders are published greyed, with the reason. The live read is five lines: the ground most
+wheels stand on with the share of mud or snow, the Crr in force, the slowing in m/s² made from the damping the bodies hold
+(with "capped" where a wheel is held at 20 and "under 2 m/s" below the floor), the deepest wheel's sink and share, and the
+layer's depth or "hard". Without the tool nothing reads the block. The log says "tuning: the rolling drag's figures are published" with the block's name, or
+"tuning: the rolling drag's figures are not published" where the memory could not be made.</p>
 <p><b>When it writes.</b> <code>RollingDragFrame</code> runs in the truck update, on the game's thread, every frame, on reads of
 that frame. A wheel's <i>c</i> goes in when the mod has no word of its own in it, when the body holds another word than the mod's
 last (the game wrote it: compared as a word, never taken as a stock), or when <i>c</i> moved by over 2 % since. The mod keeps its
@@ -931,6 +962,7 @@ def s_tests():
              'The balance: <i>f</i> at strength 1, <i>f</i>² at 2, in between at 1.5; a vanilla tire stays at 1.',
              'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, with fuel ×1.',
              'Rolling drag: at 10 m/s on paved at Normal the written word\'s torque within 1 % of Crr·N·r, with N by the Havok mass and not the files\'; the same at three times the spin; under the floor the torque falls to nothing; ice none, sand at Low ×1.49, no flag dirt; a broken wheel left alone; airborne, off and another truck get the stock back; a write over 2 % and on the game\'s word; no climb over 10 lost records; none while the probe holds; the probe\'s stock back in the truck update; no hook, off.',
+             'Rolling drag on sliders: an ini with none of the keys gives the old constants to the bit; out of range is held, no number is the default, a crossed band is held and saved held; each key moves its own ground alone; the pressure effect is 1 at 0, the old curve to the bit at 100 and 1 / p at 200; the defaults give the old figure to the bit on every wheel that is not snow, at any sink; mud by the sink on a dirt wheel only; the snow map\'s rows read snow and the hard row rock; +0x1CB counts only with a material; frames on a made up truck: two wheels in mud and two on the road each get their own, a Crr of 0 and a strength of 0 give the stock\'s word back, one table a frame; the live read is made from what was written and says capped and under 2 m/s; the tuning block: a wanted value past the range is held, no number changes nothing, the band is held and shown held, every default asked resets the figures alone, a strength of 0 is no drag for the fuel, the drag off and a mode are greyed with why.',
              'Stiff base: Soft on 0.580 and 0.640 is kept at 0.0116 and 0.0128, Stiff on 0.420 stays to the bit, a stiffer tire keeps its own; the base is written through ApplyWheel, a repair at the game\'s stock is still told, off gives the game\'s cylinder back; a tire change with a mode\'s grip still on the wheel keeps the grip\'s stock and takes the shape anew; the soft force search\'s targets and its places on every wheel.',
              'Shared state: the block is created, written and read back by name, every field at its offset.',
              'Sounds: WAV and ADPCM decoding, pak reading (zip and zip64), loop and ending cuts, made loops that join without a click and stay within level, the compressor starting on the right filling and stopping once, change times matching the passes.',

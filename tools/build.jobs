@@ -1,0 +1,70 @@
+# What build.bat builds, a job a line, for tools\run_jobs.py (its head says how a line reads). The order is the one the
+# jobs ran in one after another, and the one their output is printed in. build.bat sets OVERLAY_OBJ, makes the folders
+# and clears the test folders of old .asi files. No two jobs write the same file at one time: each names its own .obj,
+# and the two pairs of links for out\test\proton and out\test\proton_helper, which leave the same import library in
+# out\obj, run one pair after the other. /MP only lets one cl call compile its own sources side by side.
+
+# the loader: out\version.dll forwards version.dll and loads the .asi files next to the exe
+version_stubs :: ml64 /nologo /c /Fo out\obj\version_stubs.obj src\version_stubs.asm
+loader :: cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj src\loader.cpp
+version_dll needs=version_stubs,loader :: link /nologo /DLL /DEF:src\version.def /OUT:out\version.dll /IMPLIB:out\obj\version_proxy.lib out\obj\version_stubs.obj out\obj\loader.obj
+loader_test :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\ /Fe:out\test\loader_test.exe test\loader_test.cpp /link version.lib
+probe_asi :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D LOADER_TEST_ASI /Fo:out\obj\probe.obj /Fe:out\test\probe.asi test\loader_test.cpp
+# the first copy of the new out\version.dll waits for the machine's virus scan of it (a second or so); five copies
+# started at once each waited ten seconds, so the others start when the first is done
+test_version needs=version_dll :: copy /y out\version.dll out\test\version.dll >nul
+chain_version needs=test_version :: copy /y out\version.dll out\test\chain\version.dll >nul
+chain_chain needs=test_version :: copy /y out\version.dll out\test\chain\version_chain.dll >nul
+chain_test needs=loader_test :: copy /y out\test\loader_test.exe out\test\chain\loader_test.exe >nul
+chain_probe needs=probe_asi :: copy /y out\test\probe.asi out\test\chain\probe.asi >nul
+# another mod's ASI loader as the chain file: it loads probe.asi first, and the proxy has to leave that alone
+twice_chain :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D LOADER_TEST_CHAIN /Fo:out\obj\chain_loader.obj /Fe:out\test\twice\version_chain.dll test\loader_test.cpp
+twice_version needs=test_version :: copy /y out\version.dll out\test\twice\version.dll >nul
+twice_test needs=loader_test :: copy /y out\test\loader_test.exe out\test\twice\loader_test.exe >nul
+twice_probe needs=probe_asi :: copy /y out\test\probe.asi out\test\twice\probe.asi >nul
+# the game's crash reporter loads version.dll too: the test under its name wants no .asi in it and the game's log kept
+helper_version needs=test_version :: copy /y out\version.dll out\test\helper\version.dll >nul
+helper_test needs=loader_test :: copy /y out\test\loader_test.exe out\test\helper\crash_reporter.exe >nul
+helper_probe needs=probe_asi :: copy /y out\test\probe.asi out\test\helper\probe.asi >nul
+# Linux (Wine, Proton): System32's version.dll lacks GetFileVersionInfoByHandle. A copy of the proxy built with
+# LOADER_TEST_SYSTEM takes system_standin.dll next to it for System32's: 16 exports forwarded to version_sys.dll, a copy
+# of System32's. In out\test\proton the test wants the load to go on; in out\test\proton_helper as the crash reporter.
+loader_proton :: cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D LOADER_TEST_SYSTEM /Fo:out\obj\loader_proton.obj src\loader.cpp
+system_standin :: cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D LOADER_TEST_STANDIN /Fo:out\obj\system_standin.obj test\loader_test.cpp
+proton_version needs=version_stubs,loader_proton :: link /nologo /DLL /DEF:src\version.def /OUT:out\test\proton\version.dll /IMPLIB:out\obj\version_proton.lib out\obj\version_stubs.obj out\obj\loader_proton.obj
+proton_standin needs=system_standin :: link /nologo /DLL /OUT:out\test\proton\system_standin.dll /IMPLIB:out\obj\system_standin.lib out\obj\system_standin.obj
+proton_sys :: copy /y %SystemRoot%\System32\version.dll out\test\proton\version_sys.dll >nul
+proton_probe needs=probe_asi :: copy /y out\test\probe.asi out\test\proton\probe.asi >nul
+proton_helper_version needs=proton_version :: link /nologo /DLL /DEF:src\version.def /OUT:out\test\proton_helper\version.dll /IMPLIB:out\obj\version_proton.lib out\obj\version_stubs.obj out\obj\loader_proton.obj
+proton_helper_standin needs=proton_standin :: link /nologo /DLL /OUT:out\test\proton_helper\system_standin.dll /IMPLIB:out\obj\system_standin.lib out\obj\system_standin.obj
+proton_helper_sys :: copy /y %SystemRoot%\System32\version.dll out\test\proton_helper\version_sys.dll >nul
+proton_helper_probe needs=probe_asi :: copy /y out\test\probe.asi out\test\proton_helper\probe.asi >nul
+proton_test needs=loader_test :: copy /y out\test\loader_test.exe out\test\proton\loader_test.exe >nul
+proton_helper_test needs=loader_test :: copy /y out\test\loader_test.exe out\test\proton_helper\crash_reporter.exe >nul
+
+# the mod itself, and the read-only tools for the running game
+# Dear ImGui (deps\imgui) and its DirectX 11 renderer (src\ng_dx11.cpp) compiled in; ng_overlay.cpp is Next Gen's overlay
+# (the Present hook, the NEXT GEN menu), ng_reshade.cpp takes the swap chain from ReShade where it is installed;
+# panel.cpp draws the pressure panel and the Tire Inflation tab with it, its text in the game's font (deps\stb)
+imgui :: cl /nologo /c /MP /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ deps\imgui\imgui.cpp deps\imgui\imgui_draw.cpp deps\imgui\imgui_tables.cpp deps\imgui\imgui_widgets.cpp src\ng_dx11.cpp
+overlay :: cl /nologo /c /MP /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ src\ng_overlay.cpp src\panel.cpp
+reshade :: cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\reshade\include /Fo:out\obj\ng_reshade.obj src\ng_reshade.cpp
+# the sounds the mod's file carries (src\sounds.rc: assets\air_in.wav)
+sounds :: rc /nologo /fo out\obj\sounds.res src\sounds.rc
+mod needs=imgui,overlay,reshade,sounds :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /I deps\imgui /Fo:out\obj\tire_pressure.obj /Fe:out\TirePressure.asi src\tire_pressure.cpp %OVERLAY_OBJ% out\obj\sounds.res /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib
+wheelscan :: cl /nologo /O2 /W4 /EHsc /MT /Fo:out\obj\ /Fe:out\wheelscan.exe tools\wheelscan.cpp
+ptrscan :: cl /nologo /O2 /W4 /EHsc /MT /Fo:out\obj\ /Fe:out\ptrscan.exe tools\ptrscan.cpp
+# the mod's write breakpoint probe as a program of its own (TP_PROBE_TEST adds a main to the same source)
+probe_test needs=imgui,overlay,reshade,sounds :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /D TP_PROBE_TEST /Fo:out\obj\probe_test.obj /Fe:out\test\probe_test.exe src\tire_pressure.cpp %OVERLAY_OBJ% out\obj\sounds.res /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib
+# the overlay's own test (test\overlay_test.cpp): two copies of a stand-in mod made of the shared overlay files, in a
+# program that makes its swap chains through its imports as the game does
+overlay_mod needs=imgui,overlay,reshade :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_MOD /I deps\imgui /I src /Fo:out\obj\overlay_mod.obj /Fe:out\test\overlay\ng_mod_a.dll test\overlay_test.cpp out\obj\ng_overlay.obj out\obj\ng_dx11.obj out\obj\imgui.obj out\obj\imgui_draw.obj out\obj\imgui_tables.obj out\obj\imgui_widgets.obj out\obj\ng_reshade.obj /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib dxgi.lib
+overlay_mod_b needs=overlay_mod :: copy /y out\test\overlay\ng_mod_a.dll out\test\overlay\ng_mod_b.dll >nul
+# a stand-in for Next Gen Graphics' NgGraphicsGetApi (src\ng_graphics.h), for the menu's Graphics tab
+overlay_graphics :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_GRAPHICS /I src /Fo:out\obj\overlay_graphics.obj /Fe:out\test\overlay\ng_graphics_standin.dll test\overlay_test.cpp
+# a stand-in for Spotter.asi's draw API (src\spotter_api.h), for the overlay's Spotter route
+overlay_spotter :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /D OVERLAY_TEST_SPOTTER /I src /Fo:out\obj\overlay_spotter.obj /Fe:out\test\overlay\Spotter.asi test\overlay_test.cpp
+overlay_test :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\overlay_test.obj /Fe:out\test\overlay\overlay_test.exe test\overlay_test.cpp /link user32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib
+# the crash line's C runtime handlers (src\crt_line.h, the same file as Gauges'): an invalid parameter and abort, each in a child process
+crt_test :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\crt_test.obj /Fe:out\test\crt_test.exe test\crt_test.cpp
+truck_id_test :: cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_id_test.obj /Fe:out\test\truck_id_test.exe test\truck_id_test.cpp

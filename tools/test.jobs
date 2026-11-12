@@ -1,0 +1,22 @@
+# What test.bat runs, a job a line, for tools\run_jobs.py (its head says how a line reads). The order is the one the
+# tests ran in one after another, and the one their output is printed in.
+# What each writes: a loader test AsiLoader.log and asi_marker.txt in its own folder (out\test, chain, twice, helper,
+# proton, proton_helper); probe_test out\test\TirePressure.ini and TirePressure.log; truck_id_test
+# out\test\truck_id_test_*.ini; the overlay tests out\test\overlay\NextGen.ini; the others nothing. The row holds the
+# tests with child processes, windows and waits of their own; the four overlay runs share one ini.
+loader_windows :: out\test\loader_test.exe windows
+loader_chain :: out\test\chain\loader_test.exe
+loader_twice :: out\test\twice\loader_test.exe already
+loader_helper :: echo the game's log> out\test\helper\AsiLoader.log& out\test\helper\crash_reporter.exe helper
+loader_proton :: out\test\proton\loader_test.exe proton
+loader_proton_helper :: echo the game's log> out\test\proton_helper\AsiLoader.log& out\test\proton_helper\crash_reporter.exe helper
+probe_test :: out\test\probe_test.exe
+crt_test row :: out\test\crt_test.exe
+truck_id_test :: out\test\truck_id_test.exe
+overlay_test row :: out\test\overlay\overlay_test.exe
+# a start after the game's swap chain, each case a run of its own (BRIEF_overlay_late_hook.md)
+overlay_handover row :: out\test\overlay\overlay_test.exe handover
+overlay_alone row :: out\test\overlay\overlay_test.exe alone
+overlay_spotter row :: out\test\overlay\overlay_test.exe spotter
+# the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
+player_texts :: python -I test\player_texts.py src\panel.h src\panel.cpp src\panel_draw.h src\settings_page.h src\ng_overlay.cpp

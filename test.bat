@@ -5,25 +5,18 @@ rem that lacks an export (as Wine's), and the mod's own checks (ini round
 rem trip, flattening and gear numbers, the write breakpoint probe) and the overlay's finding of the swap chains
 rem (overlay_test.exe). With SR_IMAGE set to a copy of the game exe's
 rem image from a running game, the mod's search through the game's code is checked on it too.
+rem   test.bat [serial]
+rem The tests are the lines of tools\test.jobs. tools\run_jobs.py runs those that share nothing side by side and the
+rem others in a row, and prints their output in the list's order; every test runs, also after one failed, and one that
+rem does not end in 300 s is killed and fails. "test.bat serial" runs the same lines one at a time. Each test's output
+rem is also in out\test\log, with the time each took in times.txt.
 cd /d "%~dp0"
-set failed=0
-out\test\loader_test.exe windows || set failed=1
-out\test\chain\loader_test.exe || set failed=1
-out\test\twice\loader_test.exe already || set failed=1
-echo the game's log> out\test\helper\AsiLoader.log
-out\test\helper\crash_reporter.exe helper || set failed=1
-out\test\proton\loader_test.exe proton || set failed=1
-echo the game's log> out\test\proton_helper\AsiLoader.log
-out\test\proton_helper\crash_reporter.exe helper || set failed=1
-out\test\probe_test.exe || set failed=1
-out\test\crt_test.exe || set failed=1
-out\test\truck_id_test.exe || set failed=1
-out\test\overlay\overlay_test.exe || set failed=1
-rem a start after the game's swap chain, each case a run of its own (BRIEF_overlay_late_hook.md)
-out\test\overlay\overlay_test.exe handover || set failed=1
-out\test\overlay\overlay_test.exe alone || set failed=1
-out\test\overlay\overlay_test.exe spotter || set failed=1
-rem the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
-python -I test\player_texts.py src\panel.h src\panel.cpp src\panel_draw.h src\settings_page.h src\ng_overlay.cpp || set failed=1
-if %failed%==1 (echo TESTS FAILED & exit /b 1)
+set MODE=
+if /i "%~1"=="serial" set MODE=--serial
+python -I tools\run_jobs.py tools\test.jobs --log out\test\log --timeout 300 %MODE%
+if errorlevel 1 goto failed
 echo TESTS OK
+exit /b 0
+:failed
+echo TESTS FAILED
+exit /b 1

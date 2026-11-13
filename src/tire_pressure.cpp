@@ -1127,6 +1127,10 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
         if (v.gears.size() != count) v.gears.assign(count, Scaled{ nanf(""), nanf("") });
         for (size_t i = 0; i < count; i++) ApplyValue(gearBegin + i * 4, v.gears[i], roll, -1000.0f, 1000.0f, 3.0e38f, GearAdd(roll, i + 1 == count));
     }
+    // the factor asked for the first wheel, for the lines below: the mode's for the ground under it, the temperature
+    // and the vanilla balance in it. The lines gave the figure written and its stock alone, and a factor moved on the tab
+    // read as a fault at a later truck (BRIEF_drive_1112_findings.md part 4, M3)
+    const float firstFactor = !ground.empty() ? ground[0] : m.body;
     if (first || announce)
     {
         Log(L"vehicle %p%s%s: fuel consumption %.4f + %.4f (stock %.4f + %.4f), steering speed %.5f (stock %.5f)", (void *)vehicle, announce ? L" -> " : L" found",
@@ -1134,7 +1138,9 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
         if (gearsOk) Log(L"vehicle %p gear speeds x%.3f, %zu of them, the first forward one: %.3f (stock %.3f)", (void *)vehicle, roll, v.gears.size(),
                          v.gears.size() > 1 ? v.gears[1].written : v.gears[0].written, v.gears.size() > 1 ? v.gears[1].stock : v.gears[0].stock);
         else Log(L"vehicle %p gear speeds NOT found: action %p, list %p .. %p", (void *)vehicle, (void *)action, (void *)gearBegin, (void *)gearEnd);
-        if (groundOk) Log(L"vehicle %p ground grip of %zu wheels, the first: %.3f (stock %.3f)", (void *)vehicle, wheelCount, v.ground[0].written, v.ground[0].stock);
+        if (groundOk)
+            Log(L"vehicle %p ground grip of %zu wheels, the first: %.3f (stock %.3f, the factor in force x%.3f for the ground under it, written 10 at the most)", (void *)vehicle,
+                wheelCount, v.ground[0].written, v.ground[0].stock, firstFactor);
         else Log(L"vehicle %p ground grip NOT found: action %p, list %p .. %p for %zu wheels", (void *)vehicle, (void *)action, (void *)begin, (void *)end, wheelCount);
         v.groundSaid = groundOk;
     }
@@ -1142,7 +1148,8 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     else if (groundOk && !v.groundSaid)
     {
         v.groundSaid = true;
-        Log(L"vehicle %p ground grip found: %zu wheels, the first %.3f (stock %.3f), written from now on", (void *)vehicle, wheelCount, v.ground[0].written, v.ground[0].stock);
+        Log(L"vehicle %p ground grip found: %zu wheels, the first %.3f (stock %.3f, the factor in force x%.3f for the ground under it, written 10 at the most), written from now on",
+            (void *)vehicle, wheelCount, v.ground[0].written, v.ground[0].stock, firstFactor);
     }
 }
 

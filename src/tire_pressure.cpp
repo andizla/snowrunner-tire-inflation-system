@@ -809,9 +809,9 @@ static float FlattenLimit(float R)
 // Expeditions (its set-pressure-mode function, RVA 0xcd40c0 there) takes the mode's AdditionalRadiusOffset off the
 // collision radius as it is, in metres, not scaled by the wheel. SnowRunner only draws a tire so flat (FlattenLimit):
 // on a tire with less room than the deepest mode asks for, every mode's offset shrinks by the same share, so the
-// deepest one takes all the room there is. No offset goes past the room either: in the cold Low's offset is carried
-// past the deepest mode's (FactorsAt goes on half a step below Low), and shared out for the deepest alone it went up
-// to 1.2 times the room (2026-10-18). A tire whose contact sinks into the ground is drawn flatter by that much again,
+// deepest one takes all the room there is. No offset goes past the room either: in the cold Low's offset was carried
+// past the deepest mode's (FactorsAt went on half a step below Low until 2026-11-14), and shared out for the deepest
+// alone it went up to 1.2 times the room (2026-10-18). A tire whose contact sinks into the ground is drawn flatter by that much again,
 // so the sink measured under it (SinkStep) comes off the room first. The cylinder keeps at least 40% of the wheel
 // radius whatever the ini says.
 static float Cylinder(const Stock &s, const Mode &m, float radius)
@@ -1154,13 +1154,16 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
 }
 
 // The factors at a pressure (a share of Normal's): the modes' numbers, straight between two neighbouring modes on
-// the pressure scale (kModePressure); beyond the ends the last slope goes on for half a step and stops. Each factor
-// is held to its range, as the ini's are. The name is the chosen mode's.
+// the pressure scale (kModePressure). Above Increased the last slope goes on for half a step and stops. Under Low
+// nothing goes on: every factor stops at Low's own, so no temperature moves a tire further down the modes' scale than
+// Low (BRIEF_jobs_1114.md, part 166; before, the slope ran half a step on, and a steep step from Reduced to Low gave a
+// cold Low far less grip on hard ground than its own figure). Each factor is held to its range, as the ini's are. The
+// name is the chosen mode's.
 static Mode FactorsAt(float pressure)
 {
     int i = 0;
     while (i < kModeCount - 2 && pressure > kModePressure[i + 1]) i++;
-    const float t = min(1.5f, max(-0.5f, (pressure - kModePressure[i]) / (kModePressure[i + 1] - kModePressure[i])));
+    const float t = min(1.5f, max(0.0f, (pressure - kModePressure[i]) / (kModePressure[i + 1] - kModePressure[i])));
     const Mode &a = g_modes[i], &b = g_modes[i + 1];
     Mode m = g_modes[g_mode];
     auto at = [&](float x, float y, int key) {
@@ -1177,6 +1180,21 @@ static Mode FactorsAt(float pressure)
     m.sand = at(a.sand, b.sand, kModeSand);
     m.rock = at(a.rock, b.rock, kModeRock);
     return m;
+}
+
+// The factors in force at a pressure and an outside temperature: the cold air's pressure on the scale, then the
+// rubber's own factors, soft ground's on dirt, gravel, sand and mud, hard ground's on asphalt and rock. So Low in the
+// cold is Low's figures with harder rubber, and never less than that.
+static Mode FactorsWithTemp(float pressure, const TempEffect &te)
+{
+    Mode target = FactorsAt(TempPressure(pressure, te));
+    target.body *= te.soft;
+    target.gravel *= te.soft;
+    target.sand *= te.soft;
+    target.substance *= te.soft;
+    target.asphalt *= te.hard;
+    target.rock *= te.hard;
+    return target;
 }
 
 // Where a pressure stands counted in modes: Low 0, Reduced 1, Normal 2, Increased 3, a half between two (for the
@@ -3807,13 +3825,7 @@ static DWORD WINAPI Run(void *)
         // does not rewrite the wheels every pass)
         const TempEffect te = TempEffectAt(g_temperature ? floorf(g_outsideC * 2.0f + 0.5f) / 2.0f : kTempRef);
         const float pressureAir = TempPressure(g_pressure, te);
-        Mode target = FactorsAt(pressureAir);
-        target.body *= te.soft;
-        target.gravel *= te.soft;
-        target.sand *= te.soft;
-        target.substance *= te.soft;
-        target.asphalt *= te.hard;
-        target.rock *= te.hard;
+        const Mode target = FactorsWithTemp(g_pressure, te);
         const bool drifted = !moving && !SameFactors(target, g_now); // the factors moved without a change of mode (the temperature)
         g_now = target;
         // vanilla balance: a factor per wheel from its tire's own grip, once all three are known (the ground grip list
@@ -4608,17 +4620,19 @@ static bool FlattenTest()
     printf("%s gear numbers: at that Low a gear of number 5 goes to %.3f, its top x%.3f as the roll asks (the number alone x%.3f gave x%.3f)\n",
            gears ? "ok  " : "FAIL", 5.0f * atLow + GearAdd(atLow, false), (2.0f * (5.0f * atLow + GearAdd(atLow, false)) + 5.0f) / 15.0f, atLow,
            (10.0f * atLow + 5.0f) / 15.0f);
-    // the cold: Low carried past its own offset (12 cm at -18 C and colder) still takes no more than the room, on a
-    // tire with less room than the deepest mode (the scout) and on one with more (0.80 m, none of its own)
+    // the cold no longer carries Low past its own offset (the slope stops at Low): at 30 below it is Low's own. An
+    // offset past the deepest mode's, however it came, still takes no more than the room, on a tire with less room
+    // than the deepest mode (the scout) and on one with more (0.80 m, none of its own)
+    const float coldOffset = FactorsWithTemp(kModePressure[kLow], TempEffectAt(-30.0f)).radiusOffset;
     s.writtenCylinder = stock;
     g_deepest = 0.10f;
     low.radiusOffset = 0.12f;
     const float coldScout = stock - Cylinder(s, low, 0.47f);
     Stock big = { 0.0f, 2.0f, 3.3f, 0.80f, kStockMode, 0.80f, FlattenLimit(0.80f), 0.80f };
     const float coldBig = 0.80f - Cylinder(big, low, 0.80f);
-    const bool cold = fabsf(coldScout - s.room) < 0.0005f && fabsf(coldBig - big.room) < 0.0005f;
-    printf("%s cold: a 0.12 m Low gets %.3f m on the scout (room %.3f) and %.3f m on a 0.80 m tire (room %.3f)\n", cold ? "ok  " : "FAIL",
-           coldScout, s.room, coldBig, big.room);
+    const bool cold = coldOffset == g_modes[kLow].radiusOffset && fabsf(coldScout - s.room) < 0.0005f && fabsf(coldBig - big.room) < 0.0005f;
+    printf("%s cold: at 30 below Low keeps its own offset (%.3f m); a 0.12 m offset gets %.3f m on the scout (room %.3f) and %.3f m on a 0.80 m tire (room %.3f)\n",
+           cold ? "ok  " : "FAIL", coldOffset, coldScout, s.room, coldBig, big.room);
     // a soft tire: a contact 3 cm inside the cylinder comes off the room once it has settled; a vanilla tire's contact
     // at the cylinder takes nothing; readings outside the window (in the air, a moved field) are not taken
     Stock soft = s, firm = s;
@@ -4639,8 +4653,8 @@ static bool FlattenTest()
 }
 
 // The pressure scale and the outside temperature (panel.h, outside.h): at each mode's pressure the factors are the
-// mode's own, half way they are half way, below Low the slope goes on half a step and stops, above Increased the
-// same; a pressure counted in modes; the temperature's effects are 1 at 15 C and go the right way, with the gas law
+// mode's own, half way they are half way, below Low they are Low's, above Increased the slope goes on half a step
+// and stops; Low in the cold; a pressure counted in modes; the temperature's effects are 1 at 15 C and go the right way, with the gas law
 // on 35 psi (83 percent of Normal's pressure at 20 below); hard mode sets its options and numbers and nothing else.
 static bool RealismTest()
 {
@@ -4656,11 +4670,62 @@ static bool RealismTest()
     const Mode half = FactorsAt((kModePressure[kLow] + kModePressure[kReduced]) * 0.5f);
     const bool between = fabsf(half.body - (g_modes[kLow].body + g_modes[kReduced].body) * 0.5f) < 1e-4f && fabsf(half.radiusOffset - 0.08f) < 1e-4f;
     const Mode under = FactorsAt(0.1f), underHalf = FactorsAt(kModePressure[kLow] - (kModePressure[kReduced] - kModePressure[kLow]) * 0.5f);
-    const bool below = alike(under, underHalf) && under.body > g_modes[kLow].body && under.radiusOffset > g_modes[kLow].radiusOffset && under.asphalt < g_modes[kLow].asphalt;
+    // under Low every one of the nine is Low's own, to the bit, however far under
+    auto same = [](const Mode &a, const Mode &b) {
+        return a.body == b.body && a.asphalt == b.asphalt && a.substance == b.substance && a.radiusOffset == b.radiusOffset && a.fuel == b.fuel && a.steering == b.steering &&
+               a.gravel == b.gravel && a.sand == b.sand && a.rock == b.rock;
+    };
+    const bool below = same(under, g_modes[kLow]) && same(underHalf, g_modes[kLow]) && same(FactorsAt(kModePressure[kLow] - 0.001f), g_modes[kLow]) && same(FactorsAt(-1.0f), g_modes[kLow]);
     const Mode over = FactorsAt(2.0f);
     const bool above = over.asphalt > g_modes[kIncreased].asphalt && over.body < g_modes[kIncreased].body && over.body >= kModeRange[kModeGround].lo;
-    printf("%s realism: the factors at each mode's pressure are the mode's, half way between Low and Reduced the mean (dirt x%.2f, %.3f m), below Low the slope goes on half a step (dirt x%.2f, %.3f m) and stops\n",
+    printf("%s realism: the factors at each mode's pressure are the mode's, half way between Low and Reduced the mean (dirt x%.2f, %.3f m), below Low all nine are Low's own (dirt x%.2f, %.3f m), above Increased the slope goes on half a step\n",
            at && between && below && above ? "ok  " : "FAIL", half.body, half.radiusOffset, under.body, under.radiusOffset);
+    // Low in the cold (BRIEF_jobs_1114.md, part 166): Low's own figures with the cold rubber's factor, the default set's
+    // asphalt 0.85 and rock; Normal at 30 below still grips more on asphalt than Low at 30 below. At 15 C and warmer
+    // nothing changed: every mode's factors are to the bit what the slope with its old end gives (before), the mode's
+    // own at 15 C. The one way to differ is a pressure that rounds a hair under Low's at 15 C, which now is Low's own
+    bool coldOk = false;
+    {
+        const TempEffect ref = TempEffectAt(kTempRef), m30 = TempEffectAt(-30.0f), m10 = TempEffectAt(-10.0f), p20 = TempEffectAt(20.0f);
+        auto before = [](float pressure, const TempEffect &te) {
+            pressure = TempPressure(pressure, te);
+            int i = 0;
+            while (i < kModeCount - 2 && pressure > kModePressure[i + 1]) i++;
+            const float t = min(1.5f, max(-0.5f, (pressure - kModePressure[i]) / (kModePressure[i + 1] - kModePressure[i])));
+            const Mode &a = g_modes[i], &b = g_modes[i + 1];
+            Mode m = g_modes[g_mode];
+            auto at2 = [&](float x, float y, int key) {
+                const float v = t == 0.0f ? x : t == 1.0f ? y : x + (y - x) * t;
+                return min(kModeRange[key].hi, max(kModeRange[key].lo, v));
+            };
+            m.body = at2(a.body, b.body, kModeGround) * te.soft, m.asphalt = at2(a.asphalt, b.asphalt, kModeAsphalt) * te.hard, m.substance = at2(a.substance, b.substance, kModeMud) * te.soft;
+            m.radiusOffset = at2(a.radiusOffset, b.radiusOffset, kModeOffset), m.fuel = at2(a.fuel, b.fuel, kModeFuel), m.steering = at2(a.steering, b.steering, kModeSteering);
+            m.gravel = at2(a.gravel, b.gravel, kModeGravel) * te.soft, m.sand = at2(a.sand, b.sand, kModeSand) * te.soft, m.rock = at2(a.rock, b.rock, kModeRock) * te.hard;
+            return m;
+        };
+        bool atRef = true;
+        for (int m = kLow; m < kModeCount; m++)
+        {
+            atRef = atRef && alike(FactorsWithTemp(kModePressure[m], ref), g_modes[m]);
+            for (float c : { 15.0f, 15.5f, 20.0f, 35.0f })
+                atRef = atRef && (same(FactorsWithTemp(kModePressure[m], TempEffectAt(c)), before(kModePressure[m], TempEffectAt(c))) ||
+                                  (m == kLow && c == kTempRef && TempPressure(kModePressure[m], ref) < kModePressure[m]));
+        }
+        const Mode l30 = FactorsWithTemp(kModePressure[kLow], m30), l10 = FactorsWithTemp(kModePressure[kLow], m10), l20 = FactorsWithTemp(kModePressure[kLow], p20);
+        const Mode n30 = FactorsWithTemp(kModePressure[kNormal], m30);
+        const Mode &low0 = g_modes[kLow], &red0 = g_modes[kReduced];
+        const float up20 = (TempPressure(kModePressure[kLow], p20) - kModePressure[kLow]) / (kModePressure[kReduced] - kModePressure[kLow]);
+        const bool coldLow = l30.asphalt == low0.asphalt * m30.hard && l30.rock == low0.rock * m30.hard && l10.asphalt == low0.asphalt * m10.hard && l10.rock == low0.rock * m10.hard &&
+                             l30.body == low0.body * m30.soft && l30.radiusOffset == low0.radiusOffset && l30.steering == low0.steering && l30.fuel == low0.fuel &&
+                             fabsf(l30.asphalt - 0.62f) < 0.005f && fabsf(l10.asphalt - 0.72f) < 0.005f && fabsf(l20.asphalt - 0.87f) < 0.005f && up20 > 0.0f && up20 < 0.2f &&
+                             fabsf(l20.asphalt - (low0.asphalt + (red0.asphalt - low0.asphalt) * up20) * p20.hard) < 1e-5f &&
+                             fabsf(l20.rock - (low0.rock + (red0.rock - low0.rock) * up20) * p20.hard) < 1e-5f;
+        const bool order = n30.asphalt > l30.asphalt && fabsf(n30.asphalt - 0.71f) < 0.01f;
+        printf("%s realism: Low in the cold is Low with harder rubber: asphalt x%.3f and rock x%.3f at 30 below, x%.3f and x%.3f at 10 below, x%.3f and x%.3f at 20 above; Normal at 30 below "
+               "grips more on asphalt (x%.3f); at 15 C and warmer every mode is to the bit what it was\n",
+               atRef && coldLow && order ? "ok  " : "FAIL", l30.asphalt, l30.rock, l10.asphalt, l10.rock, l20.asphalt, l20.rock, n30.asphalt);
+        coldOk = atRef && coldLow && order;
+    }
     const bool modes = fabsf(PressureInModes(kModePressure[kLow])) < 1e-5f && fabsf(PressureInModes(kModePressure[kNormal]) - 2.0f) < 1e-5f &&
                        fabsf(PressureInModes((kModePressure[kReduced] + kModePressure[kNormal]) * 0.5f) - 1.5f) < 1e-5f;
     const TempEffect mild = TempEffectAt(kTempRef), cold = TempEffectAt(-20.0f), hot = TempEffectAt(35.0f);
@@ -4702,7 +4767,7 @@ static bool RealismTest()
     g_mode = kNormal;
     g_pressure = kModePressure[kNormal];
     g_now = FactorsAt(g_pressure);
-    return at && between && below && above && modes && temps && past && hard && insane;
+    return at && between && below && above && coldOk && modes && temps && past && hard && insane;
 }
 
 // Each truck's own pressure (truck_modes.h), in out\test: a kind never saved has no mode, a saved one reads back, a

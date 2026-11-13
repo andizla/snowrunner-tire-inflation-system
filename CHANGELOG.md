@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Low in the cold is never less than Low. The cold air lowers the pressure, and under Low the factors used to run on past Low for half a step. With a steep step from Reduced to Low in a set that could leave Low with far less grip on asphalt and rock than its own figure. Now all nine factors stop at the figures of Low. The cold rubber still acts: with the default numbers Low on asphalt is x0.62 at 30 below and x0.72 at 10 below, where it was x0.58 and x0.69. Low keeps its own flattening, steering and fuel in the cold too. Nothing changes at 15 C and warmer.
 - The log lines of a truck's ground grip give the factor in force beside the figure written and its stock.
 - The ground probe's line (`ProbeGround=1`) gives each wheel's rolling resistance in force beside the table's figure, so a Crr moved by a slider shows in the line.
 - A Next Gen mod could draw nothing for a whole session: on some systems the game is ready sooner than the mod was. Now a mod that came too late gets the picture from another Next Gen mod of this release in the game, and Tire Inflation hands it over the same way. With no such mod the log says after ten seconds, in capitals, that the overlay draws nothing and why, and the mod draws as soon as the game sets up its picture anew.

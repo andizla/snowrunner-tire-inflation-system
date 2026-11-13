@@ -16,13 +16,13 @@ def eq(body, n=''):
     return f'<div class="eq">{body}' + (f'<span class="n">({n})</span>' if n else '') + '</div>'
 
 
-def factors_at(name, p):
-    """FactorsAt (tire_pressure.cpp:813-834) for one of the three sets."""
+def factors_at(name, p, under=0.0):
+    """FactorsAt (tire_pressure.cpp) for one of the three sets. under: how far the slope ran on below Low (-0.5 before 1.3.5)."""
     m = SETS[name]
     i = 0
     while i < 2 and p > P[i + 1]:
         i += 1
-    t = clamp((p - P[i]) / (P[i + 1] - P[i]), -0.5, 1.5)
+    t = clamp((p - P[i]) / (P[i + 1] - P[i]), under, 1.5)
     out = {}
     for k in GRIPS + ['fuel', 'steer', 'offset']:
         lo, hi = RANGE.get(k, (0.1, 10.0))
@@ -153,8 +153,8 @@ def s_scale():
            [('Sand', 'sand'), ('Dirt and rock', 'dirt'), ('Gravel', 'gravel'), ('Mud', 'mud'), ('Asphalt', 'asphalt')]]
     marks = [(P[i], factors_at('default', P[i])['sand'], n) for i, n in enumerate(['Low', 'Reduced', 'Normal', 'Increased'])]
     fig = chart(ser, (0.3, 1.5), (0, 4.5), 0.1, 0.5, 'Pressure P, share of Normal', 'Grip multiplier',
-                'The grip multipliers along the pressure scale, default numbers. Straight between the modes, half a step on past either end, then flat.',
-                marks=marks, vlines=[(0.35, 'stops'), (1.375, 'stops')], xfmt=lambda v: f'{v:.1f}', legend='out')
+                'The grip multipliers along the pressure scale, default numbers. Straight between the modes, flat under Low, half a step on past Increased, then flat.',
+                marks=marks, vlines=[(0.45, 'stops'), (1.375, 'stops')], xfmt=lambda v: f'{v:.1f}', legend='out')
     hot = factors_at('default', air(1.0, 35))
     return f'''
 <h2>The pressure scale</h2>
@@ -165,12 +165,14 @@ def s_scale():
 <i>P</i> by <code>FactorsAt</code> (<code>tire_pressure.cpp:813-834</code>). With <i>P</i><sub>0..3</sub> the four modes and
 <i>f</i><sub>0..3</sub> a factor's value at each:</p>
 {eq('<i>i</i> = the first segment with <i>P</i> ≤ <i>P</i><sub><i>i</i>+1</sub>, at most 2', 1)}
-{eq('<i>t</i> = clamp( (<i>P</i> − <i>P<sub>i</sub></i>) / (<i>P</i><sub><i>i</i>+1</sub> − <i>P<sub>i</sub></i>), −0.5, 1.5 )', 2)}
+{eq('<i>t</i> = clamp( (<i>P</i> − <i>P<sub>i</sub></i>) / (<i>P</i><sub><i>i</i>+1</sub> − <i>P<sub>i</sub></i>), 0, 1.5 )', 2)}
 {eq('<i>f</i>(<i>P</i>) = clamp( <i>f<sub>i</sub></i> + (<i>f</i><sub><i>i</i>+1</sub> − <i>f<sub>i</sub></i>) · <i>t</i>, range )', 3)}
 <p class="where">The ranges are those of the game Expeditions for the same keys: 0.1 to 10 for grip, fuel and steering, 0 to 0.25 m
-for the radius offset (<code>panel.h:81-83</code>). The clamp on <i>t</i> lets the last slope go on for half a step past Low and past
-Increased and then stop: below <i>P</i> = 0.35 and above 1.375 nothing changes any more. Only the temperature can push the
-pressure there.</p>
+for the radius offset (<code>panel.h:81-83</code>). The clamp on <i>t</i> stops every factor at Low's own
+figure: below <i>P</i> = 0.45 nothing changes any more, so no temperature moves a tire further down the scale than Low. Past
+Increased the last slope goes on for half a step and then stops, above 1.375. Only the temperature can push the pressure past
+either end. Until 1.3.4 the slope ran on half a step below Low too, to 0.35: with a steep step from Reduced to Low that left a cold
+Low with far less grip on hard ground than Low's own figure.</p>
 {fig}
 <p>The segment above Normal always uses the stored Increased numbers, also when Increased is switched off (as in the insanity
 mode). In hot weather Normal's pressure rises above 1 and slides a little toward them: at 35 °C, {(air(1.0, 35) - 1) / 0.25 * 100:.0f}% of
@@ -292,7 +294,7 @@ offset then shrinks by the same share, so the deepest mode in use takes all the 
 {eq('cylinder = max( 0.4 <i>R</i>, <i>R</i> − <i>o</i><sub>own</sub> − min(<i>o</i>(<i>P</i>) · σ, room) )', 14)}
 <p class="where">Example, the test scout (<i>R</i> = 0.47 m, own offset 1.88 cm): FlattenLimit {SCOUT_LIMIT * 100:.1f} cm, room
 {SCOUT_ROOM * 100:.2f} cm. Low gets {lo * 100:.1f} cm and Reduced {re_ * 100:.1f} cm. The cylinder never goes below 40% of the
-radius, whatever the ini says. No offset goes past the room: in the cold Low's offset is carried past the deepest mode's (equation 3, up to 12 cm), and before 1.3.0 that went up to 1.2 times the room.</p>
+radius, whatever the ini says. No offset goes past the room. Until 1.3.4 the cold carried Low's offset past the deepest mode's (up to 12 cm), and before 1.3.0 that went up to 1.2 times the room. Now Low keeps its own offset in the cold.</p>
 <h3>The stiff base</h3>
 <p>Each tire type has a softness preset (WheelSoftness in the trucks.xml of initial_templates): Stiff 0.02, Soft 0.03, ScoutSoft 0.1, Average
 and ScoutDefault 0.025. The game holds a wheel's own offset at wheel +0xB4 as the tire file's <code>RadiusOffset</code> times the wheel's
@@ -541,7 +543,8 @@ tire set to <i>P</i> at 15 °C holds, at <i>T</i> (<code>outside.h:109-124</code
 {eq('<i>P</i><sub>air</sub> = (<i>P</i> + 0.42) · (<i>T</i> + 273.15) / 288.15 − 0.42', 25)}
 <p class="where">At −20 °C Normal holds 0.83 and Low 0.34 (76% of its own); at 35 °C Normal holds 1.10. A low pressure loses a
 larger share of itself, because the atmosphere's part does not shrink. The mode factors are read off the scale at
-<i>P</i><sub>air</sub>, so cold air moves every mode a little lower on the scale.</p>
+<i>P</i><sub>air</sub>, so cold air moves every mode a little lower on the scale, down to Low and no further: under Low's
+pressure the factors are Low's own.</p>
 {fig1}
 <p>Rubber also changes with the temperature: cold rubber hardens and grips less, most on hard surfaces. With
 below = max(0, 15 − <i>T</i>) and above = max(0, <i>T</i> − 15) (<code>outside.h:112-121</code>):</p>
@@ -856,7 +859,7 @@ off with a 0.2 s time constant.</p>
 
 def cold_past_room(c):
     """How far past the shared room equation (14) puts Low at the outside temperature c, as a share of the room."""
-    return factors_at('default', air(0.45, c))['offset'] / 0.10
+    return factors_at('default', air(0.45, c), under=-0.5)['offset'] / 0.10
 
 
 def s_limits():
@@ -875,8 +878,8 @@ sounds are off.</li>
 <li>The models are the mod's own reasoning: the scale, the rubber factors and the damage speeds have no measured source beyond
 what each section names.</li></ul>
 <h3>Fixed after this manual's first version (1.3.0)</h3>
-<ul><li><b>Cold weather flattened past what the game draws.</b> Below 15 °C Low's pressure falls under Low on the scale, and its
-offset is carried past 10 cm, up to 12 cm from about −18 °C down (default numbers). The room is shared out for the deepest mode's
+<ul><li><b>Cold weather flattened past what the game draws.</b> Below 15 °C Low's pressure falls under Low on the scale, and until
+1.3.4 its offset was carried past 10 cm, up to 12 cm from about −18 °C down (default numbers). The room is shared out for the deepest mode's
 10 cm, so before 1.3.0 equation (14) gave ×{o0:.2f} of the room at 0 °C and ×{o25:.1f} at −25 °C: on the test scout the tread sank into hard
 ground by about {(o0 - 1) * SCOUT_ROOM * 1000:.0f} and {(o25 - 1) * SCOUT_ROOM * 1000:.0f} mm, less the 0.005 <i>R</i> let through. Now no offset goes past the room.</li>
 <li><b>A tire that comes soft went far too flat at Low.</b> Its contact sinks inside the cylinder, which FlattenLimit did not count; now the sink is measured and taken off the room (Tires that come soft).</li>
@@ -955,9 +958,9 @@ def s_tests():
              'The ini: a missing ini is written with the defaults; every key reads back as written; help text and unknown keys survive; "nan" and "inf" give the defaults; old <code>Seconds=3</code> and <code>ConfirmSeconds=15</code> move to 6 and 5 once.',
              'Flattening: FlattenLimit within 2.5 mm of the hand-worked values for five radii; the room shared out as equation (13) says.',
              'Rolling: ×1 at stock, ×1.117 at the scout\'s Low, 95.1% of the speed kept; the gear numbers give each gear\'s top ×1.117 exactly.',
-             'Cold: a 12 cm Low gets no more than the room, on the scout and on a 0.80 m tire with room to spare.',
+             'Cold: Low keeps its own offset at 30 below; a 12 cm offset gets no more than the room, on the scout and on a 0.80 m tire with room to spare.',
              'A soft tire: a contact 3 cm inside the cylinder settles at 3 cm and comes off the room; a firm tire\'s takes nothing, and readings outside the window are not taken.',
-             'The scale: each mode\'s pressure gives the mode\'s numbers; half way gives the mean; half a step past each end, then flat.',
+             'The scale: each mode\'s pressure gives the mode\'s numbers; half way gives the mean; under Low all nine are Low\'s own; half a step past Increased, then flat. Low in the cold is Low with harder rubber.',
              'The temperature: 15 °C changes nothing; Normal holds 0.827 at −20 °C and 1.098 at 35 °C; every effect goes the right way.',
              'The balance: <i>f</i> at strength 1, <i>f</i>² at 2, in between at 1.5; a vanilla tire stays at 1.',
              'Hard and insanity mode: each sets its numbers and options and leaves the key, volume and AmbientC; the insanity mode wins over hard; both turn rolling drag on, with fuel ×1.',
@@ -973,7 +976,7 @@ def s_tests():
 def s_constants():
     rows = [['kModePressure', '0.45, 0.65, 1, 1.25', 'share of Normal', 'Normal 35 psi; the rest the mod\'s choice'],
             ['Factor ranges', 'grip, fuel, steering 0.1 to 10; offset 0 to 0.25 m', '', 'Expeditions\' ranges for its keys'],
-            ['Scale overrun', 'half a step (t from −0.5 to 1.5)', '', 'the mod'],
+            ['Scale overrun', 'none under Low, half a step past Increased (t from 0 to 1.5)', '', 'the mod'],
             ['Pass', '50 ms sleep; 0.05 s step', '', '"20 times a second"'],
             ['Seconds', '6 (hard 30, insanity 25)', 's, Normal to Low', 'Expeditions takes 3; 6 since 1.1.0 for the sounds; hard: a truck\'s compressor'],
             ['ConfirmSeconds', '5', 's', '1.1.0'],

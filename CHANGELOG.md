@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The log no longer says "ground grip NOT found" for a truck whose list the game has not filled yet. At a first drive the list is often empty for a while. The line now says it is not filled yet, and the found line follows once it is. NOT found is left for a list of the wrong size, or one still empty after a minute.
 - Low in the cold is never less than Low. The cold air lowers the pressure, and under Low the factors used to run on past Low for half a step. With a steep step from Reduced to Low in a set that could leave Low with far less grip on asphalt and rock than its own figure. Now all nine factors stop at the figures of Low. The cold rubber still acts: with the default numbers Low on asphalt is x0.62 at 30 below and x0.72 at 10 below, where it was x0.58 and x0.69. Low keeps its own flattening, steering and fuel in the cold too. Nothing changes at 15 C and warmer.
 - The log lines of a truck's ground grip give the factor in force beside the figure written and its stock.
 - The ground probe's line (`ProbeGround=1`) gives each wheel's rolling resistance in force beside the table's figure, so a Crr moved by a slider shows in the line.

@@ -1090,7 +1090,21 @@ struct Scaled { float stock, written; };
 // then had its scaled gear speeds taken for stock and scaled again, so every gear's top climbed with each rebuild
 // until the truck ran away in a high gear (a tester's heavy trucks, 2026-10-24). The 21 October build, without the
 // restart, had none of it.
-struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; bool groundSaid = false; };
+struct VehicleStock { Scaled fuelA, fuelB, steering; std::vector<Scaled> ground, gears; bool groundSaid = false; unsigned long long emptySince = 0; bool lateSaid = false; };
+
+// The ground grip's list as a pass finds it (BRIEF_tester_1114.md, part 195.2). At a truck's first pass the game's list
+// is often empty, both ends 0, and filled later (once nine minutes later): that is not yet looked at, not "NOT found".
+// NOT found is a list that is there with the wrong size, or one still empty after kGroundWait of driving.
+enum { kGroundFound, kGroundEmpty, kGroundWrong };
+static const unsigned long long kGroundWait = 60000;
+static int GroundListState(bool readOk, uint64_t begin, uint64_t end, size_t wheels)
+{
+    if (readOk && wheels && end > begin && end - begin == wheels * 4) return kGroundFound;
+    if (!readOk || begin == end) return kGroundEmpty;
+    return kGroundWrong;
+}
+// Whether an empty list has waited long enough to be said NOT found: since is the pass it was first seen empty (0 none).
+static bool GroundStillEmpty(unsigned long long since, unsigned long long now) { return since && now >= since && now - since >= kGroundWait; }
 static std::unordered_map<uint64_t, VehicleStock> g_vehicles;
 
 // What a gear's number gets on top of its number x roll, so that the gear's top, 2a + 5 (a + 2 in the high gear),
@@ -1134,7 +1148,9 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
     // writes at most 10.
     uint64_t action = 0, begin = 0, end = 0;
     Read(vehicle + 0x68, action);
-    const bool groundOk = wheelCount && Read(action + 0x98, begin) && Read(action + 0xA0, end) && end > begin && end - begin == wheelCount * 4;
+    const bool listRead = Read(action + 0x98, begin) && Read(action + 0xA0, end);
+    const int groundState = GroundListState(listRead, begin, end, wheelCount);
+    const bool groundOk = groundState == kGroundFound;
     if (groundOk)
     {
         // a list that moved keeps its stock: an entry the game rewrote is taken as stock again by ApplyValue
@@ -1171,8 +1187,19 @@ static void ApplyVehicle(uint64_t vehicle, size_t wheelCount, const Mode &m, boo
         if (groundOk)
             Log(L"vehicle %p ground grip of %zu wheels, the first: %.3f (stock %.3f, the factor in force x%.3f for the ground under it, written 10 at the most)", (void *)vehicle,
                 wheelCount, v.ground[0].written, v.ground[0].stock, firstFactor);
+        else if (groundState == kGroundEmpty)
+            Log(L"vehicle %p ground grip: the game's list is not filled yet (action %p, list %p .. %p); written once it is", (void *)vehicle, (void *)action, (void *)begin, (void *)end);
         else Log(L"vehicle %p ground grip NOT found: action %p, list %p .. %p for %zu wheels", (void *)vehicle, (void *)action, (void *)begin, (void *)end, wheelCount);
         v.groundSaid = groundOk;
+        v.emptySince = groundState == kGroundEmpty ? (GetTickCount64() ? GetTickCount64() : 1) : 0;
+        v.lateSaid = false;
+    }
+    // an empty list still empty after a minute of driving: now it is NOT found, said once
+    else if (groundState == kGroundEmpty && !v.groundSaid && !v.lateSaid && GroundStillEmpty(v.emptySince, GetTickCount64()))
+    {
+        v.lateSaid = true;
+        Log(L"vehicle %p ground grip NOT found: the game's list is still empty after %llu s (action %p); written if it fills", (void *)vehicle, kGroundWait / 1000,
+            (void *)action);
     }
     // the list is often filled a moment after the truck's first pass (BRIEF_drive_2052_fixes.md N2): said once when found
     else if (groundOk && !v.groundSaid)
@@ -4846,6 +4873,15 @@ static bool RealismTest()
                     partsOk = partsOk && fabsf(gp.base * gp.tire * gp.mode * gp.cold - writtenOf) <= 1e-5f * writtenOf && fabsf(gp.mode - modeOf) <= 1e-5f * modeOf &&
                               gp.base == baseOf && gp.tire == tireOf && gp.cold == coldOf;
                 }
+    // the ground grip's list (BRIEF_tester_1114.md, part 195.2): empty at the first pass is not yet filled, not NOT found
+    {
+        const bool states = GroundListState(true, 0x1000, 0x1000 + 6 * 4, 6) == kGroundFound && GroundListState(true, 0, 0, 6) == kGroundEmpty &&
+                            GroundListState(false, 0, 0, 6) == kGroundEmpty && GroundListState(true, 0x1000, 0x1000 + 4 * 4, 6) == kGroundWrong &&
+                            GroundListState(true, 0x2000, 0x1000, 6) == kGroundWrong && GroundListState(true, 0x1000, 0x1000, 6) == kGroundEmpty;
+        const bool waits = !GroundStillEmpty(0, 100000) && !GroundStillEmpty(1000, 60999) && GroundStillEmpty(1000, 61000) && !GroundStillEmpty(5000, 4000);
+        printf("%s ground grip list: the right size found, both ends 0 not filled yet, another size NOT found; an empty one NOT found only after a minute\n",
+               states && waits ? "ok  " : "FAIL");
+    }
     // the mud grip by weight (181, part 1): the law, the truck's part from its wheels, and at 0 the factor's own bits
     {
         bool law = MudWeightFactor(699.0f, 1.0f) == 1.0f && MudWeightFactor(700.0f, 1.0f) == 1.0f && fabsf(MudWeightFactor(1012.0f, 1.0f) - 1012.0f / 700.0f) < 1e-6f &&

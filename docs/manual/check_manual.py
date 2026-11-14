@@ -25,6 +25,15 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
+# Names that are in no manual on purpose, left out of the lists. Nothing else is: a name not here is listed as before.
+# The tuning tool's Mud grip by weight (BRIEF_drive_1114_findings.md, part 181, must 8): in no tab and in no manual
+# while it lives in the tool alone; its key and its log lines.
+HIDDEN_NAMES = {('MudGripByWeight', 'key')}
+HIDDEN_LOG = ('mud grip by weight:',)
+
+
+def hidden(name, kind):
+    return (name, kind) in HIDDEN_NAMES or (kind == 'log' and name.startswith(HIDDEN_LOG))
 
 # an ini key: two or more capitalised parts ("BackToA", "Gear16"), quoted, followed by = or in backticks
 KEY = r'[A-Z][a-z]+(?:[A-Z][a-z0-9]*|[0-9]+)+'
@@ -89,8 +98,9 @@ def found_in(lines):
 # (a log line that gained a field), and is told apart.
 def names_of(added, removed):
     plus, minus = found_in(added), found_in(removed)
-    beside = sorted(n for n in set(plus) | set(minus) if n[1] == 'log' and plus.get(n, 0) == minus.get(n, 0))
-    changed = sorted(n for n in set(plus) | set(minus) if n not in beside)
+    every = [n for n in set(plus) | set(minus) if not hidden(*n)]
+    beside = sorted(n for n in every if n[1] == 'log' and plus.get(n, 0) == minus.get(n, 0))
+    changed = sorted(n for n in every if n not in beside)
     return changed, beside
 
 

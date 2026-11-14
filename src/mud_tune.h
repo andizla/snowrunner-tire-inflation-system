@@ -48,6 +48,49 @@ static const MudLineInfo kMudLines[kMudLineCount] = {
     { "Deepest wheel in mud", "How deep the deepest wheel of the driven truck sits." },
 };
 
+// ---- the mud grip by the weight a wheel carries (BRIEF_drive_1114_findings.md, part 181, part 1; the Reviewer's
+// addendum of 2026-11-14 11:00; review\research_grip_by_weight.md) ----
+// The game's mud traction is a force of a fixed size a wheel, with no load in it, so a heavy truck has less of it for
+// each kilogram than a light one. The figure of the tuning tool, 0 to 100, gives a wheel's mud factor one more part:
+// 1 + (clamp(M / 700, 1, 3) - 1) x the share, M the kilograms a wheel carries as the game holds them (wheel + 0x1B4,
+// read only, never written). 1 where M is no number or not above 0, and exactly 1 at a share of 0. It is a part of the
+// one factor the mod writes, never a write of its own.
+static const char kMudWeightKey[] = "MudGripByWeight", kMudWeightName[] = "Mud grip by weight",
+                  kMudWeightTip[] = "More mud grip for a truck that is heavy for its wheels. 0 is today. 100 gives up to three times at 2100 kg a wheel.";
+static const float kMudWeightPer = 700.0f;                    // kg a wheel: at or under this the part is 1
+static const float kMudWeightMost = 3.0f;                     // the part at 100, at 2100 kg a wheel and over
+static const float kMudWeightSane[2] = { 50.0f, 20000.0f };   // kg a wheel: outside it the figure read is no wheel's load
+static const float kMudWeightSame = 0.005f;                   // a truck's wheels read the same figure to within this share
+inline int MudWeightHeld(float v) { return !isfinite(v) || v <= 0.0f ? 0 : v >= 100.0f ? 100 : (int)floorf(v + 0.5f); }
+inline float MudWeightFactor(float m, float share)
+{
+    if (!isfinite(m) || !(m > 0.0f) || !isfinite(share) || !(share > 0.0f)) return 1.0f;
+    const float ratio = m / kMudWeightPer, held = ratio < 1.0f ? 1.0f : ratio > kMudWeightMost ? kMudWeightMost : ratio;
+    return 1.0f + (held - 1.0f) * (share > 1.0f ? 1.0f : share);
+}
+// The part for a truck from its wheels' figures as read (n of them, read false where one was not read): each inside
+// the sane range and all the same, else 1 with the reason. mass: the figure it went by, 0 none.
+enum { kMwOk, kMwOff, kMwNoRead, kMwRange, kMwDiffer };
+inline float MudWeightOfWheels(const float *m, int n, bool read, int percent, int *why = nullptr, float *mass = nullptr)
+{
+    if (mass) *mass = 0.0f;
+    auto none = [&](int w) {
+        if (why) *why = w;
+        return 1.0f;
+    };
+    if (percent <= 0) return none(kMwOff);
+    if (!read || n <= 0 || !m) return none(kMwNoRead);
+    for (int i = 0; i < n; i++)
+        if (!isfinite(m[i]) || m[i] < kMudWeightSane[0] || m[i] > kMudWeightSane[1]) return none(kMwRange);
+    for (int i = 1; i < n; i++)
+        if (fabsf(m[i] - m[0]) > kMudWeightSame * m[0]) return none(kMwDiffer);
+    if (why) *why = kMwOk;
+    if (mass) *mass = m[0];
+    return MudWeightFactor(m[0], (percent > 100 ? 100 : percent) / 100.0f);
+}
+// The part into the mode's mud factor: at a part of exactly 1 the factor is not touched, so at 0 it is today's to the last bit.
+inline float MudWeightInto(float factor, float part) { return part == 1.0f ? factor : factor * part; }
+
 // A factor held: no number is 1, then the range, then rounded to the two places it is shown and saved with.
 inline float MudHeld(int i, float v)
 {

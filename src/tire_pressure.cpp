@@ -79,6 +79,7 @@ static HMODULE g_self = nullptr;
 static bool g_beep = true;
 static bool g_balanceOn = false;      // ini VanillaBalance (vanilla_balance.h)
 static float g_balanceStrength = 1.0f;
+static int g_mudByWeight = 0; // MudGripByWeight in force, 0 to 100 (mud_tune.h)
 
 // The ini's settings in force (panel.h TpSettings). The Tire Inflation tab of the NEXT GEN menu reads them and hands back
 // edits (SettingsPut, render thread); this thread applies those on its next pass and saves the ini a second later.
@@ -316,6 +317,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"StiffBase", L"%.0f", s.stiffBase ? 1 : 0);
     put(T, L"MudTuning", L"%.0f", s.mudTuning ? 1 : 0);
     for (int i = 0; i < kMudTuneCount; i++) put(T, Wide(kMudTune[i].key), L"%g", s.mud[i]);
+    put(T, Wide(kMudWeightKey), L"%.0f", (double)s.mudByWeight);
     put(T, L"AmbientC", L"%g", s.ambientC);
     put(T, L"HardMode", L"%.0f", s.hardMode ? 1 : 0);
     put(T, L"InsaneMode", L"%.0f", s.insaneMode ? 1 : 0);
@@ -355,6 +357,7 @@ static void ReadIni(TpSettings &s)
                         L"; 1 = to the vanilla tire, above 1 below it (2: the ratio to the vanilla tire counts twice).\n"
                         L"; AsphaltFloor: paved grip every tire gets at least, before the modes (0 = off).\n"
                         L"; WornGrip: the share of its grip a worn out or broken tire keeps, percent, 0 to 30 (10). 0 is the old behaviour: none.\n"
+                        L"; MudGripByWeight (0 to 100, 0 = off): more mud grip for a truck that is heavy for its wheels, a figure of the tuning tool.\n"
                         L"; Per mode: multipliers for grip on dirt (OnModelFriction), gravel (GravelFriction), sand (SandFriction),\n"
                         L"; rock (RockFriction), paved ground (BodyFrictionAsphalt) and in mud (SubstanceFriction),\n"
                         L"; AdditionalRadiusOffset in metres off the tire's radius, and multipliers for fuel use while moving\n"
@@ -459,6 +462,7 @@ static void ReadIni(TpSettings &s)
     s.stiffBase = GetPrivateProfileIntW(T, L"StiffBase", s.stiffBase ? 1 : 0, ini.c_str()) != 0;
     s.mudTuning = GetPrivateProfileIntW(T, L"MudTuning", s.mudTuning ? 1 : 0, ini.c_str()) != 0;
     for (int i = 0; i < kMudTuneCount; i++) s.mud[i] = MudHeld(i, IniFloat(T, Wide(kMudTune[i].key), s.mud[i], ini));
+    s.mudByWeight = MudWeightHeld(IniFloat(T, Wide(kMudWeightKey), (float)s.mudByWeight, ini));
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
     s.insaneMode = GetPrivateProfileIntW(T, L"InsaneMode", s.insaneMode ? 1 : 0, ini.c_str()) != 0;
@@ -522,6 +526,10 @@ static void ApplySettings(const TpSettings &in, bool log)
     KeyName(g_key, g_panelKeyName, sizeof g_panelKeyName);
     g_balanceOn = s.vanillaBalance;
     g_balanceStrength = s.balanceStrength;
+    if (s.mudByWeight != g_mudByWeight)
+        Log(L"mud grip by weight: %d percent (MudGripByWeight, a figure of the tuning tool; 0 as before): at 100 a wheel's mud grip is times its load over %.0f kg, from 1 to %.0f", s.mudByWeight,
+            kMudWeightPer, kMudWeightMost);
+    g_mudByWeight = s.mudByWeight;
     g_tireDamage = s.tireDamage;
     g_rollingRadius = s.rollingRadius;
     g_stiffBase = s.stiffBase;
@@ -948,11 +956,12 @@ static bool ApplyWornWheel(const WheelRef &w)
 // settings, the tire's own (the vanilla balance, on asphalt the asphalt floor where it lifts more), the mode's own
 // figure at the air's pressure, and the cold's factor. The mode's own is what is left of the factor written once the
 // other three are taken out, so the four multiply to that factor; 0 where one of the three is 0.
-struct GripParts { float base, tire, mode, cold; };
-static GripParts GripPartsOf(float written, float base, float tire, float cold)
+// In mud a fifth part, the weight's (mud_tune.h, MudWeightFactor): 1 on asphalt and wherever the tool's figure is 0.
+struct GripParts { float base, tire, mode, cold, weight; };
+static GripParts GripPartsOf(float written, float base, float tire, float cold, float weight = 1.0f)
 {
-    const float rest = base * tire * cold;
-    return GripParts{ base, tire, rest > 0.0f ? written / rest : 0.0f, cold };
+    const float rest = MudWeightInto(base * tire * cold, weight);
+    return GripParts{ base, tire, rest > 0.0f ? written / rest : 0.0f, cold, weight };
 }
 struct WheelParts { GripParts asphalt, mud; };
 
@@ -1062,9 +1071,9 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
             (void *)w.wheel, m.name, s.asphalt * m.asphalt, s.substance * m.substance, newCylinder, s.asphalt, s.substance, s.cylinder, s.room, s.sinkUsed);
         // and the factors by their parts, so a low grip in the log answers by itself which part made it
         if (parts)
-            Log(L"wheel %p factors: asphalt x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f; mud x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f", (void *)w.wheel,
+            Log(L"wheel %p factors: asphalt x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f; mud x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f x weight %.3f", (void *)w.wheel,
                 m.asphalt, parts->asphalt.base, parts->asphalt.tire, parts->asphalt.mode, parts->asphalt.cold, m.substance, parts->mud.base, parts->mud.tire, parts->mud.mode,
-                parts->mud.cold);
+                parts->mud.cold, parts->mud.weight);
     }
     return !same;
 }
@@ -2764,7 +2773,7 @@ static void BodiesProbePass(uint64_t vehicle, ULONGLONG now)
 // force and the live read are written. With no tool in the game the block is written and nobody reads it.
 // After them the mud's switch, its three factors and its lines (mud_tune.h), and the body list probe's button.
 enum { kTuneGround = kRdTuneCount, kTuneCrr, kTuneSlowing, kTuneSink, kTuneDepth, kTuneMudSwitch, kTuneMud, kTuneMudLines = kTuneMud + kMudTuneCount,
-       kTuneBodies = kTuneMudLines + kMudLineCount, kTuneCount };
+       kTuneMudWeight = kTuneMudLines + kMudLineCount, kTuneBodies, kTuneCount };
 static const char kTuneProbes[] = "Probes", kTuneBodiesName[] = "Log bodies",
                   kTuneBodiesTip[] = "Writes every body of the driven truck into the log, with its mass and its gravity word. Reads only.";
 static NgTuneMod g_tune = {};
@@ -2777,6 +2786,7 @@ static int DragTuneItems(NgTuneItem *items)
     for (int i = 0; i < kMudTuneCount; i++)
         items[kTuneMud + i] = { kNgTuneSlider, kMudTune[i].name, kMudGroup, kMudTune[i].tip, kMudTune[i].least, kMudTune[i].most, kMudTune[i].def, kMudTune[i].step, kMudTune[i].decimals };
     for (int i = 0; i < kMudLineCount; i++) items[kTuneMudLines + i] = { kNgTuneLine, kMudLines[i].name, kMudGroup, kMudLines[i].tip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
+    items[kTuneMudWeight] = { kNgTuneSlider, kMudWeightName, kMudGroup, kMudWeightTip, 0.0f, 100.0f, 0.0f, 1.0f, 0 };
     items[kTuneBodies] = { kNgTuneButton, kTuneBodiesName, kTuneProbes, kTuneBodiesTip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
     return kTuneCount;
 }
@@ -2807,6 +2817,12 @@ static bool DragTuneTake(uint8_t *block)
         if (!any) SettingsGet(s);
         any = true;
         s.mud[i] = MudHeld(i, held);
+    }
+    if (NgTuneTake(block, kTuneMudWeight, held) > 0)
+    {
+        if (!any) SettingsGet(s);
+        any = true;
+        s.mudByWeight = MudWeightHeld(held);
     }
     if (NgTuneTake(block, kTuneBodies, held) > 0) InterlockedExchange(&g_bodiesAsked, 1); // a press, however many came in one pass
     if (any) SettingsPut(s);
@@ -2841,6 +2857,7 @@ static void DragTunePublish(uint8_t *block, ULONGLONG now)
     const bool mudOn = s.mudTuning;
     float mud[kMudTuneCount];
     for (int i = 0; i < kMudTuneCount; i++) mud[i] = MudHeld(i, s.mud[i]);
+    const float mudWeight = (float)s.mudByWeight; // its own figure: Mud tuning off does not grey it
     MudLive mudLive;
     MudLiveMake(mudOn, now, mudLive);
     PresetSettings(s);
@@ -2862,6 +2879,7 @@ static void DragTunePublish(uint8_t *block, ULONGLONG now)
     NgTuneValue(block, kTuneMudLines + kMudLineDrag, 0.0f, mudLive.drag);
     NgTuneValue(block, kTuneMudLines + kMudLineDepth, 0.0f, mudLive.depth);
     NgTuneValue(block, kTuneMudLines + kMudLineSink, 0.0f, mudLive.sink);
+    NgTuneValue(block, kTuneMudWeight, mudWeight);
     NgTuneValue(block, kTuneBodies, 0.0f);
     NgTuneEnd(block, now);
 }
@@ -3888,6 +3906,33 @@ static DWORD WINAPI Run(void *)
         float ground = 0.0f, asphalt = 0.0f, mud = 0.0f;
         for (size_t i = 0; i < wheels.size(); i++)
             if (g_balanceOn && tireGrip(i, ground, asphalt, mud)) balance[i] = VanillaBalance(ground, asphalt, mud, g_balanceStrength);
+        // the mud grip by the weight a wheel carries (mud_tune.h): one part for the truck, from every wheel's own figure as
+        // the game holds it now (wheel + 0x1B4, read only: the game sets it at each setup of the vehicle). One line a
+        // truck and reason where it is not used
+        float weightPart = 1.0f;
+        if (g_mudByWeight > 0 && !wheels.empty())
+        {
+            float loads[64];
+            const int loadCount = (int)min(wheels.size(), (size_t)64);
+            bool loadsRead = true;
+            for (int i = 0; i < loadCount; i++) loadsRead = Read(wheels[i].wheel + 0x1B4, loads[i]) && loadsRead;
+            int whyLoad = kMwOk;
+            float load = 0.0f;
+            weightPart = MudWeightOfWheels(loads, loadCount, loadsRead, g_mudByWeight, &whyLoad, &load);
+            static uint64_t saidVehicle = 0;
+            static int saidWhy = -1, saidPercent = -1;
+            static float saidLoad = 0.0f;
+            if (vehicle != saidVehicle || whyLoad != saidWhy || g_mudByWeight != saidPercent || load != saidLoad)
+            {
+                saidVehicle = vehicle, saidWhy = whyLoad, saidPercent = g_mudByWeight, saidLoad = load;
+                if (whyLoad == kMwOk)
+                    Log(L"mud grip by weight: %.0f kg a wheel on %d wheels, at %d percent the mud factor of each wheel is times %.3f", load, loadCount, g_mudByWeight, weightPart);
+                else
+                    Log(L"mud grip by weight: not used on this truck, %s (the first wheel reads %.1f); its mud factor is as before",
+                        whyLoad == kMwNoRead ? L"a wheel's load was not read" : whyLoad == kMwRange ? L"a wheel's load is outside 50 to 20000 kg" : L"its wheels read different loads",
+                        loadsRead && loadCount ? loads[0] : 0.0f);
+            }
+        }
         for (size_t i = 0; i < wheels.size(); i++)
         {
             // the asphalt floor lifts slippery tires to at least AsphaltFloor on paved ground, as if their tire file
@@ -3898,7 +3943,8 @@ static DWORD WINAPI Run(void *)
             Mode m = g_now;
             m.asphalt *= paved;
             m.substance *= balance[i];
-            const WheelParts parts = { GripPartsOf(m.asphalt, g_baseGrip[1], paved, te.hard), GripPartsOf(m.substance, g_baseGrip[2], balance[i], te.soft) };
+            m.substance = MudWeightInto(m.substance, weightPart);
+            const WheelParts parts = { GripPartsOf(m.asphalt, g_baseGrip[1], paved, te.hard), GripPartsOf(m.substance, g_baseGrip[2], balance[i], te.soft, weightPart) };
             ApplyWheel(wheels[i], m, !moving && !drifted, arrived, &parts);
         }
         // the truck's speed: the fuel factor only counts while it moves (Expeditions' fuel rate, RVA 0xe168a0 in its
@@ -4216,7 +4262,7 @@ static bool SameSettings(const TpSettings &a, const TpSettings &b)
     for (int i = 0; i < 2; i++) same = same && a.padCurve[i] == b.padCurve[i];
     for (int i = 0; i < 3; i++) same = same && a.base[i] == b.base[i];
     for (int i = 0; i < kRdTuneCount; i++) same = same && a.drag[i] == b.drag[i];
-    same = same && a.mudTuning == b.mudTuning && a.mud[0] == b.mud[0] && a.mud[1] == b.mud[1] && a.mud[2] == b.mud[2];
+    same = same && a.mudByWeight == b.mudByWeight && a.mudTuning == b.mudTuning && a.mud[0] == b.mud[0] && a.mud[1] == b.mud[1] && a.mud[2] == b.mud[2];
     same = same && a.asphaltFloor == b.asphaltFloor && a.wornGrip == b.wornGrip && a.increased == b.increased && a.tireDamage == b.tireDamage && a.rollingRadius == b.rollingRadius;
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) same = same && a.mode[m][k] == b.mode[m][k];
@@ -4546,6 +4592,7 @@ static bool IniTest(const wchar_t *givenIni)
     c.stiffBase = false;
     c.rollingDrag = false;
     for (int i = 0; i < kRdTuneCount; i++) c.drag[i] = RdTuneHeld(i, kRdTune[i].least + (kRdTune[i].most - kRdTune[i].least) * (0.31f + 0.02f * (float)i));
+    c.mudByWeight = 35;
     c.mudTuning = false; // off in the round trip, or putting c in force would look for the mud's places
     for (int i = 0; i < kMudTuneCount; i++) c.mud[i] = MudHeld(i, kMudTune[i].least + (kMudTune[i].most - kMudTune[i].least) * (0.4f + 0.1f * (float)i));
     c.ambientC = -3.0f;
@@ -4799,6 +4846,44 @@ static bool RealismTest()
                     partsOk = partsOk && fabsf(gp.base * gp.tire * gp.mode * gp.cold - writtenOf) <= 1e-5f * writtenOf && fabsf(gp.mode - modeOf) <= 1e-5f * modeOf &&
                               gp.base == baseOf && gp.tire == tireOf && gp.cold == coldOf;
                 }
+    // the mud grip by weight (181, part 1): the law, the truck's part from its wheels, and at 0 the factor's own bits
+    {
+        bool law = MudWeightFactor(699.0f, 1.0f) == 1.0f && MudWeightFactor(700.0f, 1.0f) == 1.0f && fabsf(MudWeightFactor(1012.0f, 1.0f) - 1012.0f / 700.0f) < 1e-6f &&
+                   MudWeightFactor(2100.0f, 1.0f) == 3.0f && MudWeightFactor(3000.0f, 1.0f) == 3.0f && fabsf(MudWeightFactor(1012.0f, 0.5f) - (1.0f + (1012.0f / 700.0f - 1.0f) * 0.5f)) < 1e-6f &&
+                   MudWeightFactor(3000.0f, 0.5f) == 2.0f && MudWeightFactor(699.0f, 0.5f) == 1.0f && MudWeightFactor(3000.0f, 7.0f) == 3.0f;
+        for (float kg : { 699.0f, 700.0f, 1012.0f, 2100.0f, 3000.0f }) law = law && MudWeightFactor(kg, 0.0f) == 1.0f;
+        law = law && MudWeightFactor(NAN, 1.0f) == 1.0f && MudWeightFactor(0.0f, 1.0f) == 1.0f && MudWeightFactor(-900.0f, 1.0f) == 1.0f && MudWeightFactor(1500.0f, NAN) == 1.0f &&
+              MudWeightFactor(1500.0f, -1.0f) == 1.0f && MudWeightFactor(INFINITY, 1.0f) == 1.0f;
+        const float eight[8] = { 1012.0f, 1012.0f, 1012.0f, 1012.0f, 1012.0f, 1012.0f, 1012.0f, 1012.0f };
+        float odd[4] = { 1012.0f, 1012.0f, 1300.0f, 1012.0f }, light[4] = { 30.0f, 30.0f, 30.0f, 30.0f }, wide[4] = { 25000.0f, 25000.0f, 25000.0f, 25000.0f };
+        float nan4[4] = { 1012.0f, NAN, 1012.0f, 1012.0f }, near4[4] = { 1012.0f, 1013.0f, 1011.0f, 1012.0f };
+        int why = -1;
+        float load = -1.0f;
+        bool truck = fabsf(MudWeightOfWheels(eight, 8, true, 100, &why, &load) - 1012.0f / 700.0f) < 1e-6f && why == kMwOk && load == 1012.0f;
+        truck = truck && MudWeightOfWheels(eight, 8, true, 0, &why, &load) == 1.0f && why == kMwOff && load == 0.0f;
+        truck = truck && MudWeightOfWheels(eight, 8, false, 100, &why) == 1.0f && why == kMwNoRead && MudWeightOfWheels(eight, 0, true, 100, &why) == 1.0f && why == kMwNoRead;
+        truck = truck && MudWeightOfWheels(odd, 4, true, 100, &why) == 1.0f && why == kMwDiffer && MudWeightOfWheels(light, 4, true, 100, &why) == 1.0f && why == kMwRange;
+        truck = truck && MudWeightOfWheels(wide, 4, true, 100, &why) == 1.0f && why == kMwRange && MudWeightOfWheels(nan4, 4, true, 100, &why) == 1.0f && why == kMwRange;
+        truck = truck && MudWeightOfWheels(near4, 4, true, 100, &why) > 1.4f && why == kMwOk && MudWeightOfWheels(eight, 8, true, 400) == MudWeightOfWheels(eight, 8, true, 100);
+        // at 0 the mode's mud factor and the wheel's parts are today's to the last bit, over the factors the tests' wheels get
+        bool bits = true;
+        for (float factorOf : { 0.59f * 0.40f * 0.43f * 0.45f, 0.562f * 2.25f, 1.0f, 1.3f * 1.2f * 0.9f, 3.0f })
+        {
+            const float into = MudWeightInto(factorOf, MudWeightOfWheels(eight, 8, true, 0));
+            const GripParts today = GripPartsOf(factorOf, 0.9f, 0.562f, 0.8f), withPart = GripPartsOf(factorOf, 0.9f, 0.562f, 0.8f, MudWeightOfWheels(eight, 8, true, 0));
+            bits = bits && !memcmp(&into, &factorOf, 4) && !memcmp(&today.mode, &withPart.mode, 4) && withPart.weight == 1.0f;
+        }
+        // at 100 the five parts multiply to the factor written, and the mode's own part is what it was
+        const float part = MudWeightOfWheels(eight, 8, true, 100), plain = 0.9f * 2.25f * 0.8f * 0.562f, withWeight = MudWeightInto(plain, part);
+        const GripParts five = GripPartsOf(withWeight, 0.9f, 0.562f, 0.8f, part);
+        const bool parts5 = fabsf(five.base * five.tire * five.mode * five.cold * five.weight - withWeight) <= 1e-5f * withWeight && fabsf(five.mode - 2.25f) <= 1e-5f * 2.25f &&
+                            five.weight == part && fabsf(withWeight - plain * 1012.0f / 700.0f) <= 1e-5f * withWeight;
+        const bool held = MudWeightHeld(-3.0f) == 0 && MudWeightHeld(NAN) == 0 && MudWeightHeld(49.6f) == 50 && MudWeightHeld(250.0f) == 100 && MudWeightHeld(0.0f) == 0;
+        printf("%s mud grip by weight: 1 at 699 and 700 kg a wheel, 1012 / 700 at 1012 kg, 3 at 2100 and 3000 kg, half way at 50, exactly 1 at 0 and for no number, 0 or a negative; a "
+               "truck's part needs every wheel read, inside 50 to 20000 kg and the same; at 0 the mud factor and the wheel's parts keep their bits; at 100 five parts multiply to the "
+               "factor written\n",
+               law && truck && bits && parts5 && held ? "ok  " : "FAIL");
+    }
     const GripParts noBase = GripPartsOf(0.0f, 0.0f, 1.0f, 1.0f);
     partsOk = partsOk && noBase.mode == 0.0f && noBase.base == 0.0f;
     printf("%s wheel line: the four parts of a grip factor (base, tire, mode, cold) multiply to the factor written, 0.59 x 0.40 x 0.43 x 0.45 too, and a base of 0 divides nothing\n",
@@ -7387,7 +7472,7 @@ static bool MudBlockAndBodiesTest()
     static uint8_t block[kNgTuneBlockMost];
     NgTuneItem items[kTuneCount];
     const int count = DragTuneItems(items);
-    bool blockOk = count == 26 && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count) && items[kTuneMudSwitch].kind == kNgTuneSwitch && items[kTuneBodies].kind == kNgTuneButton &&
+    bool blockOk = count == 27 && items[kTuneMudWeight].kind == kNgTuneSlider && items[kTuneMudWeight].most == 100.0f && items[kTuneMudWeight].def == 0.0f && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count) && items[kTuneMudSwitch].kind == kNgTuneSwitch && items[kTuneBodies].kind == kNgTuneButton &&
                    !strcmp(items[kTuneMud + kMudtLift].name, "Mud lift") && items[kTuneMud + kMudtLift].most == 5.0f && items[kTuneMud + kMudtDrag].most == 4.0f &&
                    items[kTuneMud + kMudtDepth].most == 2.0f && items[kTuneMud].least == 0.25f && !strcmp(items[kTuneMudSwitch].group, "Mud") && !strcmp(items[kTuneBodies].group, "Probes");
     for (int i = 0; i < count; i++) blockOk = blockOk && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'');
@@ -7467,6 +7552,21 @@ static bool MudBlockAndBodiesTest()
     pass();
     const bool pressed = g_bodiesAsked == 1;
     g_bodiesAsked = 0;
+    // the mud grip by weight: its own figure, not greyed with Mud tuning off; 60 through the block, 250 held at 100, back to 0
+    const bool tuningWas = now().mudTuning;
+    want(kTuneMudSwitch, 0.0f);
+    want(kTuneMudWeight, 60.0f);
+    pass();
+    bool weightOk = now().mudByWeight == 60 && shown(kTuneMudWeight) == 60.0f && !greyed(kTuneMudWeight) && !now().mudTuning;
+    want(kTuneMudWeight, 250.0f);
+    pass();
+    weightOk = weightOk && now().mudByWeight == 100 && shown(kTuneMudWeight) == 100.0f;
+    want(kTuneMudWeight, 0.0f);
+    want(kTuneMudSwitch, tuningWas ? 1.0f : 0.0f);
+    pass();
+    weightOk = weightOk && now().mudByWeight == 0 && shown(kTuneMudWeight) == 0.0f && now().mudTuning == tuningWas;
+    printf("%s mud grip by weight in the block: a slider under Mud, 0 by default, not greyed with Mud tuning off; 60 taken into the settings, 250 held at 100, 0 again\n",
+           weightOk ? "ok  " : "FAIL");
 
     // ---- the probe on stand-ins: a truck of three bodies in its list and two wheels, and another truck of one body ----
     static uint8_t vehicle[0x100], model[0x300], list[4 * 0x20], body[5][0x300], wheel[2][0x40], vehicle2[0x100], model2[0x300], list2[0x20];

@@ -245,6 +245,74 @@ inline int TruckModeInForce(const TruckModeFound &f, int modeCount)
     return m >= modeCount || m < 0 ? kNormal : m;
 }
 
+// ---- the look at the file (BRIEF_truck_profile.md, build 2, Tire's half) ----
+// Another hand may write a truck's mode into the file: Next Gen Gameplay at an Import of a truck profile, or the player
+// in an editor. Once a second, with PerTruck on and a truck driven whose kind is read, the file's write time and size
+// are looked at. Where they changed, the driven truck's mode is read again and compared with the mode in force: the
+// same is nothing, another is taken as a chosen mode is. Nobody keeps book of who wrote: Tire's own writes cost one
+// read and change nothing.
+// A mode is two keys (Own, then Mode), written one after the other, so a change is never read in the look that saw
+// it: the read comes with the next look, and only if nothing changed again between the two.
+static const ULONGLONG kTruckLookMs = 1000;
+struct TruckFileLook
+{
+    bool known;          // a look has been taken
+    bool pending;        // the last look saw a change: the next one reads, if nothing changed again
+    uint64_t time, size; // the file as the last look saw it; both 0 for no file
+    ULONGLONG at;        // when the last look was taken
+};
+// The file's write time and size; both 0 where it is not there.
+inline void TruckFileStamp(const std::wstring &file, uint64_t &time, uint64_t &size)
+{
+    WIN32_FILE_ATTRIBUTE_DATA d = {};
+    time = size = 0;
+    if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &d)) return;
+    time = ((uint64_t)d.ftLastWriteTime.dwHighDateTime << 32) | d.ftLastWriteTime.dwLowDateTime;
+    size = ((uint64_t)d.nFileSizeHigh << 32) | d.nFileSizeLow;
+}
+// One look with the file as it is now. True: read the driven truck's mode again now. The first look only notes the
+// file: the truck's mode was read when it was first driven.
+inline bool TruckFileLookStep(TruckFileLook &l, uint64_t time, uint64_t size)
+{
+    if (!l.known)
+    {
+        l.known = true, l.pending = false, l.time = time, l.size = size;
+        return false;
+    }
+    if (time != l.time || size != l.size)
+    {
+        l.time = time, l.size = size;
+        l.pending = true; // seen now, read with the next look
+        return false;
+    }
+    if (!l.pending) return false;
+    l.pending = false;
+    return true;
+}
+// The loop's call, every pass. on: PerTruck on, a truck driven, its kind read; off forgets the look, so the first one
+// after is a first look again. Not sooner than kTruckLookMs after the last. Returns the mode to take, or -1: no look
+// due, nothing changed, or the mode read is the one in force. read is true where the file was read (f is what was
+// found, for the level and the tick). Nothing is written.
+inline int TruckFileLookMode(TruckFileLook &l, bool on, const std::wstring &file, const char *kind, const char *id, int modeCount, int inForce, ULONGLONG now,
+                             TruckModeFound &f, bool &read)
+{
+    read = false;
+    if (!on)
+    {
+        l = TruckFileLook{};
+        return -1;
+    }
+    if (l.known && now - l.at < kTruckLookMs) return -1;
+    l.at = now;
+    uint64_t time = 0, size = 0;
+    TruckFileStamp(file, time, size);
+    if (!TruckFileLookStep(l, time, size)) return -1;
+    f = TruckModeFind(file, kind, id);
+    read = true;
+    const int mode = TruckModeInForce(f, modeCount);
+    return mode != inForce ? mode : -1;
+}
+
 // A change of the driven truck to now (c from TruckWatchStep) while the mode in force goes by cur. With PerTruck on and
 // now another truck than cur: the take-over where it is due (taken is true when a mode was taken over), the take-over
 // mark of now's id goes, cur becomes now and f what TruckModeFind found for it; true then. PerTruck off: one mode for

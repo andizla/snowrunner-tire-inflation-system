@@ -3706,6 +3706,29 @@ static DWORD WINAPI Run(void *)
                     cur.kind, cur.id, g_modes[g_mode].name);
             }
         }
+        // the look at the truck's file (truck_modes.h; BRIEF_truck_profile.md, build 2): a mode another hand wrote there
+        // for the driven truck is taken as a chosen one is, by Seconds and the stand still rule, with the sounds.
+        // Nothing is written
+        {
+            static TruckFileLook fileLook = {};
+            TruckModeFound fileFound = {};
+            bool fileRead = false;
+            const int fromFile = TruckFileLookMode(fileLook, curDriven, trucksFile, cur.kind, cur.id, g_modeCount, g_mode, GetTickCount64(), fileFound, fileRead);
+            if (fileRead)
+            {
+                curLevel = fileFound.level;
+                curKept = fileFound.ownKept;
+            }
+            if (fromFile >= 0)
+            {
+                g_mode = fromFile;
+                Log(L"truck %S %S: %s from the file (%s, written by another hand), %zu wheels", cur.kind, cur.id[0] ? cur.id : "(its id not read)", g_modes[g_mode].name,
+                    kTruckModesFile, wheels.size());
+                if (g_beep && g_mode == kIncreased) BeepLater(1320, 120);
+                else if (g_beep) for (int i = g_mode; i <= kNormal; i++) BeepLater(880, 70, 60);
+                moving = true;
+            }
+        }
         int chosen = -1; // a mode picked on this pass
         if ((pressed || padOpens) && wheels.empty())
         {
@@ -5284,6 +5307,53 @@ static bool TruckOwnTest()
         }
         check(marked == kTruckTakenKept && newestKept && TruckModeFind(file, k, idA).level == kTruckLevelOwn,
               "take-over: of 12 marked sections the newest 10 stay in TirePressure.trucks.ini, an unmarked one stays");
+        DeleteFileW(file.c_str());
+    }
+
+    // the look at the file (BRIEF_truck_profile.md, build 2, Tire's half): a mode written into the file by another hand
+    // is in force two looks later; the look that sees the change reads nothing, and a change between the two looks puts
+    // the read off again; the same mode written again and a mode Tire chose itself change nothing; off, no look
+    {
+        DeleteFileW(file.c_str());
+        TruckModeSave(file, k, kNormal);
+        TruckFileLook look = {};
+        TruckModeFound got = {};
+        bool didRead = false;
+        ULONGLONG t = 100000;
+        auto lookNow = [&](int inForce, bool on = true) {
+            t += kTruckLookMs;
+            return TruckFileLookMode(look, on, file, k, idA, 4, inForce, t, got, didRead);
+        };
+        const bool firstLook = lookNow(kNormal) == -1 && !didRead && look.known && !look.pending;
+        const bool tooSoon = TruckFileLookMode(look, true, file, k, idA, 4, kNormal, t + kTruckLookMs - 1, got, didRead) == -1 && look.at == t;
+        // another hand: Own=1, then Mode, in the truck's own section
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Own", L"1", file.c_str());
+        const bool sawOnly = lookNow(kNormal) == -1 && !didRead && look.pending; // between the two keys: seen, not read
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Mode", L"Reduced", file.c_str());
+        const bool putOff = lookNow(kNormal) == -1 && !didRead && look.pending;  // changed again: still not read
+        const bool taken = lookNow(kNormal) == kReduced && didRead && got.level == kTruckLevelOwn && !look.pending;
+        const bool quiet = lookNow(kReduced) == -1 && !didRead;
+        // the same mode written again: the file's time moves, the read finds the mode in force
+        Sleep(20);
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Mode", L"Reduced", file.c_str());
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Note", L"again", file.c_str());
+        const bool sameSeen = lookNow(kReduced) == -1 && look.pending;
+        const bool sameNothing = lookNow(kReduced) == -1 && didRead;
+        // a mode Tire chose itself: its own write is read back as the mode in force
+        TruckModeChosen(file, k, idA, false, kLow);
+        const bool ownSeen = lookNow(kLow) == -1 && look.pending;
+        const bool ownNothing = lookNow(kLow) == -1 && didRead && got.mode == kLow;
+        // off (PerTruck off, no truck, the kind not read): the look is forgotten and the next one is a first look
+        WritePrivateProfileStringW(TruckSection(k, idA).c_str(), L"Mode", L"Increased", file.c_str());
+        const bool offNoLook = lookNow(kLow, false) == -1 && !didRead && !look.known;
+        const bool afterOff = lookNow(kLow) == -1 && !didRead && look.known && !look.pending && lookNow(kLow) == -1 && !didRead;
+        // the pure step, by the times alone: no file is as good a stamp as any
+        TruckFileLook s = {};
+        const bool steps = !TruckFileLookStep(s, 0, 0) && !TruckFileLookStep(s, 0, 0) && !TruckFileLookStep(s, 5, 40) && !TruckFileLookStep(s, 6, 40) &&
+                           TruckFileLookStep(s, 6, 40) && !TruckFileLookStep(s, 6, 40) && !TruckFileLookStep(s, 6, 41) && TruckFileLookStep(s, 6, 41);
+        check(firstLook && tooSoon && sawOnly && putOff && taken && quiet && sameSeen && sameNothing && ownSeen && ownNothing && offNoLook && afterOff && steps,
+              "the look at the file: a mode written by another hand is taken two looks later, not in the look that saw the change and not while it changes again; the "
+              "same mode again and a mode chosen in the mod change nothing; off, no look, and the next is a first look; a second apart at the least");
         DeleteFileW(file.c_str());
     }
 

@@ -246,6 +246,10 @@ of the outside temperature, <i>k</i> the wheel's vanilla balance factor and <i>F
 {eq('asphalt = <i>A</i><sub>0</sub> · <i>g</i><sub>asphalt</sub>(<i>P</i><sub>air</sub>) · <i>r</i><sub>hard</sub> · max(<i>k</i>, <i>F</i> / <i>A</i><sub>0</sub>)', 7)}
 {eq('mud = <i>M</i><sub>0</sub> · <i>g</i><sub>mud</sub>(<i>P</i><sub>air</sub>) · <i>r</i><sub>soft</sub> · <i>k</i>', 8)}
 {eq('ground = min( 10, <i>G</i><sub>0</sub> · <i>g</i><sub>ground</sub>(<i>P</i><sub>air</sub>) · <i>r</i> · <i>k</i> )', 9)}
+<p>At a change of mode the log has a second line for each wheel, <code>wheel ... factors:</code>, with the asphalt and the mud
+factor by their four parts: the base grip, the tire's part (<i>k</i>, on asphalt the floor where it lifts more), the mode's own
+figure at the air's pressure and the cold's rubber factor. The four multiply to the factor written, so a low grip in a log says
+by itself which part made it.</p>
 <p class="where"><i>A</i><sub>0</sub>, <i>M</i><sub>0</sub> and <i>G</i><sub>0</sub> are the tire's own values. <i>g</i><sub>ground</sub>
 is the dirt, gravel, sand or rock factor by the ground; <i>r</i> is <i>r</i><sub>hard</sub> for rock and <i>r</i><sub>soft</sub>
 for the others. The max with <i>F</i>/<i>A</i><sub>0</sub> only applies with a floor set. A worn out tire gets 0 in all three.</p>

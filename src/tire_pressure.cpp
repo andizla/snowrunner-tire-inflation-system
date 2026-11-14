@@ -140,6 +140,7 @@ static bool g_outsideFromMod = false; // it comes from another mod's block
 static int g_outsideSource = 0;       // OutsideSource: with that block, whether it is the map's own
 static std::wstring g_dir;
 static uint64_t g_base = 0;
+static float g_baseGrip[3] = { 1.0f, 1.0f, 1.0f }; // the base grip in force: ground, asphalt, mud (the modes carry it; kept for the wheel's line, GripPartsOf)
 static int g_mode = kNormal;
 static Mode g_now = g_modes[kNormal]; // the factors in force, moving towards g_modes[g_mode]
 
@@ -554,6 +555,7 @@ static void ApplySettings(const TpSettings &in, bool log)
     g_deepest = 0.0f; // among the modes in use: Increased switched off keeps its numbers but does not count
     for (int m = 0; m < g_modeCount; m++) g_deepest = max(g_deepest, g_modes[m].radiusOffset);
     // base grip: some trucks (modded ones mostly) grip too much as they come; these scale every mode's grip, Normal too
+    for (int i = 0; i < 3; i++) g_baseGrip[i] = s.base[i];
     for (Mode &d : g_modes)
     {
         d.body *= s.base[0];
@@ -942,7 +944,19 @@ static bool ApplyWornWheel(const WheelRef &w)
 
 // Brings one wheel to the factors m. A wheel not seen before, or one whose values are not the ones written last (the
 // game rebuilt it at the same address), gives its current values as stock first.
-static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool announce)
+// A grip factor by its four parts, for the wheel's line (BRIEF_drive_1114_findings.md, part 176): the base grip of the
+// settings, the tire's own (the vanilla balance, on asphalt the asphalt floor where it lifts more), the mode's own
+// figure at the air's pressure, and the cold's factor. The mode's own is what is left of the factor written once the
+// other three are taken out, so the four multiply to that factor; 0 where one of the three is 0.
+struct GripParts { float base, tire, mode, cold; };
+static GripParts GripPartsOf(float written, float base, float tire, float cold)
+{
+    const float rest = base * tire * cold;
+    return GripParts{ base, tire, rest > 0.0f ? written / rest : 0.0f, cold };
+}
+struct WheelParts { GripParts asphalt, mud; };
+
+static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool announce, const WheelParts *parts = nullptr)
 {
     // The body's own friction (body+0xCC, the grip on plain ground) is NOT written: the game sets it itself while driving
     // (per surface), and a build that wrote it took the changed value for a rebuilt wheel, took the scaled values as new
@@ -1043,8 +1057,15 @@ static bool ApplyWheel(const WheelRef &w, const Mode &m, bool logWrite, bool ann
     // announce = the end of a mode change: every wheel gets its line, also one whose last value went in a few steps
     // earlier (2026-10-02: Reduced ended with no wheel lines in the log)
     if (announce || (logWrite && !same))
+    {
         Log(L"wheel %p -> %s: asphalt %.3f, mud %.3f, cylinder %.4f (stock %.3f, %.3f, %.4f; the game draws this tire up to %.3f flatter, its contact sinks %.3f)",
             (void *)w.wheel, m.name, s.asphalt * m.asphalt, s.substance * m.substance, newCylinder, s.asphalt, s.substance, s.cylinder, s.room, s.sinkUsed);
+        // and the factors by their parts, so a low grip in the log answers by itself which part made it
+        if (parts)
+            Log(L"wheel %p factors: asphalt x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f; mud x%.3f = base %.3f x tire %.3f x mode %.3f x cold %.3f", (void *)w.wheel,
+                m.asphalt, parts->asphalt.base, parts->asphalt.tire, parts->asphalt.mode, parts->asphalt.cold, m.substance, parts->mud.base, parts->mud.tire, parts->mud.mode,
+                parts->mud.cold);
+    }
     return !same;
 }
 
@@ -3854,7 +3875,8 @@ static DWORD WINAPI Run(void *)
             Mode m = g_now;
             m.asphalt *= paved;
             m.substance *= balance[i];
-            ApplyWheel(wheels[i], m, !moving && !drifted, arrived);
+            const WheelParts parts = { GripPartsOf(m.asphalt, g_baseGrip[1], paved, te.hard), GripPartsOf(m.substance, g_baseGrip[2], balance[i], te.soft) };
+            ApplyWheel(wheels[i], m, !moving && !drifted, arrived, &parts);
         }
         // the truck's speed: the fuel factor only counts while it moves (Expeditions' fuel rate, RVA 0xe168a0 in its
         // exe, takes the modifier in above a speed), and soft tires wear when it is too fast for them
@@ -4741,6 +4763,23 @@ static bool RealismTest()
                       VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) < f && VanillaBalance(9.0f, 9.0f, 9.0f, 1.5f) > f * f && VanillaBalance(0.1f, 0.1f, 0.1f, 2.0f) == 1.0f;
     printf("%s realism: the vanilla balance past the envelope: a tire at 9 everywhere comes to x%.3f at strength 1, x%.3f at 2 (the square), a vanilla tire stays at 1\n",
            past ? "ok  " : "FAIL", f, f * f);
+    // the wheel line's four parts (BRIEF_drive_1114_findings.md, part 176): they multiply to the factor written, the
+    // mode's own comes out as it went in, and a part at 0 divides nothing
+    bool partsOk = true;
+    for (float baseOf : { 0.5f, 0.59f, 1.0f, 2.0f })
+        for (float tireOf : { 0.40f, 0.63f, 1.0f, 1.7f })
+            for (float coldOf : { 0.43f, 0.9f, 1.0f, 1.1f })
+                for (float modeOf : { 0.45f, 1.0f, 1.2f, 3.0f })
+                {
+                    const float writtenOf = baseOf * modeOf * coldOf * tireOf; // the order the mod multiplies in: the base in the mode, the cold, then the tire
+                    const GripParts gp = GripPartsOf(writtenOf, baseOf, tireOf, coldOf);
+                    partsOk = partsOk && fabsf(gp.base * gp.tire * gp.mode * gp.cold - writtenOf) <= 1e-5f * writtenOf && fabsf(gp.mode - modeOf) <= 1e-5f * modeOf &&
+                              gp.base == baseOf && gp.tire == tireOf && gp.cold == coldOf;
+                }
+    const GripParts noBase = GripPartsOf(0.0f, 0.0f, 1.0f, 1.0f);
+    partsOk = partsOk && noBase.mode == 0.0f && noBase.base == 0.0f;
+    printf("%s wheel line: the four parts of a grip factor (base, tire, mode, cold) multiply to the factor written, 0.59 x 0.40 x 0.43 x 0.45 too, and a base of 0 divides nothing\n",
+           partsOk ? "ok  " : "FAIL");
     TpSettings h = d;
     h.key = 'K';
     h.soundVolume = 12.0f;
@@ -4767,7 +4806,7 @@ static bool RealismTest()
     g_mode = kNormal;
     g_pressure = kModePressure[kNormal];
     g_now = FactorsAt(g_pressure);
-    return at && between && below && above && coldOk && modes && temps && past && hard && insane;
+    return at && between && below && above && coldOk && modes && temps && past && partsOk && hard && insane;
 }
 
 // Each truck's own pressure (truck_modes.h), in out\test: a kind never saved has no mode, a saved one reads back, a

@@ -25,6 +25,7 @@
 - The two source files of the overlay are the same as in Next Gen Gameplay again.
 - A fresh `TirePressure.trucks.ini` gets its note at the head whichever write comes first. Before, a new install wrote `[Seen]` first and the file came out without the note.
 - `GrabDumps.bat` also takes `TirePressure.prev.log` and `TirePressure.trucks.ini`.
+- `GrabDumps.bat` also takes the tuning tool's `NextGenTuning.ini` and `NextGenTuning.log` where they are there. A crash dump older than every log it takes is left out, and `files.txt` in the zip says so with the dump's date.
 
 ## [1.3.4]
 

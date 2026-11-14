@@ -17,11 +17,8 @@ set "ZIP=%~dp0NextGen_dumps_%STAMP%.zip"
 if exist "%T%" rd /s /q "%T%"
 md "%T%"
 
-rem the game's crash dump
-if exist "%LOCALAPPDATA%\Saber\CrashDump.dmp" copy /y "%LOCALAPPDATA%\Saber\CrashDump.dmp" "%T%\" >nul
-
-rem the mods' logs and settings, the loader's log, ReShade's log and other mods' logs named *_LOG.txt
-for %%f in (AsiLoader.log Gauges.log TirePressure.log TirePressure.prev.log ReShade.log *_LOG.txt Gauges.ini TirePressure.ini TirePressure.trucks.ini NextGen.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
+rem the mods' logs and settings, the tuning tool's, the loader's log, ReShade's log and other mods' logs named *_LOG.txt
+for %%f in (AsiLoader.log Gauges.log TirePressure.log TirePressure.prev.log NextGenTuning.log ReShade.log *_LOG.txt Gauges.ini TirePressure.ini TirePressure.trucks.ini NextGen.ini NextGenTuning.ini) do if exist "%%f" copy /y "%%f" "%T%\" >nul
 
 rem Gauges keeps each earlier start's log in Gauges\logs: the newest 3
 set /a N=0
@@ -36,6 +33,11 @@ dir /a-d /o:n *.dll *.asi *.addon *.addon64 *.ini *.off >> "%T%\files.txt" 2>nul
 >> "%T%\files.txt" echo.
 >> "%T%\files.txt" echo The game's crash dump:
 dir /a-d "%LOCALAPPDATA%\Saber\*.dmp" >> "%T%\files.txt" 2>&1
+
+rem the game's crash dump, copied and never moved: one older than every log taken (the .log files gathered above, Gauges'
+rem kept ones too) is from an earlier session and is left out, with a line in files.txt. With no log at all it is taken.
+rem The age goes by the files' write times in PowerShell: the form of a date in "dir" changes with the system's language.
+powershell -NoProfile -Command "$d = Get-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'Saber\CrashDump.dmp') -ErrorAction SilentlyContinue; if ($d) { $l = Get-ChildItem -LiteralPath $env:T -Recurse -File -Filter '*.log' | Sort-Object LastWriteTime | Select-Object -First 1; if ($l -and $d.LastWriteTime -lt $l.LastWriteTime) { Add-Content -LiteralPath (Join-Path $env:T 'files.txt') -Encoding ASCII -Value ('', ('CrashDump.dmp of ' + $d.LastWriteTime.ToString('yyyy-MM-dd HH:mm') + ' was left out: it is older than every log taken (the oldest is ' + $l.Name + ' of ' + $l.LastWriteTime.ToString('yyyy-MM-dd HH:mm') + ').')) } else { Copy-Item -LiteralPath $d.FullName -Destination $env:T } }"
 
 powershell -NoProfile -Command "Compress-Archive -Path (Join-Path $env:T '*') -DestinationPath $env:ZIP -Force"
 if exist "%ZIP%" goto done

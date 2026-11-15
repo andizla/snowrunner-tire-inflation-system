@@ -131,6 +131,8 @@ Changes count at once and are saved to `TirePressure.ini` in the same folder. Th
 
 Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` each put another sound in place of the mod's own: the name of a WAV file in `Sources\Bin`, or of a sample in the game's `shared_sound.pak` such as `[sound]\actors\actor_lamp_generator_loop.pcm`. `none` leaves that sound out. The first three play round and round while they last. A WAV file with a loop marked in it plays up to the loop once, then goes round in the loop, and plays what follows the loop as the sound stops.
 
+The tuning tool, `NextGenTuning.asi`, comes in the Next Gen Gameplay zip. F1 opens its Tuning tab, where this mod's figures are sliders that act at once and are saved in `TirePressure.ini`.
+
 ## Remove
 
 Delete `TirePressure.asi`, `TirePressure.ini`, `TirePressure.trucks.ini`, `TirePressure.log` and `TirePressure.prev.log` from `Sources\Bin`. `version.dll` and `AsiLoader.log` go too when no other `.asi` mod is left (Next Gen Gameplay loads through them), and `NextGen.ini` when no other Next Gen mod is left. If you renamed another mod's `version.dll` to `version_chain.dll`, rename it back. ReShade from the zip goes the same way when nothing else uses it: `dxgi.dll`, `ReShade.ini` and `ReShade.log`.

@@ -287,6 +287,9 @@ TIRE = f'''
 <li><b>Mods that edit tire files</b>: the modes multiply whatever values the game loaded, so they work on top. Only the vanilla balance compares against the stock values (section 17).</li>
 <li>The mod writes no game file, so it does not conflict with pak mods.</li></ul>
 
+<h2>The tuning tool</h2>
+<p>Next Gen Tuning (<code>NextGenTuning.asi</code>, version 1.0.0) comes in the Next Gen Gameplay zip. Copy it into <code>Sources\\Bin</code> beside the mods' <code>.asi</code> files. It needs nothing else. F1 opens the NEXT GEN menu on its Tuning tab and closes it. The key is saved in <code>NextGenTuning.ini</code> beside the game's exe, and the first start writes that file with the defaults. The tab draws the figures this mod and the other Next Gen mod publish, as sliders under each mod's name, with one Reset a group. A moved slider acts at once and is saved in the mod's own ini (<code>TirePressure.ini</code> for this mod). Without the tool nothing changes. To remove it, delete <code>NextGenTuning.asi</code>, <code>NextGenTuning.ini</code> and <code>NextGenTuning.log</code>.</p>
+
 <h2>21. How the mod finds its way into the game</h2>
 <p>There is no list of supported builds. At every start the mod looks through the running game's code for the places it needs, by the bytes around them, and checks that the game's objects are laid out as it expects. Each place has to be found exactly once.</p>
 <ul><li><b>Essential:</b> the wheel and cylinder classes, the global that leads to the driven truck (looked for three ways), and six checks of where the game keeps the values the mod writes. Without them the mod stands down and changes nothing.</li>

@@ -430,8 +430,8 @@ of 0 gives the stock damping, written over the mod's last word on the next frame
 on for the fuel. Where any figure is off its default the log's start has the line "rolling drag: figures off their defaults:" with all of them.</p>
 <p><b>The tuning block.</b> The mod publishes the figures and a live read in named shared memory,
 <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>, the same file in every Next Gen mod):
-a head and one entry a figure, with its name, group, tip, range, default, step and the value in force, and no pointer. A tuning
-tool, which is not part of a release, draws a slider for each and writes a wanted value with a count. The mod's thread takes it
+a head and one entry a figure, with its name, group, tip, range, default, step and the value in force, and no pointer. The tuning
+tool, Next Gen Tuning (in the Next Gen Gameplay zip), draws a slider for each and writes a wanted value with a count. The mod's thread takes it
 at its next pass (the count, the value, the count again), holds it to the range and the step and puts it into the settings by
 the road the tab's own edits take. So it is in force on that pass and saved a second after the last change. The mod writes
 under a sequence that is odd while it writes. Only the mod's thread touches the block, and no hook does. Under hard or insanity

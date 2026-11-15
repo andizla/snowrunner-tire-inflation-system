@@ -56,7 +56,7 @@ static const MudLineInfo kMudLines[kMudLineCount] = {
 // read only, never written). 1 where M is no number or not above 0, and exactly 1 at a share of 0. It is a part of the
 // one factor the mod writes, never a write of its own.
 static const char kMudWeightKey[] = "MudGripByWeight", kMudWeightName[] = "Mud grip by weight",
-                  kMudWeightTip[] = "More mud grip for a truck that is heavy for its wheels. 0 is today. 100 gives up to three times at 2100 kg a wheel.";
+                  kMudWeightTip[] = "More mud grip for a truck that is heavy for its wheels. 58 is the default, 0 the game. 100: up to three times at 2100 kg each.";
 static const float kMudWeightPer = 700.0f;                    // kg a wheel: at or under this the part is 1
 static const float kMudWeightMost = 3.0f;                     // the part at 100, at 2100 kg a wheel and over
 static const float kMudWeightSane[2] = { 50.0f, 20000.0f };   // kg a wheel: outside it the figure read is no wheel's load

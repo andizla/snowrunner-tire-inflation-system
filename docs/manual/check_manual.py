@@ -26,9 +26,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
 # Names that are in no manual on purpose, left out of the lists. Nothing else is: a name not here is listed as before.
-# The tuning tool's Mud grip by weight (BRIEF_drive_1114_findings.md, part 181, must 8): in no tab and in no manual
-# while it lives in the tool alone; its key and its log lines.
-HIDDEN_NAMES = {('MudGripByWeight', 'key')}
+# The tuning tool's Mud grip by weight (BRIEF_drive_1114_findings.md, part 181, must 8): its key is in the manuals since
+# its default was set (211); its log lines stay out.
+HIDDEN_NAMES = set()
 HIDDEN_LOG = ('mud grip by weight:',)
 
 

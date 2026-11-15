@@ -131,7 +131,7 @@ Changes count at once and are saved to `TirePressure.ini` in the same folder. Th
 
 Four keys are in the ini alone. `AirOutSound`, `AirInSound`, `CompressorSound` and `CompressorStopSound` each put another sound in place of the mod's own: the name of a WAV file in `Sources\Bin`, or of a sample in the game's `shared_sound.pak` such as `[sound]\actors\actor_lamp_generator_loop.pcm`. `none` leaves that sound out. The first three play round and round while they last. A WAV file with a loop marked in it plays up to the loop once, then goes round in the loop, and plays what follows the loop as the sound stops.
 
-The tuning tool, `NextGenTuning.asi`, comes in the Next Gen Gameplay zip. F1 opens its Tuning tab, where this mod's figures are sliders that act at once and are saved in `TirePressure.ini`.
+The tuning tool, `NextGenTuning.asi`, comes in the Next Gen Gameplay zip. F1 opens its Tuning tab, where this mod's figures are sliders that act at once and are saved in `TirePressure.ini`. Mud grip by weight (`MudGripByWeight`, 0 to 100, 58 by default) gives a truck that is heavy for its wheels more grip in mud. An ini from an earlier build takes 58 once at the first start, writes `DefaultsMoved=1` and says so in `TirePressure.log`.
 
 ## Remove
 

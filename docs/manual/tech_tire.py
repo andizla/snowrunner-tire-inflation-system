@@ -428,6 +428,12 @@ the effect in it. The truck update takes one copy of the table at a frame's star
 figures are for every truck: <code>PerTruck</code> does not hold them. Hard and insanity mode take the defaults. A Crr in force
 of 0 gives the stock damping, written over the mod's last word on the next frame. At a strength of 0 the drag does not count as
 on for the fuel. Where any figure is off its default the log's start has the line "rolling drag: figures off their defaults:" with all of them.</p>
+<p><b>Mud grip by weight and the defaults of 1.4.0</b> (BRIEF_drive_1115_findings.md, 211). <code>MudGripByWeight</code>, a figure of
+the tool alone, 0 to 100, is 58 by default, the user's figure of 2026-11-15; it acts with Mud tuning off too. Every save before 1.4.0 wrote 0,
+chosen or not, so an ini without <code>[TirePressure] DefaultsMoved</code> at 1 or more reads it as 58, and the same start writes the key and the
+mark (the mark last, through <code>WritePrivateProfileStringW</code>, so the file stays UTF-16) with one line: "settings: an ini from before 1.4.0:
+MudGripByWeight 0 to 58, once (DefaultsMoved=1)", or "nothing to move". Every save writes the mark, so a choice after it holds. The default is one
+number, <code>kMudWeightDefault</code>, which <code>SettingsDefaults</code> and the tool's figure both take.</p>
 <p><b>The tuning block.</b> The mod publishes the figures and a live read in named shared memory,
 <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>, the same file in every Next Gen mod):
 a head and one entry a figure, with its name, group, tip, range, default, step and the value in force, and no pointer. The tuning

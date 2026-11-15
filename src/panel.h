@@ -70,7 +70,7 @@ struct TpSettings
     bool rollingDrag;        // RollingDrag: the tires' rolling resistance by ground and pressure, in the wheels' damping (rolling_drag.h); on by default
     float drag[kRdTuneCount]; // the rolling drag's figures (rolling_drag.h, kRdTune: RollingDragStrength, CrrPaved .. MudFullCm), for every truck; no slider on the page, the tuning tool has them
     bool mudTuning;          // MudTuning: the mud of the game scaled by the three factors below (mud_tune.h); off by default, a test setting with no box on the page
-    int mudByWeight;         // MudGripByWeight: a figure of the tuning tool, 0 to 100 (mud_tune.h, MudWeightFactor): how far a wheel's mud grip goes by the weight it carries; 0 as before
+    int mudByWeight;         // MudGripByWeight: a figure of the tuning tool, 0 to 100 (mud_tune.h, MudWeightFactor): how far a wheel's mud grip goes by the weight it carries; 58 by default (211), 0 as before
     float mud[3];            // MudLift, MudDrag, MudDepth: a factor of the game's own figure each (mud_tune.h, kMudTune)
     bool stiffBase;          // StiffBase: every tire starts at least as stiff as the game's Stiff preset (stiff_probe.h); on by default
     float ambientC;          // AmbientC: the outside temperature where no other mod publishes one, -40 to 50
@@ -103,6 +103,12 @@ static const float kSecondsDefault = 6.0f, kSecondsBefore = 3.0f;
 // (15 before), and an ini from before that which still says 15 is taken along the same way.
 static const float kConfirmDefault = 5.0f, kConfirmBefore = 15.0f;
 static const int kIniVersion = 2; // ini IniVersion: 2 since 1.1.0; an ini without the key is from 1.0
+// MudGripByWeight's default (BRIEF_drive_1115_findings.md, 211): the user's figure of 2026-11-15, the one number
+// SettingsDefaults and the tuning tool's figure both take
+static const int kMudWeightDefault = 58;
+// [TirePressure] DefaultsMoved (211, the Reviewer's addendum of 04:05): the moves of defaults the ini has had, by level.
+// Level 1 (1.4.0): MudGripByWeight 0 to 58. Each save writes the mark.
+static const int kTpDefaultsMoved = 1;
 // WornGrip: enough grip that a truck on a worn out tire still moves (the testers asked for 10 to 12 percent).
 static const float kWornGripDefault = 10.0f, kWornGripMost = 30.0f;
 
@@ -135,7 +141,7 @@ inline void SettingsDefaults(TpSettings &s)
     s.rollingDrag = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     RdTuneDefaults(s.drag);
     s.mudTuning = false;
-    s.mudByWeight = 0;
+    s.mudByWeight = kMudWeightDefault;
     s.mud[0] = s.mud[1] = s.mud[2] = 1.0f;
     s.stiffBase = true;
     s.ambientC = 15.0f;

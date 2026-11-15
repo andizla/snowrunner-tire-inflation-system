@@ -79,7 +79,7 @@ static HMODULE g_self = nullptr;
 static bool g_beep = true;
 static bool g_balanceOn = false;      // ini VanillaBalance (vanilla_balance.h)
 static float g_balanceStrength = 1.0f;
-static int g_mudByWeight = 0; // MudGripByWeight in force, 0 to 100 (mud_tune.h)
+static int g_mudByWeight = 0; // MudGripByWeight in force, 0 to 100 (mud_tune.h); the settings' default is kMudWeightDefault
 
 // The ini's settings in force (panel.h TpSettings). The Tire Inflation tab of the NEXT GEN menu reads them and hands back
 // edits (SettingsPut, render thread); this thread applies those on its next pass and saves the ini a second later.
@@ -295,6 +295,7 @@ static void WriteIni(const TpSettings &s)
     put(T, L"Seconds", L"%g", s.seconds);
     put(T, L"SoundVolume", L"%g", s.soundVolume);
     put(T, L"IniVersion", L"%.0f", kIniVersion);
+    put(T, L"DefaultsMoved", L"%.0f", kTpDefaultsMoved); // the defaults of 1.4.0 are in this file (TpDefaultsMoveWrite)
     put(T, L"UI", L"%.0f", s.ui ? 1 : 0);
     put(T, L"UIScale", L"%g", s.uiScale);
     put(T, L"ConfirmSeconds", L"%g", s.confirmSeconds);
@@ -323,6 +324,28 @@ static void WriteIni(const TpSettings &s)
     put(T, L"InsaneMode", L"%.0f", s.insaneMode ? 1 : 0);
     for (int m = 0; m < 3; m++)
         for (int k = 0; k < kModeKeyCount; k++) put(kModeSections[m], Wide(kModeKeys[k]), L"%g", s.mode[m][k]);
+}
+
+// The move's words for an ini at level 0 (211): "MudGripByWeight was to 58" where the file holds another figure (0, the
+// old default, where it holds none), "" none.
+static void TpDefaultsMoveWords(const std::wstring &ini, wchar_t *what, size_t n)
+{
+    *what = 0;
+    const int was = MudWeightHeld(IniFloat(L"TirePressure", Wide(kMudWeightKey), 0.0f, ini));
+    if (was != kMudWeightDefault) _snwprintf_s(what, n, _TRUNCATE, L"%hs %d to %d", kMudWeightKey, was, kMudWeightDefault);
+}
+// An ini under kTpDefaultsMoved: the level's key into the file at once, the mark last, through WritePrivateProfileStringW
+// as the save writes (the file stays UTF-16), and one line naming the key where it changed. A file that cannot be
+// written moves again at the next start, and the line says so.
+static void TpDefaultsMoveWrite(const std::wstring &ini)
+{
+    wchar_t what[96], v[16], mark[16];
+    TpDefaultsMoveWords(ini, what, 96);
+    _snwprintf_s(v, _TRUNCATE, L"%d", kMudWeightDefault);
+    _snwprintf_s(mark, _TRUNCATE, L"%d", kTpDefaultsMoved);
+    const bool put = WritePrivateProfileStringW(L"TirePressure", Wide(kMudWeightKey).c_str(), v, ini.c_str()) && WritePrivateProfileStringW(L"TirePressure", L"DefaultsMoved", mark, ini.c_str());
+    Log(L"settings: an ini from before 1.4.0: %s, once (DefaultsMoved=%d)%s", *what ? what : L"nothing to move", kTpDefaultsMoved,
+        put ? L"" : L"; TirePressure.ini could not be written, so the move acts again at the next start");
 }
 
 // The ini into s (defaults for missing keys); a missing ini is written with the defaults and how to use them.
@@ -357,7 +380,7 @@ static void ReadIni(TpSettings &s)
                         L"; 1 = to the vanilla tire, above 1 below it (2: the ratio to the vanilla tire counts twice).\n"
                         L"; AsphaltFloor: paved grip every tire gets at least, before the modes (0 = off).\n"
                         L"; WornGrip: the share of its grip a worn out or broken tire keeps, percent, 0 to 30 (10). 0 is the old behaviour: none.\n"
-                        L"; MudGripByWeight (0 to 100, 0 = off): more mud grip for a truck that is heavy for its wheels, a figure of the tuning tool.\n"
+                        L"; MudGripByWeight (0 to 100, 58 by default, 0 = off): more mud grip for a truck that is heavy for its wheels, a figure of the tuning tool.\n"
                         L"; Per mode: multipliers for grip on dirt (OnModelFriction), gravel (GravelFriction), sand (SandFriction),\n"
                         L"; rock (RockFriction), paved ground (BodyFrictionAsphalt) and in mud (SubstanceFriction),\n"
                         L"; AdditionalRadiusOffset in metres off the tire's radius, and multipliers for fuel use while moving\n"
@@ -394,6 +417,9 @@ static void ReadIni(TpSettings &s)
         return;
     }
     const wchar_t *T = L"TirePressure";
+    // the defaults of 1.4.0 (211): an ini under the mark reads none of the level's keys, which take their defaults
+    const int movedLevel = (int)GetPrivateProfileIntW(T, L"DefaultsMoved", 0, ini.c_str());
+    if (movedLevel < kTpDefaultsMoved) TpDefaultsMoveWrite(ini);
     s.key = GetPrivateProfileIntW(T, L"Key", s.key, ini.c_str());
     s.beep = GetPrivateProfileIntW(T, L"Beep", s.beep ? 1 : 0, ini.c_str()) != 0;
     s.seconds = min(60.0f, max(0.0f, IniFloat(T, L"Seconds", s.seconds, ini)));
@@ -462,7 +488,7 @@ static void ReadIni(TpSettings &s)
     s.stiffBase = GetPrivateProfileIntW(T, L"StiffBase", s.stiffBase ? 1 : 0, ini.c_str()) != 0;
     s.mudTuning = GetPrivateProfileIntW(T, L"MudTuning", s.mudTuning ? 1 : 0, ini.c_str()) != 0;
     for (int i = 0; i < kMudTuneCount; i++) s.mud[i] = MudHeld(i, IniFloat(T, Wide(kMudTune[i].key), s.mud[i], ini));
-    s.mudByWeight = MudWeightHeld(IniFloat(T, Wide(kMudWeightKey), (float)s.mudByWeight, ini));
+    if (movedLevel >= 1) s.mudByWeight = MudWeightHeld(IniFloat(T, Wide(kMudWeightKey), (float)s.mudByWeight, ini));
     s.ambientC = min(50.0f, max(-40.0f, IniFloat(T, L"AmbientC", s.ambientC, ini)));
     s.hardMode = GetPrivateProfileIntW(T, L"HardMode", s.hardMode ? 1 : 0, ini.c_str()) != 0;
     s.insaneMode = GetPrivateProfileIntW(T, L"InsaneMode", s.insaneMode ? 1 : 0, ini.c_str()) != 0;
@@ -2813,7 +2839,7 @@ static int DragTuneItems(NgTuneItem *items)
     for (int i = 0; i < kMudTuneCount; i++)
         items[kTuneMud + i] = { kNgTuneSlider, kMudTune[i].name, kMudGroup, kMudTune[i].tip, kMudTune[i].least, kMudTune[i].most, kMudTune[i].def, kMudTune[i].step, kMudTune[i].decimals };
     for (int i = 0; i < kMudLineCount; i++) items[kTuneMudLines + i] = { kNgTuneLine, kMudLines[i].name, kMudGroup, kMudLines[i].tip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
-    items[kTuneMudWeight] = { kNgTuneSlider, kMudWeightName, kMudGroup, kMudWeightTip, 0.0f, 100.0f, 0.0f, 1.0f, 0 };
+    items[kTuneMudWeight] = { kNgTuneSlider, kMudWeightName, kMudGroup, kMudWeightTip, 0.0f, 100.0f, (float)kMudWeightDefault, 1.0f, 0 };
     items[kTuneBodies] = { kNgTuneButton, kTuneBodiesName, kTuneProbes, kTuneBodiesTip, 0.0f, 0.0f, 0.0f, 0.0f, 0 };
     return kTuneCount;
 }
@@ -4682,6 +4708,34 @@ static bool IniTest(const wchar_t *givenIni)
     printf("%s ini: the %g s an ini from before 1.1.0 waits to confirm become %g s, once (read %g, then %g for a 15 set after that, %g for an old ini's 8)\n",
            waited ? "ok  " : "FAIL", kConfirmBefore, kConfirmDefault, before.confirmSeconds, after.confirmSeconds, other.confirmSeconds);
     ok = ok && waited;
+    // the defaults of 1.4.0 (211): MudGripByWeight 58 by default and in the tool's figure; an ini without the mark holding
+    // the old 0 moves once to 58, writes DefaultsMoved=1 and stays UTF-16; one holding 58 says nothing to move; one with
+    // the mark keeps a choice of 20
+    {
+        TpSettings dd, moved, markKept;
+        SettingsDefaults(dd);
+        WriteIni(dd);
+        WritePrivateProfileStringW(L"TirePressure", L"DefaultsMoved", nullptr, ini.c_str());
+        WritePrivateProfileStringW(L"TirePressure", L"MudGripByWeight", L"0", ini.c_str());
+        wchar_t words[96], none[96];
+        TpDefaultsMoveWords(ini, words, 96);
+        ReadIni(moved);
+        const int markNow = (int)GetPrivateProfileIntW(L"TirePressure", L"DefaultsMoved", 0, ini.c_str()), inFile = (int)GetPrivateProfileIntW(L"TirePressure", L"MudGripByWeight", 0, ini.c_str());
+        FILE *u = nullptr;
+        unsigned char bom[2] = {};
+        if (_wfopen_s(&u, ini.c_str(), L"rb") == 0 && u) { fread(bom, 1, 2, u); fclose(u); }
+        WritePrivateProfileStringW(L"TirePressure", L"DefaultsMoved", nullptr, ini.c_str());
+        TpDefaultsMoveWords(ini, none, 96);
+        WritePrivateProfileStringW(L"TirePressure", L"DefaultsMoved", L"1", ini.c_str());
+        WritePrivateProfileStringW(L"TirePressure", L"MudGripByWeight", L"20", ini.c_str());
+        ReadIni(markKept);
+        const bool mudMoved = dd.mudByWeight == 58 && !wcscmp(words, L"MudGripByWeight 0 to 58") && moved.mudByWeight == 58 && markNow == 1 && inFile == 58 && bom[0] == 0xFF && bom[1] == 0xFE &&
+                              !*none && markKept.mudByWeight == 20;
+        printf("%s ini: MudGripByWeight 58 by default; an ini without DefaultsMoved at 0 moves once to it (%ls) and writes the mark, the file still UTF-16; at 58 nothing to move; with the mark 20 holds (%d)\n",
+               mudMoved ? "ok  " : "FAIL", words, markKept.mudByWeight);
+        ok = ok && mudMoved;
+        WriteIni(dd);
+    }
     if (givenIni && !CopyFileW(givenIni, ini.c_str(), FALSE))
     {
         printf("FAIL ini: %ls could not be copied (error %lu)\n", givenIni, GetLastError());
@@ -7508,7 +7562,7 @@ static bool MudBlockAndBodiesTest()
     static uint8_t block[kNgTuneBlockMost];
     NgTuneItem items[kTuneCount];
     const int count = DragTuneItems(items);
-    bool blockOk = count == 27 && items[kTuneMudWeight].kind == kNgTuneSlider && items[kTuneMudWeight].most == 100.0f && items[kTuneMudWeight].def == 0.0f && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count) && items[kTuneMudSwitch].kind == kNgTuneSwitch && items[kTuneBodies].kind == kNgTuneButton &&
+    bool blockOk = count == 27 && items[kTuneMudWeight].kind == kNgTuneSlider && items[kTuneMudWeight].most == 100.0f && items[kTuneMudWeight].def == (float)kMudWeightDefault && NgTuneSetUp(block, sizeof block, "Tire Inflation", 2, items, count) && items[kTuneMudSwitch].kind == kNgTuneSwitch && items[kTuneBodies].kind == kNgTuneButton &&
                    !strcmp(items[kTuneMud + kMudtLift].name, "Mud lift") && items[kTuneMud + kMudtLift].most == 5.0f && items[kTuneMud + kMudtDrag].most == 4.0f &&
                    items[kTuneMud + kMudtDepth].most == 2.0f && items[kTuneMud].least == 0.25f && !strcmp(items[kTuneMudSwitch].group, "Mud") && !strcmp(items[kTuneBodies].group, "Probes");
     for (int i = 0; i < count; i++) blockOk = blockOk && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'');

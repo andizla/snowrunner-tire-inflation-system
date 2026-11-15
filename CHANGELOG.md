@@ -33,6 +33,7 @@
 - A mode written into `TirePressure.trucks.ini` for the truck you drive is taken about two seconds later, as a mode you choose is. Next Gen Gameplay writes one there at an Import of a truck profile, and an edit of the file by hand acts too. With `PerTruck=0` the file is not read.
 - At a change of mode the log names each wheel's grip factors by their parts: the base grip, the tire's own balance, the mode and the cold. No figure changes.
 - `GrabDumps.bat` also takes the tuning tool's `NextGenTuning.ini` and `NextGenTuning.log` where they are there. A crash dump older than every log it takes is left out, and `files.txt` in the zip says so with the dump's date.
+- The zip has a card for Spotter, `TirePressure.modinfo.json` with `TirePressure.banner.png`: Add mod in Spotter installs `TirePressure.asi` and keeps `TirePressure.ini`, `TirePressure.trucks.ini` and `NextGen.ini`. Copying by hand with Spotter, leave out `dxgi.dll` and `ReShade.ini`.
 
 ## [1.3.4]
 

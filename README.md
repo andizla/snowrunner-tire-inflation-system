@@ -21,7 +21,7 @@ The truck you drive gets four pressure modes: Low, Reduced, Normal and Increased
 
 On Linux (Proton, the Steam Deck) set SnowRunner's launch options in Steam (right click, Properties, General) to `WINEDLLOVERRIDES="version=n,b" %command%`. Then the game takes this `version.dll` instead of Wine's own. The mod there is not yet tested by a player.
 
-Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off. Coming from 1.2 with the ReShade it brought: this zip's `dxgi.dll` can go over it.
+Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off. With Spotter, install this zip with Add mod in Spotter: its card places only the mod files. Copying by hand, leave out `dxgi.dll` and `ReShade.ini`. Coming from 1.2 with the ReShade it brought: this zip's `dxgi.dll` can go over it.
 
 `version.dll` is a small loader: it loads every file in that folder whose name ends in `.asi`. If you already use an ASI loader (other `.asi` mods work in that folder), copy only `TirePressure.asi` and leave your loader as it is. If another mod's `version.dll` is there and it is not an ASI loader, rename that one to `version_chain.dll` first, and this loader passes everything on to it.
 
